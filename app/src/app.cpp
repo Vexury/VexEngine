@@ -1,0 +1,230 @@
+#include "app.h"
+
+#include <vex/core/window.h>
+#include <vex/core/log.h>
+#include <vex/graphics/graphics_context.h>
+
+#include <imgui.h>
+#include <GLFW/glfw3.h>
+
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <ctime>
+
+static constexpr float ORBIT_SENSITIVITY = 0.005f;
+static constexpr float PAN_SENSITIVITY   = 0.002f;
+
+bool App::init(const vex::EngineConfig& config)
+{
+    if (!m_engine.init(config))
+        return false;
+
+    if (config.headless)
+        return true;
+
+    if (!m_scene.importOBJ("assets/scenes/CornellBox/CornellBox-Original.obj", "Cornell Box"))
+        return false;
+
+    m_scene.skybox = vex::Skybox::create();
+
+    if (!m_renderer.init(m_scene))
+        return false;
+
+    m_scene.camera.setOrbit(glm::vec3(0.0f, 1.0f, 0.0f), 4.5f, 0.0f, 0.15f);
+    m_scene.camera.fov = 45.0f;
+
+    m_engine.getWindow().setScrollCallback([this](double yoffset)
+    {
+        if (m_ui.isViewportHovered())
+            m_scene.camera.zoom(static_cast<float>(yoffset));
+    });
+
+    return true;
+}
+
+void App::handleInput()
+{
+    auto* win = m_engine.getWindow().getNativeWindow();
+
+    double mx, my;
+    glfwGetCursorPos(win, &mx, &my);
+
+    if (m_ui.isViewportHovered() && glfwGetMouseButton(win, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS)
+    {
+        if (!m_dragging)
+        {
+            m_dragging = true;
+            m_lastMouseX = mx;
+            m_lastMouseY = my;
+        }
+
+        float dx = static_cast<float>(mx - m_lastMouseX) * ORBIT_SENSITIVITY;
+        float dy = static_cast<float>(my - m_lastMouseY) * ORBIT_SENSITIVITY;
+        m_scene.camera.rotate(-dx, dy);
+        m_lastMouseX = mx;
+        m_lastMouseY = my;
+    }
+    else
+    {
+        m_dragging = false;
+    }
+
+    // Middle mouse panning
+    if (m_ui.isViewportHovered() && glfwGetMouseButton(win, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS)
+    {
+        if (!m_panning)
+        {
+            m_panning = true;
+            m_lastMouseX = mx;
+            m_lastMouseY = my;
+        }
+
+        float dx = static_cast<float>(mx - m_lastMouseX);
+        float dy = static_cast<float>(my - m_lastMouseY);
+
+        glm::mat4 view = m_scene.camera.getViewMatrix();
+        glm::vec3 right = glm::vec3(view[0][0], view[1][0], view[2][0]);
+        glm::vec3 up    = glm::vec3(view[0][1], view[1][1], view[2][1]);
+
+        float panSpeed = m_scene.camera.getDistance() * PAN_SENSITIVITY;
+        m_scene.camera.getTarget() -= right * dx * panSpeed;
+        m_scene.camera.getTarget() += up    * dy * panSpeed;
+
+        m_lastMouseX = mx;
+        m_lastMouseY = my;
+    }
+    else
+    {
+        m_panning = false;
+    }
+
+    // DEL key deletion (works from any focused window)
+    if (ImGui::IsKeyPressed(ImGuiKey_Delete))
+    {
+        switch (m_ui.getSelectionType())
+        {
+            case Selection::Mesh:
+            {
+                int idx = m_ui.getSelectionIndex();
+                if (idx >= 0 && idx < static_cast<int>(m_scene.meshGroups.size()))
+                {
+                    vex::Log::info("Deleted: " + m_scene.meshGroups[idx].name);
+                    m_scene.meshGroups.erase(m_scene.meshGroups.begin() + idx);
+                    m_scene.geometryDirty = true;
+                }
+                m_ui.clearSelection();
+                break;
+            }
+            case Selection::Skybox:
+                m_scene.showSkybox = false;
+                m_ui.clearSelection();
+                vex::Log::info("Removed Skybox from scene");
+                break;
+            case Selection::Light:
+                m_scene.showLight = false;
+                m_ui.clearSelection();
+                vex::Log::info("Removed Light from scene");
+                break;
+            default:
+                break;
+        }
+    }
+
+    // F12: save screenshot with timestamped filename
+    if (ImGui::IsKeyPressed(ImGuiKey_F12))
+    {
+        auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+        std::tm tm = {};
+#ifdef _WIN32
+        localtime_s(&tm, &now);
+#else
+        localtime_r(&now, &tm);
+#endif
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "render_%04d%02d%02d_%02d%02d%02d.png",
+                      tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                      tm.tm_hour, tm.tm_min, tm.tm_sec);
+        std::string path(buf);
+
+        if (m_renderer.saveImage(path))
+            vex::Log::info("Saved screenshot: " + path);
+        else
+            vex::Log::error("Failed to save screenshot: " + path);
+    }
+
+    // F5: reload GPU path tracer compute shader from disk
+    if (ImGui::IsKeyPressed(ImGuiKey_F5) &&
+        m_renderer.getRenderMode() == RenderMode::GPURaytrace)
+    {
+        m_renderer.reloadGPUShader();
+    }
+
+    // F key: focus camera on selected object
+    if (ImGui::IsKeyPressed(ImGuiKey_F))
+    {
+        switch (m_ui.getSelectionType())
+        {
+            case Selection::Mesh:
+            {
+                int idx = m_ui.getSelectionIndex();
+                if (idx >= 0 && idx < static_cast<int>(m_scene.meshGroups.size()))
+                {
+                    auto& g = m_scene.meshGroups[idx];
+                    m_scene.camera.getTarget() = g.center;
+                    m_scene.camera.getDistance() = g.radius * 2.5f;
+                    float needed = m_scene.camera.getDistance() + g.radius * 2.0f;
+                    m_scene.camera.farPlane = std::max(100.0f, needed);
+                }
+                break;
+            }
+            case Selection::Light:
+                m_scene.camera.getTarget() = m_scene.lightPos;
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+void App::processPicking()
+{
+    int pickX, pickY;
+    if (!m_ui.consumePickRequest(pickX, pickY))
+        return;
+
+    auto [groupIdx, submeshIdx] = m_renderer.pick(m_scene, pickX, pickY);
+    if (groupIdx >= 0)
+        m_ui.setSelection(Selection::Mesh, groupIdx, submeshIdx);
+    else
+        m_ui.clearSelection();
+}
+
+void App::run()
+{
+    while (m_engine.isRunning())
+    {
+        m_engine.beginFrame();
+        handleInput();
+        m_renderer.setRenderMode(static_cast<RenderMode>(m_ui.getRenderModeIndex()));
+        m_renderer.setDebugMode(static_cast<DebugMode>(m_ui.getDebugModeIndex()));
+        m_renderer.renderScene(m_scene, m_ui.getSelectedMeshGroup(), m_ui.getSelectedSubmesh());
+        m_ui.renderViewport(m_renderer);
+        processPicking();
+        m_ui.renderHierarchy(m_scene, m_renderer);
+        m_ui.renderInspector(m_scene, m_renderer);
+        m_ui.renderSettings(m_renderer);
+        m_ui.renderConsole();
+        m_ui.renderStats(m_renderer, m_scene, m_engine.getGraphicsContext());
+        m_engine.endFrame();
+    }
+}
+
+void App::shutdown()
+{
+    m_engine.getGraphicsContext().waitIdle();
+    m_renderer.shutdown();
+    m_scene.meshGroups.clear();
+    m_scene.skybox.reset();
+    m_engine.shutdown();
+}

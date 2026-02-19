@@ -1,0 +1,1031 @@
+#version 430 core
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(rgba32f, binding = 0) uniform image2D u_accumImage;
+
+// ── BVH Nodes (binding 0) ──────────────────────────────────────────
+struct BVHNode {
+    vec3 boundsMin; uint leftFirst;
+    vec3 boundsMax; uint triCount;
+};
+
+layout(std430, binding = 0) readonly buffer BVHNodes {
+    BVHNode bvhNodes[];
+};
+
+// ── Triangle vertices (binding 1) — hot, intersection only ─────────
+// 3 vec4s per triangle (48 bytes): v0+pad, v1+pad, v2+pad
+layout(std430, binding = 1) readonly buffer TriVerts {
+    vec4 triVerts[];
+};
+
+// ── Triangle shading data (binding 5) — cold, only on confirmed hits
+// 10 vec4s per triangle (160 bytes)
+layout(std430, binding = 5) readonly buffer TriShading {
+    vec4 triShading[];
+};
+
+// ── Lights (binding 2) ─────────────────────────────────────────────
+layout(std430, binding = 2) readonly buffer Lights {
+    uint  lightCount;
+    float totalLightArea;
+    uint  _pad0;
+    uint  _pad1;
+    // lightIndices[lightCount] followed by lightCDF[lightCount]
+    // Accessed via getLightIndex()/getLightCDF()
+    uint  lightRawData[];
+};
+
+// ── Texture data (binding 3) ───────────────────────────────────────
+// Header: texCount, then per-texture (offset, width, height, pad)
+// Followed by packed RGB pixel data as uint array
+layout(std430, binding = 3) readonly buffer TexData {
+    uint texHeader[];  // [0]=texCount, then [1+i*4..] = offset,w,h,pad per tex, then pixel data
+};
+
+// ── Environment map (binding 4) ────────────────────────────────────
+layout(std430, binding = 4) readonly buffer EnvMap {
+    float envPixels[];
+};
+
+// ── Environment CDF (binding 6) ───────────────────────────────────
+// Layout: [marginalCDF: H floats][condCDF: W*H floats][totalIntegral: 1 float]
+layout(std430, binding = 6) readonly buffer EnvCDF {
+    float envCdfData[];
+};
+
+// ── Uniforms ───────────────────────────────────────────────────────
+uniform vec3  u_cameraOrigin;
+uniform mat4  u_inverseVP;
+uniform uint  u_sampleCount;
+uniform uint  u_width;
+uniform uint  u_height;
+uniform int   u_maxDepth;
+uniform bool  u_enableNEE;
+uniform bool  u_enableAA;
+uniform bool  u_enableFireflyClamping;
+uniform bool  u_enableEnvLighting;
+uniform float u_envLightMultiplier;
+uniform bool  u_flatShading;
+uniform bool  u_enableNormalMapping;
+uniform bool  u_enableEmissive;
+
+uniform vec3  u_pointLightPos;
+uniform vec3  u_pointLightColor;
+uniform bool  u_pointLightEnabled;
+
+uniform vec3  u_sunDir;
+uniform vec3  u_sunColor;
+uniform float u_sunAngularRadius;
+uniform bool  u_sunEnabled;
+
+uniform vec3  u_envColor;
+uniform int   u_envMapWidth;
+uniform int   u_envMapHeight;
+uniform bool  u_hasEnvMap;
+uniform bool  u_hasEnvCDF;
+
+uniform uint  u_triangleCount;
+uniform uint  u_bvhNodeCount;
+uniform float u_rayEps;
+
+// ── Constants ──────────────────────────────────────────────────────
+const float PI      = 3.14159265358979323846;
+const float FLT_MAX = 3.402823466e+38;
+
+// ── RNG (PCG) ──────────────────────────────────────────────────────
+uint rngState;
+
+uint hash(uint x) {
+    x ^= x >> 16u;
+    x *= 0x45d9f3bu;
+    x ^= x >> 16u;
+    x *= 0x45d9f3bu;
+    x ^= x >> 16u;
+    return x;
+}
+
+float rngNext() {
+    rngState = rngState * 747796405u + 2891336453u;
+    uint word = ((rngState >> ((rngState >> 28u) + 4u)) ^ rngState) * 277803737u;
+    word = (word >> 22u) ^ word;
+    return float(word) / 4294967296.0;
+}
+
+// ── Triangle access helpers ────────────────────────────────────────
+// Hot: vertex positions from TriVerts (3 vec4s per tri at binding 1)
+vec3 triV0(uint i) { return triVerts[i * 3u + 0u].xyz; }
+vec3 triV1(uint i) { return triVerts[i * 3u + 1u].xyz; }
+vec3 triV2(uint i) { return triVerts[i * 3u + 2u].xyz; }
+
+// Cold: shading data from TriShading (10 vec4s per tri at binding 5)
+vec3  triN0(uint i)        { return triShading[i * 10u + 0u].xyz; }
+int   triRoughnessTexIdx(uint i) { return floatBitsToInt(triShading[i * 10u + 0u].w); }
+vec3  triN1(uint i)        { return triShading[i * 10u + 1u].xyz; }
+int   triMetallicTexIdx(uint i)  { return floatBitsToInt(triShading[i * 10u + 1u].w); }
+vec3  triN2(uint i)        { return triShading[i * 10u + 2u].xyz; }
+vec2  triUV0(uint i)       { return triShading[i * 10u + 3u].xy; }
+vec2  triUV1(uint i)       { return triShading[i * 10u + 3u].zw; }
+vec2  triUV2(uint i)       { return triShading[i * 10u + 4u].xy; }
+float triRoughness(uint i) { return triShading[i * 10u + 4u].z; }
+float triMetallic(uint i)  { return triShading[i * 10u + 4u].w; }
+vec3  triColor(uint i)     { return triShading[i * 10u + 5u].xyz; }
+int   triTexIdx(uint i)    { return floatBitsToInt(triShading[i * 10u + 5u].w); }
+vec3  triEmissive(uint i)  { return triShading[i * 10u + 6u].xyz; }
+float triArea(uint i)      { return triShading[i * 10u + 6u].w; }
+vec3  triGeoNormal(uint i) { return triShading[i * 10u + 7u].xyz; }
+int   triNormalMapTexIdx(uint i) { return floatBitsToInt(triShading[i * 10u + 7u].w); }
+bool  triAlphaClip(uint i)       { return triShading[i * 10u + 8u].x > 0.5; }
+int   triMaterialType(uint i)    { return int(triShading[i * 10u + 8u].y); }
+float triIOR(uint i)             { return triShading[i * 10u + 8u].z; }
+int   triEmissiveTexIdx(uint i)  { return floatBitsToInt(triShading[i * 10u + 8u].w); }
+vec3  triTangent(uint i)         { return triShading[i * 10u + 9u].xyz; }
+float triBitangentSign(uint i)   { return triShading[i * 10u + 9u].w; }
+
+// ── Light access helpers ───────────────────────────────────────────
+uint getLightIndex(uint i) {
+    return lightRawData[i];
+}
+
+float getLightCDF(uint i) {
+    return uintBitsToFloat(lightRawData[lightCount + i]);
+}
+
+// ── Texture sampling ───────────────────────────────────────────────
+// RGBA: 4 bytes per pixel = 1 uint per pixel (perfect alignment)
+vec4 sampleTexture(int texIndex, vec2 uv) {
+    if (texIndex < 0) return vec4(1.0);
+
+    uint texCount = texHeader[0];
+    if (uint(texIndex) >= texCount) return vec4(1.0);
+
+    uint headerBase = 1u + uint(texIndex) * 4u;
+    uint pixelOffset = texHeader[headerBase + 0u];
+    int  tw          = int(texHeader[headerBase + 1u]);
+    int  th          = int(texHeader[headerBase + 2u]);
+
+    // Wrap UVs
+    float u = uv.x - floor(uv.x);
+    float v = 1.0 - (uv.y - floor(uv.y)); // flip V
+
+    int px = clamp(int(u * float(tw)), 0, tw - 1);
+    int py = clamp(int(v * float(th)), 0, th - 1);
+
+    uint word = texHeader[pixelOffset + uint(py * tw + px)];
+    float r = float((word >>  0u) & 0xFFu) / 255.0;
+    float g = float((word >>  8u) & 0xFFu) / 255.0;
+    float b = float((word >> 16u) & 0xFFu) / 255.0;
+    float a = float((word >> 24u) & 0xFFu) / 255.0;
+
+    return vec4(r, g, b, a);
+}
+
+// ── Environment sampling ───────────────────────────────────────────
+vec3 sampleEnvironment(vec3 dir) {
+    if (u_hasEnvMap && u_envMapWidth > 0) {
+        float u = 0.5 + atan(dir.z, dir.x) / (2.0 * PI);
+        float v = 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / PI;
+
+        int px = clamp(int(u * float(u_envMapWidth)),  0, u_envMapWidth - 1);
+        int py = clamp(int(v * float(u_envMapHeight)), 0, u_envMapHeight - 1);
+        int idx = (py * u_envMapWidth + px) * 3;
+
+        return vec3(envPixels[idx], envPixels[idx + 1], envPixels[idx + 2]);
+    }
+    return u_envColor;
+}
+
+// ── Binary search in CDF array ─────────────────────────────────────
+int binarySearchCDF(int offset, int count, float u) {
+    int lo = 0, hi = count - 1;
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        if (envCdfData[offset + mid] < u)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo;
+}
+
+// ── Sample env map direction from CDF ─────────────────────────────
+vec3 sampleEnvMapDirection(out vec3 outRadiance, out float outPdf) {
+    int W = u_envMapWidth;
+    int H = u_envMapHeight;
+
+    // Sample row via marginal CDF (offset 0, count H)
+    float u1 = rngNext();
+    int row = binarySearchCDF(0, H, u1);
+
+    // Sample column via conditional CDF (offset H + row*W, count W)
+    float u2 = rngNext();
+    int col = binarySearchCDF(H + row * W, W, u2);
+
+    // Pixel center to texture coords
+    float texU = (float(col) + 0.5) / float(W);
+    float texV = (float(row) + 0.5) / float(H);
+
+    // Convert to direction
+    float phi = (texU - 0.5) * 2.0 * PI;
+    float theta = texV * PI;
+    float sinTheta = sin(theta);
+    float cosTheta = cos(theta);
+
+    vec3 dir = vec3(sinTheta * cos(phi), cosTheta, sinTheta * sin(phi));
+
+    // Look up radiance
+    int idx = (row * W + col) * 3;
+    outRadiance = vec3(envPixels[idx], envPixels[idx + 1], envPixels[idx + 2]);
+
+    // Compute PDF
+    float lum = 0.2126 * outRadiance.r + 0.7152 * outRadiance.g + 0.0722 * outRadiance.b;
+    float totalIntegral = envCdfData[H + W * H]; // last element
+
+    if (sinTheta < 1e-8 || totalIntegral < 1e-8 || lum < 1e-8) {
+        outPdf = 0.0;
+        return dir;
+    }
+
+    outPdf = (lum * float(W) * float(H)) / (2.0 * PI * PI * sinTheta * totalIntegral);
+    return dir;
+}
+
+// ── PDF for a given direction in the env map CDF ──────────────────
+float envMapPdf(vec3 dir) {
+    int W = u_envMapWidth;
+    int H = u_envMapHeight;
+
+    float u = 0.5 + atan(dir.z, dir.x) / (2.0 * PI);
+    float v = 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / PI;
+
+    int px = clamp(int(u * float(W)), 0, W - 1);
+    int py = clamp(int(v * float(H)), 0, H - 1);
+    int idx = (py * W + px) * 3;
+
+    float r = envPixels[idx], g = envPixels[idx + 1], b = envPixels[idx + 2];
+    float lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+    float sinTheta = sin(PI * (float(py) + 0.5) / float(H));
+    float totalIntegral = envCdfData[H + W * H];
+
+    if (sinTheta < 1e-8 || totalIntegral < 1e-8)
+        return 0.0;
+
+    return (lum * float(W) * float(H)) / (2.0 * PI * PI * sinTheta * totalIntegral);
+}
+
+// ── AABB intersection (returns tmin via outTmin for ordered traversal) ──
+bool intersectAABB(vec3 bmin, vec3 bmax, vec3 origin, vec3 invDir, float tMax, out float outTmin) {
+    vec3 t1 = (bmin - origin) * invDir;
+    vec3 t2 = (bmax - origin) * invDir;
+
+    vec3 tmin3 = min(t1, t2);
+    vec3 tmax3 = max(t1, t2);
+
+    float tmin = max(max(tmin3.x, tmin3.y), tmin3.z);
+    float tmax = min(min(tmax3.x, tmax3.y), tmax3.z);
+
+    outTmin = tmin;
+    return tmax >= max(tmin, 0.0) && tmin < tMax;
+}
+
+// ── Triangle intersection (Moller-Trumbore) ────────────────────────
+bool intersectTriangle(vec3 rayOrig, vec3 rayDir, uint triIdx,
+                       out float outT, out float outU, out float outV)
+{
+    vec3 v0 = triV0(triIdx);
+    vec3 edge1 = triV1(triIdx) - v0;
+    vec3 edge2 = triV2(triIdx) - v0;
+    vec3 h = cross(rayDir, edge2);
+    float a = dot(edge1, h);
+
+    if (a > -1e-7 && a < 1e-7) return false;
+
+    float f = 1.0 / a;
+    vec3 s = rayOrig - v0;
+    float u = f * dot(s, h);
+    if (u < 0.0 || u > 1.0) return false;
+
+    vec3 q = cross(s, edge1);
+    float v = f * dot(rayDir, q);
+    if (v < 0.0 || u + v > 1.0) return false;
+
+    float t = f * dot(edge2, q);
+    if (t <= 1e-7) return false;
+
+    outT = t;
+    outU = u;
+    outV = v;
+    return true;
+}
+
+// ── BVH traversal ──────────────────────────────────────────────────
+struct HitRecord {
+    float t;
+    vec3  position;
+    vec3  normal;
+    vec3  geometricNormal;
+    vec3  color;
+    vec3  emissive;
+    vec2  uv;
+    int   textureIndex;
+    int   emissiveTextureIndex;
+    int   normalMapTextureIndex;
+    int   roughnessTextureIndex;
+    int   metallicTextureIndex;
+    uint  triangleIndex;
+    int   materialType;
+    float ior;
+    float roughness;
+    float metallic;
+    vec3  tangent;
+    float bitangentSign;
+    bool  hit;
+};
+
+HitRecord traceRay(vec3 origin, vec3 direction) {
+    HitRecord closest;
+    closest.t = FLT_MAX;
+    closest.hit = false;
+    closest.textureIndex = -1;
+    closest.emissiveTextureIndex = -1;
+    closest.normalMapTextureIndex = -1;
+    closest.roughnessTextureIndex = -1;
+    closest.metallicTextureIndex = -1;
+    closest.triangleIndex = 0xFFFFFFFFu;
+    closest.materialType = 0;
+    closest.ior = 1.5;
+    closest.roughness = 0.5;
+    closest.metallic = 0.0;
+    closest.tangent = vec3(1, 0, 0);
+    closest.bitangentSign = 1.0;
+
+    if (u_bvhNodeCount == 0u) return closest;
+
+    vec3 invDir = 1.0 / direction;
+
+    uint stack[64];
+    int stackPtr = 0;
+    stack[stackPtr++] = 0u;
+
+    while (stackPtr > 0) {
+        uint nodeIdx = stack[--stackPtr];
+        BVHNode node = bvhNodes[nodeIdx];
+
+        if (node.triCount > 0u) {
+            // Leaf node
+            for (uint i = node.leftFirst; i < node.leftFirst + node.triCount; ++i) {
+                float t, u, v;
+                if (intersectTriangle(origin, direction, i, t, u, v) && t < closest.t) {
+                    float w = 1.0 - u - v;
+
+                    // Alpha clip: skip transparent intersections
+                    if (triAlphaClip(i) && triTexIdx(i) >= 0) {
+                        vec2 hitUV = w * triUV0(i) + u * triUV1(i) + v * triUV2(i);
+                        if (sampleTexture(triTexIdx(i), hitUV).a < 0.5)
+                            continue;
+                    }
+
+                    closest.t = t;
+                    closest.hit = true;
+                    closest.position = origin + t * direction;
+                    closest.normal = u_flatShading
+                        ? triGeoNormal(i)
+                        : normalize(w * triN0(i) + u * triN1(i) + v * triN2(i));
+                    closest.geometricNormal = triGeoNormal(i);
+                    closest.color = triColor(i);
+                    closest.emissive = triEmissive(i);
+                    closest.uv = w * triUV0(i) + u * triUV1(i) + v * triUV2(i);
+                    closest.textureIndex = triTexIdx(i);
+                    closest.emissiveTextureIndex = triEmissiveTexIdx(i);
+                    closest.normalMapTextureIndex = triNormalMapTexIdx(i);
+                    closest.roughnessTextureIndex = triRoughnessTexIdx(i);
+                    closest.metallicTextureIndex = triMetallicTexIdx(i);
+                    closest.triangleIndex = i;
+                    closest.materialType = triMaterialType(i);
+                    closest.ior = triIOR(i);
+                    closest.roughness = triRoughness(i);
+                    closest.metallic = triMetallic(i);
+                    closest.tangent = triTangent(i);
+                    closest.bitangentSign = triBitangentSign(i);
+                }
+            }
+        } else {
+            // Internal node — ordered traversal (near child first)
+            uint childL = node.leftFirst;
+            uint childR = node.leftFirst + 1u;
+
+            float tminL, tminR;
+            bool hitL = intersectAABB(bvhNodes[childL].boundsMin, bvhNodes[childL].boundsMax,
+                                      origin, invDir, closest.t, tminL);
+            bool hitR = intersectAABB(bvhNodes[childR].boundsMin, bvhNodes[childR].boundsMax,
+                                      origin, invDir, closest.t, tminR);
+
+            // Push far child first so near child is popped first
+            if (hitL && hitR) {
+                if (tminL > tminR) {
+                    stack[stackPtr++] = childL; // far → pushed first
+                    stack[stackPtr++] = childR; // near → popped first
+                } else {
+                    stack[stackPtr++] = childR;
+                    stack[stackPtr++] = childL;
+                }
+            } else if (hitL) {
+                stack[stackPtr++] = childL;
+            } else if (hitR) {
+                stack[stackPtr++] = childR;
+            }
+        }
+    }
+
+    return closest;
+}
+
+// ── Shadow ray (any-hit, early termination) ────────────────────────
+bool traceShadowRay(vec3 origin, vec3 direction, float maxDist) {
+    if (u_bvhNodeCount == 0u) return false;
+
+    vec3 invDir = 1.0 / direction;
+
+    uint stack[64];
+    int stackPtr = 0;
+    stack[stackPtr++] = 0u;
+
+    while (stackPtr > 0) {
+        uint nodeIdx = stack[--stackPtr];
+        BVHNode node = bvhNodes[nodeIdx];
+
+        if (node.triCount > 0u) {
+            for (uint i = node.leftFirst; i < node.leftFirst + node.triCount; ++i) {
+                float t, u, v;
+                if (intersectTriangle(origin, direction, i, t, u, v) && t < maxDist) {
+                    // Alpha clip: transparent surfaces don't occlude
+                    if (triAlphaClip(i) && triTexIdx(i) >= 0) {
+                        float w = 1.0 - u - v;
+                        vec2 hitUV = w * triUV0(i) + u * triUV1(i) + v * triUV2(i);
+                        if (sampleTexture(triTexIdx(i), hitUV).a < 0.5)
+                            continue;
+                    }
+                    return true; // Any hit found — occluded
+                }
+            }
+        } else {
+            uint childL = node.leftFirst;
+            uint childR = node.leftFirst + 1u;
+
+            float tminL, tminR;
+            bool hitL = intersectAABB(bvhNodes[childL].boundsMin, bvhNodes[childL].boundsMax,
+                                      origin, invDir, maxDist, tminL);
+            bool hitR = intersectAABB(bvhNodes[childR].boundsMin, bvhNodes[childR].boundsMax,
+                                      origin, invDir, maxDist, tminR);
+
+            if (hitL && hitR) {
+                if (tminL > tminR) {
+                    stack[stackPtr++] = childL;
+                    stack[stackPtr++] = childR;
+                } else {
+                    stack[stackPtr++] = childR;
+                    stack[stackPtr++] = childL;
+                }
+            } else if (hitL) {
+                stack[stackPtr++] = childL;
+            } else if (hitR) {
+                stack[stackPtr++] = childR;
+            }
+        }
+    }
+
+    return false;
+}
+
+// ── ONB construction ───────────────────────────────────────────────
+void buildONB(vec3 n, out vec3 t, out vec3 b) {
+    vec3 a = (abs(n.x) > 0.9) ? vec3(0, 1, 0) : vec3(1, 0, 0);
+    t = normalize(cross(n, a));
+    b = cross(n, t);
+}
+
+// ── Cook-Torrance GGX helpers ─────────────────────────────────────
+float D_GGX(float NdotH, float alpha) {
+    float a2 = alpha * alpha;
+    float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    return a2 / (PI * denom * denom);
+}
+
+float G1_Smith(float NdotX, float alpha) {
+    float a2 = alpha * alpha;
+    return 2.0 * NdotX / (NdotX + sqrt(a2 + (1.0 - a2) * NdotX * NdotX));
+}
+
+float G_Smith(float NdotV, float NdotL, float alpha) {
+    return G1_Smith(NdotV, alpha) * G1_Smith(NdotL, alpha);
+}
+
+vec3 F_Schlick(float cosTheta, vec3 F0) {
+    return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
+}
+
+// VNDF sampling (Heitz 2018): samples half-vectors visible from V,
+// eliminating most below-hemisphere reflections at grazing angles.
+vec3 sampleVNDF(vec3 Ve, float alpha, float u1, float u2) {
+    // Stretch V into the hemisphere configuration
+    vec3 Vh = normalize(vec3(alpha * Ve.x, alpha * Ve.y, Ve.z));
+
+    // Orthonormal basis around Vh
+    float lensq = Vh.x * Vh.x + Vh.y * Vh.y;
+    vec3 T1 = lensq > 0.0 ? vec3(-Vh.y, Vh.x, 0.0) / sqrt(lensq) : vec3(1.0, 0.0, 0.0);
+    vec3 T2 = cross(Vh, T1);
+
+    // Sample projected area
+    float r = sqrt(u1);
+    float phi = 2.0 * PI * u2;
+    float t1 = r * cos(phi);
+    float t2 = r * sin(phi);
+    float s = 0.5 * (1.0 + Vh.z);
+    t2 = (1.0 - s) * sqrt(max(0.0, 1.0 - t1 * t1)) + s * t2;
+
+    // Reproject onto hemisphere
+    vec3 Nh = t1 * T1 + t2 * T2 + sqrt(max(0.0, 1.0 - t1 * t1 - t2 * t2)) * Vh;
+
+    // Unstretch
+    return normalize(vec3(alpha * Nh.x, alpha * Nh.y, max(0.0, Nh.z)));
+}
+
+vec3 ctEvaluate(vec3 N, vec3 V, vec3 L, vec3 baseColor, float alpha, float metallic, float ior) {
+    float NdotL = dot(N, L);
+    if (NdotL <= 0.0) return vec3(0.0);
+    float NdotV = max(dot(N, V), 1e-4); // clamp — grazing V can go slightly negative
+
+    vec3 H = normalize(V + L);
+    float NdotH = max(dot(N, H), 0.0);
+    float VdotH = max(dot(V, H), 0.0);
+
+    float f = (ior - 1.0) / (ior + 1.0);
+    f = f * f;
+    vec3 F0 = mix(vec3(f), baseColor, metallic);
+
+    float D = D_GGX(NdotH, alpha);
+    float G = G_Smith(NdotV, NdotL, alpha);
+    vec3  F = F_Schlick(VdotH, F0);
+
+    vec3 spec = D * G * F / max(4.0 * NdotV * NdotL, 1e-8);
+    vec3 diff = (1.0 - F) * (1.0 - metallic) * baseColor / PI;
+
+    return diff + spec;
+}
+
+float ctPdf(vec3 N, vec3 V, vec3 L, float alpha, float metallic) {
+    float NdotL = dot(N, L);
+    if (NdotL <= 0.0) return 0.0;
+
+    float NdotV = max(dot(N, V), 1e-4);
+    float specWeight = 0.5 * (1.0 + metallic);
+
+    // VNDF specular PDF: D * G1(NdotV) / (4 * NdotV)
+    vec3 H = normalize(V + L);
+    float NdotH = max(dot(N, H), 0.0);
+    float specPdf = D_GGX(NdotH, alpha) * G1_Smith(NdotV, alpha) / (4.0 * NdotV);
+
+    float diffPdf = NdotL / PI;
+
+    return specWeight * specPdf + (1.0 - specWeight) * diffPdf;
+}
+
+// ── Ray generation ─────────────────────────────────────────────────
+void generateRay(int x, int y, float jx, float jy, out vec3 origin, out vec3 direction) {
+    float ndcX = (2.0 * (float(x) + jx) / float(u_width))  - 1.0;
+    float ndcY = 1.0 - (2.0 * (float(y) + jy) / float(u_height));
+
+    vec4 nearClip = u_inverseVP * vec4(ndcX, ndcY, -1.0, 1.0);
+    vec4 farClip  = u_inverseVP * vec4(ndcX, ndcY,  1.0, 1.0);
+
+    vec3 nearWorld = nearClip.xyz / nearClip.w;
+    vec3 farWorld  = farClip.xyz  / farClip.w;
+
+    origin    = u_cameraOrigin;
+    direction = normalize(farWorld - nearWorld);
+}
+
+// ── Light sampling ─────────────────────────────────────────────────
+vec3 sampleLightPoint(out uint outTriIndex) {
+    float u = rngNext();
+
+    // Binary search in CDF
+    uint lo = 0u, hi = lightCount - 1u;
+    while (lo < hi) {
+        uint mid = (lo + hi) / 2u;
+        if (getLightCDF(mid) < u)
+            lo = mid + 1u;
+        else
+            hi = mid;
+    }
+
+    outTriIndex = getLightIndex(lo);
+
+    vec3 v0 = triV0(outTriIndex);
+    vec3 v1 = triV1(outTriIndex);
+    vec3 v2 = triV2(outTriIndex);
+
+    float u1 = rngNext();
+    float u2 = rngNext();
+    float su0 = sqrt(u1);
+
+    return v0 * (1.0 - su0) + v1 * (su0 * (1.0 - u2)) + v2 * (su0 * u2);
+}
+
+// ── Path tracing ───────────────────────────────────────────────────
+vec3 pathTrace(vec3 rayOrigin, vec3 rayDirection) {
+    vec3  radiance   = vec3(0.0);
+    vec3  throughput = vec3(1.0);
+    float prevBsdfPdf = 0.0;
+    bool  prevWasDelta = false;
+    bool  hasLights = (lightCount > 0u);
+
+    vec3 origin = rayOrigin;
+    vec3 direction = rayDirection;
+
+    for (int depth = 0; depth < u_maxDepth; ++depth) {
+        HitRecord hit = traceRay(origin, direction);
+
+        if (!hit.hit) {
+            // Sun contribution
+            float sunCosAngle = cos(u_sunAngularRadius);
+            if (u_sunEnabled && dot(direction, -u_sunDir) > sunCosAngle) {
+                float sunSolidAngle = 2.0 * PI * (1.0 - sunCosAngle);
+                float sunRadiance   = 1.0 / sunSolidAngle;
+                float lightPdf      = 1.0 / sunSolidAngle;
+
+                if (depth == 0 || !u_enableNEE || prevWasDelta) {
+                    radiance += throughput * u_sunColor * sunRadiance;
+                } else {
+                    float weight = prevBsdfPdf / (prevBsdfPdf + lightPdf);
+                    radiance += throughput * u_sunColor * sunRadiance * weight;
+                }
+            }
+
+            {
+                vec3 envContrib = sampleEnvironment(direction);
+                if (depth == 0) {
+                    // Background always visible regardless of enableEnvLighting toggle
+                    radiance += throughput * envContrib;
+                } else if (u_enableEnvLighting) {
+                    vec3 scaledEnv = envContrib * u_envLightMultiplier;
+                    if (u_enableNEE && !prevWasDelta && u_hasEnvCDF) {
+                        float ePdf = envMapPdf(direction);
+                        if (ePdf > 1e-8)
+                            scaledEnv *= prevBsdfPdf / (prevBsdfPdf + ePdf);
+                    }
+                    radiance += throughput * scaledEnv;
+                }
+            }
+            break;
+        }
+
+        // Determine front/back face
+        bool frontFace = dot(hit.geometricNormal, -direction) > 0.0;
+
+        // Opaque back-face hit — inverted-normal mesh (e.g. CAD export).
+        // Pass through: advance past the surface, keep direction.
+        // Dielectrics (materialType == 2) are exempt — they need back-face for refraction.
+        if (!frontFace && hit.materialType != 2)
+        {
+            origin    = hit.position + direction * u_rayEps;
+            continue;
+        }
+
+        // Ray origin offsets must follow the geometric normal, not the shading normal.
+        // After normal mapping the shading normal can be nearly tangent to the surface,
+        // so hit.normal * eps barely moves the origin away from the actual surface —
+        // no amount of EPS increase helps. The geometric normal always points cleanly
+        // away from the real surface, so it is the correct offset direction.
+        vec3 offsetNormal = frontFace ? hit.geometricNormal : -hit.geometricNormal;
+
+        // Ensure the shading normal is on the same side as the geometric normal.
+        // Covers front-face hits where interpolated vertex normals cross the geometric
+        // boundary, and dielectric back-face hits (opaque back-face hits are handled above).
+        // The NdotL guard in ctEvaluate() and ctPdf() requires N to agree with Ng.
+        if (dot(hit.normal, offsetNormal) < 0.0)
+            hit.normal = -hit.normal;
+
+        // Hit emissive surface
+        vec3 emission = vec3(0.0);
+        if (u_enableEmissive) {
+            emission = hit.emissive;
+            if (hit.emissiveTextureIndex >= 0)
+                emission = sampleTexture(hit.emissiveTextureIndex, hit.uv).rgb;
+        }
+
+        if (length(emission) > 0.001) {
+            float cosLight = dot(hit.geometricNormal, -direction);
+            bool isTexturedEmitter = (hit.emissiveTextureIndex >= 0);
+
+            if (depth == 0 || prevWasDelta || isTexturedEmitter) {
+                // Direct view, delta bounce, or textured emitter (not in light CDF) — full weight
+                if (cosLight > 0.0)
+                    radiance += throughput * emission;
+            } else if (u_enableNEE && hasLights && cosLight > 0.0) {
+                float pdfLight = (hit.t * hit.t) / (cosLight * totalLightArea);
+                float weight = prevBsdfPdf / (prevBsdfPdf + pdfLight);
+                radiance += throughput * emission * weight;
+            } else if (!u_enableNEE) {
+                if (cosLight > 0.0)
+                    radiance += throughput * emission;
+            }
+
+            // Textured emitters continue to scatter via their base material;
+            // solid emitters (actual light sources in the CDF) terminate.
+            if (!isTexturedEmitter)
+                break;
+        }
+
+        // Albedo (with texture)
+        vec3 albedo = hit.color;
+        if (hit.textureIndex >= 0)
+            albedo *= sampleTexture(hit.textureIndex, hit.uv).rgb;
+
+        // Normal map perturbation
+        if (u_enableNormalMapping && hit.normalMapTextureIndex >= 0) {
+            vec3 N = hit.normal;
+            vec3 mapN = sampleTexture(hit.normalMapTextureIndex, hit.uv).rgb * 2.0 - 1.0;
+            mapN = normalize(mapN);
+            vec3 T = normalize(hit.tangent - dot(hit.tangent, N) * N);
+            vec3 B = cross(N, T) * hit.bitangentSign;
+            hit.normal = normalize(T * mapN.x + B * mapN.y + N * mapN.z);
+
+            // Re-apply alignment after normal map perturbation.
+            if (dot(hit.normal, offsetNormal) < 0.0)
+                hit.normal = -hit.normal;
+        }
+
+        // Sample roughness/metallic textures
+        float roughness = hit.roughness;
+        if (hit.roughnessTextureIndex >= 0)
+            roughness = sampleTexture(hit.roughnessTextureIndex, hit.uv).x;
+
+        float metallic = hit.metallic;
+        if (hit.metallicTextureIndex >= 0)
+            metallic = sampleTexture(hit.metallicTextureIndex, hit.uv).x;
+
+        // ── Material dispatch ──────────────────────────────────────
+        if (hit.materialType == 2) {
+            // Dielectric: Fresnel reflect/refract
+            vec3 wo = -direction;
+            float etaI = frontFace ? 1.0 : hit.ior;
+            float etaT = frontFace ? hit.ior : 1.0;
+            float eta = etaI / etaT;
+
+            float cosI = max(dot(hit.normal, wo), 0.0);
+
+            // Schlick approximation
+            float dF0 = (etaI - etaT) / (etaI + etaT);
+            dF0 = dF0 * dF0;
+            float F = dF0 + (1.0 - dF0) * pow(1.0 - cosI, 5.0);
+
+            // Total internal reflection check
+            float sinTSq = eta * eta * (1.0 - cosI * cosI);
+            if (sinTSq > 1.0)
+                F = 1.0;
+
+            float uRand = rngNext();
+            vec3 newDir;
+            if (uRand < F) {
+                newDir = reflect(-wo, hit.normal);
+                throughput *= vec3(1.0);
+            } else {
+                newDir = refract(-wo, hit.normal, eta);
+                if (length(newDir) < 0.001) {
+                    newDir = reflect(-wo, hit.normal);
+                    throughput *= vec3(1.0);
+                } else {
+                    throughput *= albedo;
+                }
+            }
+
+            prevBsdfPdf = 1.0;
+            prevWasDelta = true;
+
+            if (dot(newDir, offsetNormal) > 0.0)
+                origin = hit.position + offsetNormal * u_rayEps;
+            else
+                origin = hit.position - offsetNormal * u_rayEps;
+            direction = newDir;
+
+        } else if (hit.materialType == 1 || (metallic > 0.99 && roughness < 0.01)) {
+            // Mirror: explicit mirror material, or perfect-metallic PBR params (delta BRDF, no NEE)
+            vec3 wo = -direction;
+            vec3 newDir = reflect(-wo, hit.normal);
+
+            throughput *= albedo;
+            prevBsdfPdf = 1.0;
+            prevWasDelta = true;
+
+            origin    = hit.position + offsetNormal * u_rayEps;
+            direction = newDir;
+
+        } else {
+            // Cook-Torrance GGX
+            vec3 wo = -direction;
+            float roughClamped = max(roughness, 0.01);
+            float alpha = roughClamped * roughClamped;
+            float specWeight = 0.5 * (1.0 + metallic);
+
+            // ── NEE: emissive triangle sampling ────────────────────
+            if (u_enableNEE && u_enableEmissive && hasLights) {
+                uint lightTriIdx;
+                vec3 lightPos = sampleLightPoint(lightTriIdx);
+
+                vec3 toLight = lightPos - hit.position;
+                float dist = length(toLight);
+                vec3 lightDir = toLight / dist;
+
+                float cosSurface = dot(hit.normal, lightDir);
+                float cosLt      = dot(triGeoNormal(lightTriIdx), -lightDir);
+
+                if (cosSurface > 0.0 && cosLt > 0.0 && dot(offsetNormal, lightDir) > 0.0) {
+                    bool occluded = traceShadowRay(hit.position + offsetNormal * u_rayEps, lightDir, dist - 2.0 * u_rayEps);
+
+                    if (!occluded) {
+                        float pdfLight = (dist * dist) / (cosLt * totalLightArea);
+                        float pdfBsdf  = ctPdf(hit.normal, wo, lightDir, alpha, metallic);
+                        float misWeight = pdfLight / (pdfLight + pdfBsdf);
+
+                        vec3 brdfVal = ctEvaluate(hit.normal, wo, lightDir, albedo, alpha, metallic, hit.ior);
+                        radiance += throughput * brdfVal * triEmissive(lightTriIdx)
+                                  * cosSurface / pdfLight * misWeight;
+                    }
+                }
+            }
+
+            // ── NEE: point light ───────────────────────────────────
+            if (u_enableNEE && u_pointLightEnabled) {
+                vec3 toLight = u_pointLightPos - hit.position;
+                float dist = length(toLight);
+                vec3 lightDir = toLight / dist;
+
+                float cosSurface = dot(hit.normal, lightDir);
+
+                if (cosSurface > 0.0 && dot(offsetNormal, lightDir) > 0.0) {
+                    bool occluded = traceShadowRay(hit.position + offsetNormal * u_rayEps, lightDir, dist - 2.0 * u_rayEps);
+
+                    if (!occluded) {
+                        vec3 brdfVal = ctEvaluate(hit.normal, wo, lightDir, albedo, alpha, metallic, hit.ior);
+                        radiance += throughput * brdfVal * u_pointLightColor
+                                  * cosSurface / (dist * dist);
+                    }
+                }
+            }
+
+            // ── NEE: sun (directional) light ───────────────────────
+            if (u_enableNEE && u_sunEnabled) {
+                float sunCosAngle = cos(u_sunAngularRadius);
+                float sunSolidAngle = 2.0 * PI * (1.0 - sunCosAngle);
+                float u1 = rngNext();
+                float u2 = rngNext();
+
+                float cosTheta = 1.0 - u1 * (1.0 - sunCosAngle);
+                float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
+                float phi = 2.0 * PI * u2;
+
+                vec3 toSun = -u_sunDir;
+                vec3 t, b;
+                buildONB(toSun, t, b);
+
+                vec3 lightDir = t * (cos(phi) * sinTheta)
+                              + b * (sin(phi) * sinTheta)
+                              + toSun * cosTheta;
+                lightDir = normalize(lightDir);
+
+                float cosSurface = dot(hit.normal, lightDir);
+
+                if (cosSurface > 0.0 && dot(offsetNormal, lightDir) > 0.0) {
+                    bool sunOccluded = traceShadowRay(hit.position + offsetNormal * u_rayEps, lightDir, FLT_MAX);
+
+                    if (!sunOccluded) {
+                        float lightPdf  = 1.0 / sunSolidAngle;
+                        float bsdfPdf   = ctPdf(hit.normal, wo, lightDir, alpha, metallic);
+                        float misWeight = lightPdf / (lightPdf + bsdfPdf);
+
+                        vec3 brdfVal = ctEvaluate(hit.normal, wo, lightDir, albedo, alpha, metallic, hit.ior);
+                        radiance += throughput * brdfVal * u_sunColor * cosSurface * misWeight;
+                    }
+                }
+            }
+
+            // ── NEE: environment map importance sampling ──────────
+            if (u_enableNEE && u_enableEnvLighting && u_hasEnvCDF) {
+                vec3 envRad;
+                float envPdfVal;
+                vec3 envDir = sampleEnvMapDirection(envRad, envPdfVal);
+
+                float cosSurface = dot(hit.normal, envDir);
+
+                if (cosSurface > 0.0 && envPdfVal > 1e-8 && dot(offsetNormal, envDir) > 0.0) {
+                    bool envOccluded = traceShadowRay(hit.position + offsetNormal * u_rayEps, envDir, FLT_MAX);
+
+                    if (!envOccluded) {
+                        float bsdfPdfVal = ctPdf(hit.normal, wo, envDir, alpha, metallic);
+                        float misWeight = envPdfVal / (envPdfVal + bsdfPdfVal);
+
+                        vec3 brdfVal = ctEvaluate(hit.normal, wo, envDir, albedo, alpha, metallic, hit.ior);
+                        radiance += throughput * brdfVal * envRad * u_envLightMultiplier * cosSurface / envPdfVal * misWeight;
+                    }
+                }
+            }
+
+            // ── BSDF sampling for next bounce (lobe selection) ────
+            float bsdfU1 = rngNext();
+            float bsdfU2 = rngNext();
+            float uLobe  = rngNext();
+
+            // ONB around shading normal for specular; geometric normal for diffuse
+            vec3 t, b;
+            buildONB(hit.normal, t, b);
+            vec3 tg, bg;
+            buildONB(offsetNormal, tg, bg);
+
+            vec3 newDir;
+            if (uLobe < specWeight) {
+                // VNDF importance sampling (Heitz 2018) — around shading normal
+                vec3 Vlocal = vec3(dot(wo, t), dot(wo, b), dot(wo, hit.normal));
+                vec3 Hlocal = sampleVNDF(Vlocal, alpha, bsdfU1, bsdfU2);
+                vec3 H = normalize(t * Hlocal.x + b * Hlocal.y + hit.normal * Hlocal.z);
+
+                newDir = reflect(-wo, H);
+
+                // At grazing angles VNDF can reflect below the geometric surface.
+                // Fall back to a diffuse sample around Ng so the path always continues.
+                if (dot(newDir, offsetNormal) <= 0.0) {
+                    float bsdfPhi2 = 2.0 * PI * bsdfU1;
+                    float cosTheta2 = sqrt(1.0 - bsdfU2);
+                    float sinTheta2 = sqrt(bsdfU2);
+                    vec3 localDir2 = vec3(cos(bsdfPhi2) * sinTheta2, sin(bsdfPhi2) * sinTheta2, cosTheta2);
+                    newDir = tg * localDir2.x + bg * localDir2.y + offsetNormal * localDir2.z;
+                }
+            } else {
+                // Cosine-weighted hemisphere around geometric normal — guarantees the
+                // bounce stays above the real surface, preventing black pixels at
+                // grazing angles where the shading normal may diverge from geometry.
+                float bsdfPhi = 2.0 * PI * bsdfU1;
+                float cosTheta = sqrt(1.0 - bsdfU2);
+                float sinTheta = sqrt(bsdfU2);
+
+                vec3 localDir = vec3(cos(bsdfPhi) * sinTheta, sin(bsdfPhi) * sinTheta, cosTheta);
+                newDir = tg * localDir.x + bg * localDir.y + offsetNormal * localDir.z;
+            }
+
+            float NdotL = dot(hit.normal, newDir);
+            if (NdotL <= 0.0) break;
+            // Don't bounce below the actual geometric surface — prevents self-intersection
+            if (dot(newDir, offsetNormal) < 0.0) break;
+
+            vec3 brdf = ctEvaluate(hit.normal, wo, newDir, albedo, alpha, metallic, hit.ior);
+            float bsdfPdf = ctPdf(hit.normal, wo, newDir, alpha, metallic);
+            if (bsdfPdf < 1e-8) break;
+
+            throughput *= brdf * NdotL / bsdfPdf;
+            prevBsdfPdf = bsdfPdf;
+            prevWasDelta = false;
+
+            origin    = hit.position + offsetNormal * u_rayEps;
+            direction = newDir;
+        }
+    }
+
+    return radiance;
+}
+
+// ── Main ───────────────────────────────────────────────────────────
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (pixel.x >= int(u_width) || pixel.y >= int(u_height))
+        return;
+
+    // Initialize RNG
+    rngState = hash(uint(pixel.x) + uint(pixel.y) * u_width) ^ hash(u_sampleCount);
+
+    // Anti-aliasing jitter
+    float jx = u_enableAA ? rngNext() : 0.5;
+    float jy = u_enableAA ? rngNext() : 0.5;
+
+    // Generate primary ray
+    vec3 origin, direction;
+    generateRay(pixel.x, pixel.y, jx, jy, origin, direction);
+
+    // Trace path
+    vec3 color = pathTrace(origin, direction);
+
+    // Firefly clamping
+    if (u_enableFireflyClamping) {
+        float lum = 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
+        if (lum > 10.0)
+            color *= 10.0 / lum;
+    }
+
+    // NaN/Inf guard — prevent permanent pixel corruption in accumulation buffer
+    if (any(isnan(color)) || any(isinf(color)))
+        color = vec3(0.0);
+
+    // Accumulate
+    vec4 prev = imageLoad(u_accumImage, pixel);
+    imageStore(u_accumImage, pixel, prev + vec4(color, 1.0));
+}

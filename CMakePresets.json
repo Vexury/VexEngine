@@ -1,0 +1,45 @@
+{
+    "version": 3,
+    "configurePresets": [
+        {
+            "name": "opengl-debug",
+            "displayName": "OpenGL (Debug)",
+            "generator": "Visual Studio 17 2022",
+            "binaryDir": "${sourceDir}/build-gl",
+            "cacheVariables": {
+                "VEX_BACKEND": "OpenGL",
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "opengl-release",
+            "displayName": "OpenGL (Release)",
+            "generator": "Visual Studio 17 2022",
+            "binaryDir": "${sourceDir}/build-gl",
+            "cacheVariables": {
+                "VEX_BACKEND": "OpenGL",
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
+            "name": "vulkan-debug",
+            "displayName": "Vulkan (Debug)",
+            "generator": "Visual Studio 17 2022",
+            "binaryDir": "${sourceDir}/build-vk",
+            "cacheVariables": {
+                "VEX_BACKEND": "Vulkan",
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "vulkan-release",
+            "displayName": "Vulkan (Release)",
+            "generator": "Visual Studio 17 2022",
+            "binaryDir": "${sourceDir}/build-vk",
+            "cacheVariables": {
+                "VEX_BACKEND": "Vulkan",
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        }
+    ]
+}

@@ -1,0 +1,41 @@
+# Build
+/build*/
+/bin/
+/lib/
+/output/
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+CMakeSettings.json
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ImGui
+imgui.ini
+
+# Compiled objects
+*.obj
+*.o
+*.a
+*.lib
+*.exe
+*.dll
+*.so
+*.dylib
+*.pdb
+
+# Compiled shaders
+*.spv
+
+# CMake
+CMakeUserPresets.json
+compile_commands.json
+
+# clangd
+.cache/

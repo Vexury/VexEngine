@@ -1,0 +1,28 @@
+#version 430 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNormal;
+layout(location = 2) in vec3 aColor;
+layout(location = 3) in vec3 aEmissive;
+layout(location = 4) in vec2 aUV;
+layout(location = 5) in vec4 aTangent;
+
+uniform mat4 u_view;
+uniform mat4 u_projection;
+
+out vec3 vWorldPos;
+out vec3 vNormal;
+out vec3 vColor;
+out vec3 vEmissive;
+out vec2 vUV;
+out vec4 vTangent;
+
+void main()
+{
+    vWorldPos = aPos;
+    vNormal = aNormal;
+    vColor = aColor;
+    vEmissive = aEmissive;
+    vUV = aUV;
+    vTangent = aTangent;
+    gl_Position = u_projection * u_view * vec4(aPos, 1.0);
+}
