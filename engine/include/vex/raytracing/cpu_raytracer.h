@@ -99,6 +99,9 @@ public:
     void setRayEps(float v);
     float getRayEps() const { return m_rayEps; }
 
+    void setEnableRR(bool v);
+    bool getEnableRR() const { return m_enableRR; }
+
     // Depth of field (resets accumulation when changed; aperture=0 → pinhole)
     void setDoF(float aperture, float focusDistance, glm::vec3 right, glm::vec3 up);
 
@@ -215,6 +218,7 @@ private:
     float m_gamma = 2.2f;
     bool m_enableACES = true;
     float m_rayEps = 1e-4f;
+    bool  m_enableRR = true;
 
     // Depth of field
     float      m_aperture      = 0.0f;

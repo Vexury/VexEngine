@@ -136,6 +136,7 @@ void GLGPURaytracer::cacheUniformLocations()
     m_locTriangleCount       = loc("u_triangleCount");
     m_locBvhNodeCount        = loc("u_bvhNodeCount");
     m_locRayEps              = loc("u_rayEps");
+    m_locEnableRR            = loc("u_enableRR");
     m_locAperture            = loc("u_aperture");
     m_locFocusDistance       = loc("u_focusDistance");
     m_locCameraRight         = loc("u_cameraRight");
@@ -486,6 +487,13 @@ void GLGPURaytracer::setRayEps(float v)
     reset();
 }
 
+void GLGPURaytracer::setEnableRR(bool v)
+{
+    if (m_enableRR == v) return;
+    m_enableRR = v;
+    reset();
+}
+
 void GLGPURaytracer::setDoF(float aperture, float focusDistance, glm::vec3 right, glm::vec3 up)
 {
     m_aperture      = aperture;
@@ -633,6 +641,7 @@ void GLGPURaytracer::traceSample()
     glUniform1ui(m_locTriangleCount, m_triangleCount);
     glUniform1ui(m_locBvhNodeCount, m_bvhNodeCount);
     glUniform1f(m_locRayEps, m_rayEps);
+    glUniform1i(m_locEnableRR, m_enableRR ? 1 : 0);
     glUniform1f(m_locAperture, m_aperture);
     glUniform1f(m_locFocusDistance, m_focusDistance);
     glUniform3fv(m_locCameraRight, 1, glm::value_ptr(m_cameraRight));

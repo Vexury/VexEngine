@@ -51,6 +51,9 @@ public:
     void setRayEps(float v);
     float getRayEps() const { return m_rayEps; }
 
+    void setEnableRR(bool v);
+    bool getEnableRR() const { return m_enableRR; }
+
     // Depth of field (aperture=0 → pinhole; reset must be called externally when changed)
     void setDoF(float aperture, float focusDistance, glm::vec3 right, glm::vec3 up);
 
@@ -126,6 +129,7 @@ private:
     int32_t m_locTriangleCount = -1;
     int32_t m_locBvhNodeCount = -1;
     int32_t m_locRayEps = -1;
+    int32_t m_locEnableRR = -1;
     int32_t m_locAperture = -1;
     int32_t m_locFocusDistance = -1;
     int32_t m_locCameraRight = -1;
@@ -163,6 +167,7 @@ private:
     bool m_hasEnvCDF = false;
 
     float m_rayEps = 1e-4f;
+    bool  m_enableRR = true;
 
     // Depth of field
     float     m_aperture      = 0.0f;

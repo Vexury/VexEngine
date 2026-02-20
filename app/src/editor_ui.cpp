@@ -421,6 +421,10 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
         if (ImGui::Checkbox("Next Event Estimation", &nee))
             renderer.setEnableNEE(nee);
 
+        bool rr = renderer.getEnableRR();
+        if (ImGui::Checkbox("Russian Roulette", &rr))
+            renderer.setEnableRR(rr);
+
         bool aa = renderer.getEnableAA();
         if (ImGui::Checkbox("Anti-Aliasing", &aa))
             renderer.setEnableAA(aa);
@@ -488,6 +492,10 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
         bool nee = renderer.getGPUEnableNEE();
         if (ImGui::Checkbox("Next Event Estimation", &nee))
             renderer.setGPUEnableNEE(nee);
+
+        bool rr = renderer.getGPUEnableRR();
+        if (ImGui::Checkbox("Russian Roulette", &rr))
+            renderer.setGPUEnableRR(rr);
 
         bool aa = renderer.getGPUEnableAA();
         if (ImGui::Checkbox("Anti-Aliasing", &aa))

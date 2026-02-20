@@ -252,6 +252,9 @@ bool SceneRenderer::getEnableACES() const               { return m_cpuRaytracer 
 void SceneRenderer::setRayEps(float v)                 { if (m_cpuRaytracer) m_cpuRaytracer->setRayEps(v); }
 float SceneRenderer::getRayEps() const                  { return m_cpuRaytracer ? m_cpuRaytracer->getRayEps() : 1e-4f; }
 
+void SceneRenderer::setEnableRR(bool v)                { if (m_cpuRaytracer) m_cpuRaytracer->setEnableRR(v); }
+bool SceneRenderer::getEnableRR() const                 { return m_cpuRaytracer ? m_cpuRaytracer->getEnableRR() : true; }
+
 uint32_t SceneRenderer::getBVHNodeCount() const    { return m_cpuRaytracer ? m_cpuRaytracer->getBVHNodeCount() : 0; }
 size_t   SceneRenderer::getBVHMemoryBytes() const  { return m_cpuRaytracer ? m_cpuRaytracer->getBVHMemoryBytes() : 0; }
 vex::AABB SceneRenderer::getBVHRootAABB() const    { return m_cpuRaytracer ? m_cpuRaytracer->getBVHRootAABB() : vex::AABB{}; }
@@ -514,6 +517,22 @@ float SceneRenderer::getGPURayEps() const
     return m_gpuRaytracer ? m_gpuRaytracer->getRayEps() : 1e-4f;
 #else
     return 1e-4f;
+#endif
+}
+
+void SceneRenderer::setGPUEnableRR([[maybe_unused]] bool v)
+{
+#ifdef VEX_BACKEND_OPENGL
+    if (m_gpuRaytracer) m_gpuRaytracer->setEnableRR(v);
+#endif
+}
+
+bool SceneRenderer::getGPUEnableRR() const
+{
+#ifdef VEX_BACKEND_OPENGL
+    return m_gpuRaytracer ? m_gpuRaytracer->getEnableRR() : true;
+#else
+    return true;
 #endif
 }
 

@@ -88,6 +88,7 @@ uniform bool  u_hasEnvCDF;
 uniform uint  u_triangleCount;
 uniform uint  u_bvhNodeCount;
 uniform float u_rayEps;
+uniform bool  u_enableRR;
 
 uniform float u_aperture;
 uniform float u_focusDistance;
@@ -673,6 +674,13 @@ vec3 pathTrace(vec3 rayOrigin, vec3 rayDirection) {
     vec3 direction = rayDirection;
 
     for (int depth = 0; depth < u_maxDepth; ++depth) {
+        // Russian Roulette — terminate low-throughput paths after the first 2 bounces
+        if (u_enableRR && depth >= 2) {
+            float p = min(0.2126 * throughput.r + 0.7152 * throughput.g + 0.0722 * throughput.b, 0.95);
+            if (rngNext() > p) break;
+            throughput /= p;
+        }
+
         HitRecord hit = traceRay(origin, direction);
 
         if (!hit.hit) {

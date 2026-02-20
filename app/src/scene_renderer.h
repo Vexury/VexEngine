@@ -94,6 +94,9 @@ public:
     void setRayEps(float v);
     float getRayEps() const;
 
+    void setEnableRR(bool v);
+    bool getEnableRR() const;
+
     uint32_t getBVHNodeCount() const;
     size_t   getBVHMemoryBytes() const;
     vex::AABB getBVHRootAABB() const;
@@ -138,6 +141,9 @@ public:
 
     void setGPURayEps(float v);
     float getGPURayEps() const;
+
+    void setGPUEnableRR(bool v);
+    bool getGPUEnableRR() const;
 
     bool reloadGPUShader();
 

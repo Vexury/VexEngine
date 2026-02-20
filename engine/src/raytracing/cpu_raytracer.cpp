@@ -191,6 +191,13 @@ void CPURaytracer::setRayEps(float v)
     reset();
 }
 
+void CPURaytracer::setEnableRR(bool v)
+{
+    if (m_enableRR == v) return;
+    m_enableRR = v;
+    reset();
+}
+
 void CPURaytracer::setDoF(float aperture, float focusDistance, glm::vec3 right, glm::vec3 up)
 {
     if (m_aperture == aperture && m_focusDistance == focusDistance &&
@@ -672,6 +679,15 @@ glm::vec3 CPURaytracer::pathTrace(const Ray& initialRay, RNG& rng) const
 
     for (int depth = 0; depth < m_maxDepth; ++depth)
     {
+        // Russian Roulette — terminate low-throughput paths after the first 2 bounces
+        if (m_enableRR && depth >= 2)
+        {
+            float p = std::min(0.2126f * throughput.r + 0.7152f * throughput.g + 0.0722f * throughput.b, 0.95f);
+            if (rng.next() > p)
+                break;
+            throughput /= p;
+        }
+
         HitRecord hit = traceRay(ray);
 
         if (!hit.hit)
