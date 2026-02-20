@@ -357,6 +357,10 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                 glm::vec3 pos = scene.camera.getPosition();
                 ImGui::Text("Position: %.2f, %.2f, %.2f", pos.x, pos.y, pos.z);
             }
+            ImGui::Separator();
+            ImGui::TextUnformatted("Depth of Field (Path Trace only)");
+            ImGui::SliderFloat("Aperture",      &scene.camera.aperture,      0.0f, 0.1f, "%.4f");
+            ImGui::DragFloat ("Focus Distance", &scene.camera.focusDistance, 0.1f, 0.1f, 1000.0f, "%.2f");
             break;
 
         case Selection::None:

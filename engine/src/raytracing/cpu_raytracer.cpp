@@ -191,6 +191,18 @@ void CPURaytracer::setRayEps(float v)
     reset();
 }
 
+void CPURaytracer::setDoF(float aperture, float focusDistance, glm::vec3 right, glm::vec3 up)
+{
+    if (m_aperture == aperture && m_focusDistance == focusDistance &&
+        m_cameraRight == right && m_cameraUp == up)
+        return;
+    m_aperture      = aperture;
+    m_focusDistance = focusDistance;
+    m_cameraRight   = right;
+    m_cameraUp      = up;
+    reset();
+}
+
 // --- Point light (caller resets) ---
 
 void CPURaytracer::setPointLight(const glm::vec3& pos, const glm::vec3& color, bool enabled)
@@ -448,7 +460,27 @@ glm::vec3 CPURaytracer::sampleLightPoint(RNG& rng, uint32_t& outTriIndex) const
 
 // --- Ray generation and intersection ---
 
-Ray CPURaytracer::generateRay(int x, int y, float jitterX, float jitterY) const
+static glm::vec2 sampleConcentricDisk(float u1, float u2)
+{
+    float a = 2.0f * u1 - 1.0f;
+    float b = 2.0f * u2 - 1.0f;
+    if (a == 0.0f && b == 0.0f)
+        return glm::vec2(0.0f);
+    float r, phi;
+    if (std::abs(a) > std::abs(b))
+    {
+        r   = a;
+        phi = (PI / 4.0f) * (b / a);
+    }
+    else
+    {
+        r   = b;
+        phi = (PI / 2.0f) - (PI / 4.0f) * (a / b);
+    }
+    return glm::vec2(r * std::cos(phi), r * std::sin(phi));
+}
+
+Ray CPURaytracer::generateRay(int x, int y, float jitterX, float jitterY, RNG& rng) const
 {
     float ndcX = (2.0f * (static_cast<float>(x) + jitterX) / static_cast<float>(m_width)) - 1.0f;
     float ndcY = 1.0f - (2.0f * (static_cast<float>(y) + jitterY) / static_cast<float>(m_height));
@@ -462,6 +494,15 @@ Ray CPURaytracer::generateRay(int x, int y, float jitterX, float jitterY) const
     Ray ray;
     ray.origin    = m_cameraOrigin;
     ray.direction = glm::normalize(farWorld - nearWorld);
+
+    if (m_aperture > 0.0f)
+    {
+        glm::vec3 focalPoint = ray.origin + ray.direction * m_focusDistance;
+        glm::vec2 disk = sampleConcentricDisk(rng.next(), rng.next()) * m_aperture;
+        ray.origin    += disk.x * m_cameraRight + disk.y * m_cameraUp;
+        ray.direction  = glm::normalize(focalPoint - ray.origin);
+    }
+
     return ray;
 }
 
@@ -987,7 +1028,7 @@ void CPURaytracer::traceSample()
 
                 float jx = m_enableAA ? rng.next() : 0.5f;
                 float jy = m_enableAA ? rng.next() : 0.5f;
-                Ray ray = generateRay(static_cast<int>(x), static_cast<int>(y), jx, jy);
+                Ray ray = generateRay(static_cast<int>(x), static_cast<int>(y), jx, jy, rng);
 
                 glm::vec3 color = pathTrace(ray, rng);
 

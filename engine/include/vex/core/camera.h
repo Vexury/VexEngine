@@ -26,6 +26,10 @@ public:
     float nearPlane = 0.01f;
     float farPlane = 1000.0f;
 
+    // Thin-lens depth of field (path tracers only; 0 = pinhole)
+    float aperture      = 0.0f;
+    float focusDistance = 10.0f;
+
 private:
     glm::vec3 m_target = { 0.0f, 1.0f, 0.0f };
     float m_distance = 4.0f;

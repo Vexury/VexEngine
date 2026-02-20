@@ -99,6 +99,9 @@ public:
     void setRayEps(float v);
     float getRayEps() const { return m_rayEps; }
 
+    // Depth of field (resets accumulation when changed; aperture=0 → pinhole)
+    void setDoF(float aperture, float focusDistance, glm::vec3 right, glm::vec3 up);
+
     // BVH stats
     uint32_t getBVHNodeCount() const { return m_bvh.nodeCount(); }
     size_t   getBVHMemoryBytes() const { return m_bvh.memoryBytes(); }
@@ -168,7 +171,7 @@ private:
 
     HitRecord traceRay(const Ray& ray) const;
     bool traceShadowRay(const Ray& ray, float maxDist) const;
-    Ray generateRay(int x, int y, float jitterX, float jitterY) const;
+    Ray generateRay(int x, int y, float jitterX, float jitterY, RNG& rng) const;
     glm::vec3 pathTrace(const Ray& ray, RNG& rng) const;
     glm::vec3 sampleEnvironment(const glm::vec3& direction) const;
     glm::vec4 sampleTexture(int textureIndex, const glm::vec2& uv) const;
@@ -212,6 +215,13 @@ private:
     float m_gamma = 2.2f;
     bool m_enableACES = true;
     float m_rayEps = 1e-4f;
+
+    // Depth of field
+    float      m_aperture      = 0.0f;
+    float      m_focusDistance = 10.0f;
+    glm::vec3  m_cameraRight   = {1.0f, 0.0f, 0.0f};
+    glm::vec3  m_cameraUp      = {0.0f, 1.0f, 0.0f};
+
     // Point light
     glm::vec3 m_pointLightPos{0.0f};
     glm::vec3 m_pointLightColor{1.0f};

@@ -204,6 +204,8 @@ private:
     // Camera change detection
     glm::vec3 m_prevCameraPos{0.0f};
     glm::mat4 m_prevViewMatrix{1.0f};
+    float     m_prevAperture      = 0.0f;
+    float     m_prevFocusDistance = 10.0f;
 
     // Environment change detection
     int m_prevEnvmapIndex = -1;

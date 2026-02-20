@@ -181,6 +181,8 @@ void SceneRenderer::setRenderMode(RenderMode mode)
     m_prevSunIntensity     = -1.0f;
     m_prevSunAngularRadius = -1.0f;
     m_prevCustomEnvmapPath.clear();
+    m_prevAperture      = -1.0f;  // force DoF re-upload on next frame
+    m_prevFocusDistance = -1.0f;
 
     if (mode == RenderMode::CPURaytrace && m_cpuRaytracer)
         m_cpuRaytracer->reset();
@@ -1193,6 +1195,13 @@ void SceneRenderer::renderCPURaytrace(Scene& scene)
     glm::mat4 vp = proj * view;
     m_cpuRaytracer->setCamera(camPos, glm::inverse(vp));
 
+    // Depth of field — extract camera basis from view matrix and pass to raytracer
+    {
+        glm::vec3 right = glm::vec3(view[0][0], view[1][0], view[2][0]);
+        glm::vec3 up    = glm::vec3(view[0][1], view[1][1], view[2][1]);
+        m_cpuRaytracer->setDoF(scene.camera.aperture, scene.camera.focusDistance, right, up);
+    }
+
     // Trace one sample
     m_cpuRaytracer->traceSample();
 
@@ -1371,6 +1380,21 @@ void SceneRenderer::renderGPURaytrace(Scene& scene)
 
     glm::mat4 vp = proj * view;
     m_gpuRaytracer->setCamera(camPos, glm::inverse(vp));
+
+    // Depth of field — extract camera basis from view matrix and pass to raytracer
+    {
+        glm::vec3 right = glm::vec3(view[0][0], view[1][0], view[2][0]);
+        glm::vec3 up    = glm::vec3(view[0][1], view[1][1], view[2][1]);
+
+        if (scene.camera.aperture != m_prevAperture || scene.camera.focusDistance != m_prevFocusDistance)
+        {
+            m_gpuRaytracer->reset();
+            m_prevAperture      = scene.camera.aperture;
+            m_prevFocusDistance = scene.camera.focusDistance;
+        }
+
+        m_gpuRaytracer->setDoF(scene.camera.aperture, scene.camera.focusDistance, right, up);
+    }
 
     // Dispatch compute shader
     m_gpuRaytracer->traceSample();
