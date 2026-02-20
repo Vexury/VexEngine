@@ -106,6 +106,7 @@ void CPURaytracer::resize(uint32_t width, uint32_t height)
     m_accumBuffer.assign(width * height, glm::vec3(0.0f));
     m_pixelBuffer.assign(width * height * 4, 0);
     m_sampleCount = 0;
+    buildThreadPool();
 }
 
 void CPURaytracer::reset()
@@ -1023,6 +1024,111 @@ glm::vec3 CPURaytracer::pathTrace(const Ray& initialRay, RNG& rng) const
     return radiance;
 }
 
+// --- Thread pool ---
+
+void CPURaytracer::traceRowRange(uint32_t startRow, uint32_t endRow)
+{
+    for (uint32_t y = startRow; y < endRow; ++y)
+    {
+        for (uint32_t x = 0; x < m_width; ++x)
+        {
+            uint32_t seed = hash(x + y * m_width) ^ hash(m_sampleCount);
+            RNG rng(seed);
+
+            float jx = m_enableAA ? rng.next() : 0.5f;
+            float jy = m_enableAA ? rng.next() : 0.5f;
+            Ray ray = generateRay(static_cast<int>(x), static_cast<int>(y), jx, jy, rng);
+
+            glm::vec3 color = pathTrace(ray, rng);
+
+            // NaN/Inf guard — protect accumulation buffer
+            if (std::isnan(color.r) || std::isnan(color.g) || std::isnan(color.b) ||
+                std::isinf(color.r) || std::isinf(color.g) || std::isinf(color.b))
+                color = glm::vec3(0.0f);
+
+            if (m_enableFireflyClamping)
+            {
+                float lum = 0.2126f * color.r + 0.7152f * color.g + 0.0722f * color.b;
+                if (lum > 10.0f)
+                    color *= 10.0f / lum;
+            }
+
+            m_accumBuffer[y * m_width + x] += color;
+        }
+    }
+}
+
+void CPURaytracer::workerLoop(uint32_t id)
+{
+    uint64_t lastEpoch = 0;
+    while (true)
+    {
+        {
+            std::unique_lock<std::mutex> lock(m_poolMutex);
+            m_cvWork.wait(lock, [&]{ return m_poolEpoch > lastEpoch || m_poolStop; });
+            if (m_poolStop) return;
+            lastEpoch = m_poolEpoch;
+        }
+
+        traceRowRange(m_workerRanges[id].startRow, m_workerRanges[id].endRow);
+
+        {
+            std::lock_guard<std::mutex> lock(m_poolMutex);
+            if (--m_poolPending == 0)
+                m_cvDone.notify_one();
+        }
+    }
+}
+
+void CPURaytracer::buildThreadPool()
+{
+    shutdownPool();
+
+    uint32_t threadCount = std::max(1u, std::thread::hardware_concurrency());
+    m_workerRanges.resize(threadCount);
+
+    uint32_t rowsPerThread = m_height / threadCount;
+    uint32_t remainder     = m_height % threadCount;
+    uint32_t startRow = 0;
+    for (uint32_t i = 0; i < threadCount; ++i)
+    {
+        uint32_t endRow = startRow + rowsPerThread + (i < remainder ? 1 : 0);
+        m_workerRanges[i] = { startRow, endRow };
+        startRow = endRow;
+    }
+
+    m_workers.reserve(threadCount);
+    for (uint32_t i = 0; i < threadCount; ++i)
+        m_workers.emplace_back(&CPURaytracer::workerLoop, this, i);
+}
+
+void CPURaytracer::shutdownPool()
+{
+    if (m_workers.empty()) return;
+
+    {
+        std::lock_guard<std::mutex> lock(m_poolMutex);
+        m_poolStop = true;
+        ++m_poolEpoch;
+    }
+    m_cvWork.notify_all();
+
+    for (auto& t : m_workers)
+        t.join();
+    m_workers.clear();
+    m_workerRanges.clear();
+
+    // Reset so new threads (after rebuild) start cleanly from epoch 0
+    m_poolEpoch   = 0;
+    m_poolPending = 0;
+    m_poolStop    = false;
+}
+
+CPURaytracer::~CPURaytracer()
+{
+    shutdownPool();
+}
+
 // --- Sample dispatch ---
 
 void CPURaytracer::traceSample()
@@ -1030,54 +1136,19 @@ void CPURaytracer::traceSample()
     if (m_width == 0 || m_height == 0)
         return;
 
-    uint32_t threadCount = std::max(1u, std::thread::hardware_concurrency());
-    std::vector<std::thread> threads(threadCount);
-
-    auto traceRows = [this](uint32_t startRow, uint32_t endRow)
+    // Dispatch work to persistent thread pool
     {
-        for (uint32_t y = startRow; y < endRow; ++y)
-        {
-            for (uint32_t x = 0; x < m_width; ++x)
-            {
-                uint32_t seed = hash(x + y * m_width) ^ hash(m_sampleCount);
-                RNG rng(seed);
-
-                float jx = m_enableAA ? rng.next() : 0.5f;
-                float jy = m_enableAA ? rng.next() : 0.5f;
-                Ray ray = generateRay(static_cast<int>(x), static_cast<int>(y), jx, jy, rng);
-
-                glm::vec3 color = pathTrace(ray, rng);
-
-                // NaN/Inf guard — protect accumulation buffer
-                if (std::isnan(color.r) || std::isnan(color.g) || std::isnan(color.b) ||
-                    std::isinf(color.r) || std::isinf(color.g) || std::isinf(color.b))
-                    color = glm::vec3(0.0f);
-
-                if (m_enableFireflyClamping)
-                {
-                    float lum = 0.2126f * color.r + 0.7152f * color.g + 0.0722f * color.b;
-                    if (lum > 10.0f)
-                        color *= 10.0f / lum;
-                }
-
-                m_accumBuffer[y * m_width + x] += color;
-            }
-        }
-    };
-
-    uint32_t rowsPerThread = m_height / threadCount;
-    uint32_t remainder = m_height % threadCount;
-
-    uint32_t startRow = 0;
-    for (uint32_t i = 0; i < threadCount; ++i)
-    {
-        uint32_t endRow = startRow + rowsPerThread + (i < remainder ? 1 : 0);
-        threads[i] = std::thread(traceRows, startRow, endRow);
-        startRow = endRow;
+        std::lock_guard<std::mutex> lock(m_poolMutex);
+        m_poolPending = static_cast<uint32_t>(m_workers.size());
+        ++m_poolEpoch;
     }
+    m_cvWork.notify_all();
 
-    for (auto& t : threads)
-        t.join();
+    // Wait for all workers to finish
+    {
+        std::unique_lock<std::mutex> lock(m_poolMutex);
+        m_cvDone.wait(lock, [&]{ return m_poolPending == 0; });
+    }
 
     ++m_sampleCount;
 

@@ -7,6 +7,9 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 #include <vector>
 
 namespace vex
@@ -52,6 +55,8 @@ public:
     void resize(uint32_t width, uint32_t height);
     void reset();
     void traceSample();
+
+    ~CPURaytracer();
 
     const std::vector<uint8_t>& getPixelBuffer() const { return m_pixelBuffer; }
 
@@ -140,6 +145,13 @@ private:
 
     static uint32_t hash(uint32_t x);
 
+    // Thread pool
+    struct WorkRange { uint32_t startRow, endRow; };
+    void buildThreadPool();
+    void shutdownPool();
+    void workerLoop(uint32_t id);
+    void traceRowRange(uint32_t startRow, uint32_t endRow);
+
     // Hot intersection data — compact for cache-efficient BVH traversal (36 bytes)
     struct TriVerts
     {
@@ -200,6 +212,16 @@ private:
     std::vector<glm::vec3> m_accumBuffer;
     std::vector<uint8_t> m_pixelBuffer;
     uint32_t m_sampleCount = 0;
+
+    // Thread pool — persistent workers, fork-join via condition variables
+    std::vector<std::thread>  m_workers;
+    std::vector<WorkRange>    m_workerRanges;
+    std::mutex                m_poolMutex;
+    std::condition_variable   m_cvWork;
+    std::condition_variable   m_cvDone;
+    uint64_t                  m_poolEpoch   = 0;
+    uint32_t                  m_poolPending = 0;
+    bool                      m_poolStop    = false;
 
     glm::vec3 m_cameraOrigin{0.0f};
     glm::mat4 m_inverseVP{1.0f};
