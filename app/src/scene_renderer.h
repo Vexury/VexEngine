@@ -192,12 +192,11 @@ private:
     // Rasterizer env + post-process state
 #ifdef VEX_BACKEND_OPENGL
     uint32_t m_rasterEnvMapTex = 0;
+#endif
     std::unique_ptr<vex::Framebuffer> m_rasterHDRFB;
     float m_rasterExposure   = 0.0f;
     float m_rasterGamma      = 2.2f;
     bool  m_rasterEnableACES = true;
-
-#endif
     glm::vec3 m_rasterEnvColor { 0.5f };
     bool  m_rasterEnableEnvLighting  = false;
     float m_rasterEnvLightMultiplier = 1.0f;
@@ -224,6 +223,9 @@ private:
     std::vector<uint32_t> m_vkTexData;         // texCount header + packed RGBA8 pixels
     std::vector<uint32_t> m_vkLights;          // lightCount/area header + indices + CDF
     std::vector<uint32_t> m_vkInstanceOffsets; // first global tri index per BLAS
+
+    // VK rasterizer env map texture (RGBA8, created from float env data on env change)
+    std::unique_ptr<vex::Texture2D> m_vkRasterEnvTex;
 
     // VK RT env map data (updated in renderVKRaytrace on env change)
     std::vector<float>    m_vkEnvMapData;

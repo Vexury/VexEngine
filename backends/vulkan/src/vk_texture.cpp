@@ -19,7 +19,7 @@ std::unique_ptr<Texture2D> Texture2D::create(uint32_t width, uint32_t height, ui
 std::unique_ptr<Texture2D> Texture2D::createFromFile(const std::string& path)
 {
     int w, h, ch;
-    stbi_set_flip_vertically_on_load(false);
+    stbi_set_flip_vertically_on_load(true);
     unsigned char* data = stbi_load(path.c_str(), &w, &h, &ch, 4);
     if (!data)
     {

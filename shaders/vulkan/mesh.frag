@@ -20,12 +20,20 @@ layout(set = 0, binding = 0) uniform UBO {
     float _pad3;
     vec3 sunColor;
     float _pad4;
+    vec3  envColor;
+    float _pad5;
+    uint  enableEnvLighting;
+    float envLightMultiplier;
+    uint  hasEnvMap;
+    float _pad6;
 };
 
 layout(set = 1, binding = 0) uniform sampler2D u_diffuseMap;
 layout(set = 2, binding = 0) uniform sampler2D u_normalMap;
 layout(set = 3, binding = 0) uniform sampler2D u_roughnessMap;
 layout(set = 4, binding = 0) uniform sampler2D u_metallicMap;
+layout(set = 5, binding = 0) uniform sampler2D u_emissiveMap;
+layout(set = 6, binding = 0) uniform sampler2D u_envMap;
 
 layout(push_constant) uniform PC {
     uint  alphaClip;
@@ -38,6 +46,12 @@ layout(push_constant) uniform PC {
     uint  hasNormalMap;
     uint  hasRoughnessMap;
     uint  hasMetallicMap;
+    uint  flipV;          // offset 40 — unused here, keeps offsets aligned
+    float sampleCount;    // offset 44 — unused here
+    float exposure;       // offset 48 — unused here
+    float gamma;          // offset 52 — unused here
+    uint  enableACES;     // offset 56 — unused here
+    uint  hasEmissiveMap; // offset 60
 } pc;
 
 layout(location = 0) out vec4 FragColor;
@@ -145,7 +159,9 @@ void main()
     }
     if (pc.debugMode == 6) // Emission
     {
-        FragColor = vec4(vEmissive, 1.0);
+        vec3 em = vEmissive;
+        if (pc.hasEmissiveMap != 0u) em += texture(u_emissiveMap, vUV).rgb;
+        FragColor = vec4(em, 1.0);
         return;
     }
     if (pc.debugMode == 7) // Material ID
@@ -175,8 +191,20 @@ void main()
     float metallic  = (pc.hasMetallicMap  != 0u) ? texture(u_metallicMap,  vUV).r : pc.metallic;
     float alpha = roughness * roughness;
 
-    // Ambient
-    vec3 ambient = 0.03 * baseColor;
+    // Ambient (env-driven or fallback)
+    vec3 envAmbient = (enableEnvLighting != 0u) ? envColor * envLightMultiplier : vec3(0.03);
+    vec3 ambient = envAmbient * (1.0 - metallic) * baseColor;
+
+    // Env map specular IBL
+    if (enableEnvLighting != 0u && hasEnvMap != 0u)
+    {
+        vec3 R = reflect(-V, N);
+        float eu = atan(R.z, R.x) / (2.0 * PI) + 0.5;
+        float ev = asin(clamp(R.y, -1.0, 1.0)) / PI + 0.5;
+        vec3 F0 = mix(vec3(0.04), baseColor, metallic);
+        vec3 F  = F_Schlick(max(dot(N, V), 0.0), F0);
+        ambient += F * texture(u_envMap, vec2(eu, ev)).rgb * envLightMultiplier;
+    }
 
     // Point light
     vec3 L = normalize(lightPos - vWorldPos);
@@ -192,5 +220,7 @@ void main()
     vec3 result = ambient
                 + pointContrib * attenuation
                 + sunContrib;
+    if (pc.hasEmissiveMap != 0u)
+        result += texture(u_emissiveMap, vUV).rgb;
     FragColor = vec4(result, 1.0);
 }

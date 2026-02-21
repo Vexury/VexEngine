@@ -25,6 +25,7 @@ public:
 
     VkRenderPass getRenderPass() const { return m_renderPass; }
     VkImageView  getColorImageView() const { return m_colorImageView; }
+    VkSampler    getColorSampler()   const { return m_colorSampler; }
 
 private:
     void createRenderPass();

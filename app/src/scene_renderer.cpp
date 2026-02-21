@@ -17,11 +17,13 @@
 #include <vex/vulkan/vk_mesh.h>
 #include <vex/vulkan/vk_context.h>
 #include <vex/vulkan/vk_shader.h>
+#include <vex/vulkan/vk_framebuffer.h>
 #endif
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <algorithm>
 #include <cstdio>
 #include <limits>
 #include <unordered_map>
@@ -124,6 +126,8 @@ bool SceneRenderer::init([[maybe_unused]] Scene& scene)
 #endif
 
 #ifdef VEX_BACKEND_VULKAN
+    m_rasterHDRFB = vex::Framebuffer::create({ .width = 1280, .height = 720, .hasDepth = true });
+
     m_vkRaytracer = std::make_unique<vex::VKGpuRaytracer>();
     if (!m_vkRaytracer->init())
     {
@@ -150,7 +154,6 @@ void SceneRenderer::shutdown()
 {
 #ifdef VEX_BACKEND_OPENGL
     if (m_rasterEnvMapTex) { glDeleteTextures(1, &m_rasterEnvMapTex); m_rasterEnvMapTex = 0; }
-    m_rasterHDRFB.reset();
     if (m_gpuRaytracer)
         m_gpuRaytracer->shutdown();
     m_gpuRaytracer.reset();
@@ -158,11 +161,13 @@ void SceneRenderer::shutdown()
 #endif
 
 #ifdef VEX_BACKEND_VULKAN
+    m_vkRasterEnvTex.reset();
     m_vkFullscreenRTShader.reset();
     if (m_vkRaytracer)
         m_vkRaytracer->shutdown();
     m_vkRaytracer.reset();
 #endif
+    m_rasterHDRFB.reset();
     m_cpuRaytracer.reset();
     m_raytraceTexture.reset();
     m_fullscreenQuad.reset();
@@ -437,50 +442,14 @@ bool  SceneRenderer::getRasterEnableEnvLighting() const    { return m_rasterEnab
 void  SceneRenderer::setRasterEnvLightMultiplier(float v)  { m_rasterEnvLightMultiplier = v; }
 float SceneRenderer::getRasterEnvLightMultiplier() const   { return m_rasterEnvLightMultiplier; }
 
-void  SceneRenderer::setRasterExposure([[maybe_unused]] float v)
-{
-#ifdef VEX_BACKEND_OPENGL
-    m_rasterExposure = v;
-#endif
-}
-float SceneRenderer::getRasterExposure() const
-{
-#ifdef VEX_BACKEND_OPENGL
-    return m_rasterExposure;
-#else
-    return 0.0f;
-#endif
-}
+void  SceneRenderer::setRasterExposure(float v)   { m_rasterExposure = v; }
+float SceneRenderer::getRasterExposure() const     { return m_rasterExposure; }
 
-void  SceneRenderer::setRasterGamma([[maybe_unused]] float v)
-{
-#ifdef VEX_BACKEND_OPENGL
-    m_rasterGamma = v;
-#endif
-}
-float SceneRenderer::getRasterGamma() const
-{
-#ifdef VEX_BACKEND_OPENGL
-    return m_rasterGamma;
-#else
-    return 2.2f;
-#endif
-}
+void  SceneRenderer::setRasterGamma(float v)       { m_rasterGamma = v; }
+float SceneRenderer::getRasterGamma() const        { return m_rasterGamma; }
 
-void  SceneRenderer::setRasterEnableACES([[maybe_unused]] bool v)
-{
-#ifdef VEX_BACKEND_OPENGL
-    m_rasterEnableACES = v;
-#endif
-}
-bool  SceneRenderer::getRasterEnableACES() const
-{
-#ifdef VEX_BACKEND_OPENGL
-    return m_rasterEnableACES;
-#else
-    return true;
-#endif
-}
+void  SceneRenderer::setRasterEnableACES(bool v)   { m_rasterEnableACES = v; }
+bool  SceneRenderer::getRasterEnableACES() const   { return m_rasterEnableACES; }
 
 void SceneRenderer::setGPUFlatShading([[maybe_unused]] bool v)
 {
@@ -1141,20 +1110,27 @@ void SceneRenderer::renderScene(Scene& scene, int selectedGroup, int selectedSub
 
 void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unused]] int selectedSubmesh)
 {
-#ifdef VEX_BACKEND_OPENGL
     // Keep the intermediate HDR framebuffer in sync with the output framebuffer size
+    bool hdrFBResized = false;
     {
         const auto& outSpec = m_framebuffer->getSpec();
         const auto& hdrSpec = m_rasterHDRFB->getSpec();
         if (hdrSpec.width != outSpec.width || hdrSpec.height != outSpec.height)
+        {
             m_rasterHDRFB->resize(outSpec.width, outSpec.height);
+            hdrFBResized = true;
+        }
     }
     vex::Framebuffer* renderFB = m_rasterHDRFB.get();
-#else
-    vex::Framebuffer* renderFB = m_framebuffer.get();
-#endif
 
     renderFB->bind();
+
+#ifdef VEX_BACKEND_VULKAN
+    // If the HDR framebuffer was recreated this frame, the cached sampler descriptor
+    // in the fullscreen shader is stale — clear it so it gets rebuilt on the next draw.
+    if (hdrFBResized && m_vkFullscreenRTShader)
+        static_cast<vex::VKShader*>(m_vkFullscreenRTShader.get())->clearExternalTextureCache();
+#endif
 
     bool useSolidColor = (scene.currentEnvmap == Scene::SolidColor);
 
@@ -1215,6 +1191,19 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
         m_meshShader->setVec3("u_envColor", envCol);
         m_meshShader->setFloat("u_envLightMultiplier", m_rasterEnvLightMultiplier);
 
+    }
+#endif
+
+#ifdef VEX_BACKEND_VULKAN
+    {
+        bool hasEnvMap = (m_vkRasterEnvTex != nullptr);
+        glm::vec3 envCol = useSolidColor ? scene.skyboxColor : m_rasterEnvColor;
+        m_meshShader->setVec3("u_envColor", envCol);
+        m_meshShader->setFloat("u_envLightMultiplier", m_rasterEnvLightMultiplier);
+        m_meshShader->setBool("u_enableEnvLighting", m_rasterEnableEnvLighting);
+        m_meshShader->setBool("u_hasEnvMap", hasEnvMap && m_rasterEnableEnvLighting);
+        // Bind env map at slot 5 (→ descriptor set 6)
+        m_meshShader->setTexture(5, hasEnvMap ? m_vkRasterEnvTex.get() : m_whiteTexture.get());
     }
 #endif
 
@@ -1354,6 +1343,35 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
         m_framebuffer->unbind();
     }
 #endif
+
+#ifdef VEX_BACKEND_VULKAN
+    // --- Tone-map blit: HDR intermediate buffer → output framebuffer ---
+    if (m_vkFullscreenRTShader)
+    {
+        auto* vkHDRFB    = static_cast<vex::VKFramebuffer*>(m_rasterHDRFB.get());
+        auto* rtShaderVK = static_cast<vex::VKShader*>(m_vkFullscreenRTShader.get());
+
+        m_framebuffer->bind();
+        m_framebuffer->clear(0.0f, 0.0f, 0.0f, 1.0f);
+
+        m_vkFullscreenRTShader->setFloat("u_sampleCount", 1.0f);
+        m_vkFullscreenRTShader->setFloat("u_exposure",    m_rasterExposure);
+        m_vkFullscreenRTShader->setFloat("u_gamma",       m_rasterGamma);
+        m_vkFullscreenRTShader->bind();
+        m_vkFullscreenRTShader->setBool("u_enableACES", m_rasterEnableACES);
+        m_vkFullscreenRTShader->setBool("u_flipV",      true);
+
+        rtShaderVK->setExternalTextureVK(0,
+            vkHDRFB->getColorImageView(),
+            vkHDRFB->getColorSampler(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+        m_fullscreenQuad->draw();
+        m_vkFullscreenRTShader->unbind();
+
+        m_framebuffer->unbind();
+    }
+#endif
 }
 
 void SceneRenderer::renderCPURaytrace(Scene& scene)
@@ -1419,6 +1437,14 @@ void SceneRenderer::renderCPURaytrace(Scene& scene)
             {
                 m_cpuRaytracer->setEnvironmentMap(envData, ew, eh);
 
+                // Compute average env color for ambient diffuse (used by both backends)
+                {
+                    float rSum = 0, gSum = 0, bSum = 0;
+                    int n = ew * eh;
+                    for (int i = 0; i < n; ++i) { rSum += envData[3*i]; gSum += envData[3*i+1]; bSum += envData[3*i+2]; }
+                    m_rasterEnvColor = glm::clamp(glm::vec3(rSum, gSum, bSum) / float(n), 0.0f, 1.0f);
+                }
+
 #ifdef VEX_BACKEND_OPENGL
                 // Create rasterizer GL env texture from the float data
                 if (m_rasterEnvMapTex) glDeleteTextures(1, &m_rasterEnvMapTex);
@@ -1430,11 +1456,28 @@ void SceneRenderer::renderCPURaytrace(Scene& scene)
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
                 glBindTexture(GL_TEXTURE_2D, 0);
-                // Compute average env color for ambient diffuse
-                float rSum = 0, gSum = 0, bSum = 0;
-                int n = ew * eh;
-                for (int i = 0; i < n; ++i) { rSum += envData[3*i]; gSum += envData[3*i+1]; bSum += envData[3*i+2]; }
-                m_rasterEnvColor = glm::clamp(glm::vec3(rSum, gSum, bSum) / float(n), 0.0f, 1.0f);
+#endif
+
+#ifdef VEX_BACKEND_VULKAN
+                // Convert float RGB → RGBA8 (Reinhard tonemap) for Vulkan rasterizer env texture
+                {
+                    int npix = ew * eh;
+                    std::vector<uint8_t> rgba8(npix * 4);
+                    for (int i = 0; i < npix; ++i)
+                    {
+                        float r = envData[3*i+0]; r = r / (1.0f + r);
+                        float g = envData[3*i+1]; g = g / (1.0f + g);
+                        float b = envData[3*i+2]; b = b / (1.0f + b);
+                        rgba8[4*i+0] = static_cast<uint8_t>(std::min(r, 1.0f) * 255.0f);
+                        rgba8[4*i+1] = static_cast<uint8_t>(std::min(g, 1.0f) * 255.0f);
+                        rgba8[4*i+2] = static_cast<uint8_t>(std::min(b, 1.0f) * 255.0f);
+                        rgba8[4*i+3] = 255;
+                    }
+                    m_vkRasterEnvTex = vex::Texture2D::create(static_cast<uint32_t>(ew),
+                                                               static_cast<uint32_t>(eh), 4);
+                    m_vkRasterEnvTex->setData(rgba8.data(), static_cast<uint32_t>(ew),
+                                              static_cast<uint32_t>(eh), 4);
+                }
 #endif
 
                 stbi_image_free(envData);
@@ -1445,8 +1488,11 @@ void SceneRenderer::renderCPURaytrace(Scene& scene)
             m_cpuRaytracer->clearEnvironmentMap();
 #ifdef VEX_BACKEND_OPENGL
             if (m_rasterEnvMapTex) { glDeleteTextures(1, &m_rasterEnvMapTex); m_rasterEnvMapTex = 0; }
-            m_rasterEnvColor = scene.skyboxColor;
 #endif
+#ifdef VEX_BACKEND_VULKAN
+            m_vkRasterEnvTex.reset();
+#endif
+            m_rasterEnvColor = scene.skyboxColor;
         }
     }
 
@@ -1454,9 +1500,7 @@ void SceneRenderer::renderCPURaytrace(Scene& scene)
     {
         m_prevSkyboxColor = scene.skyboxColor;
         m_cpuRaytracer->setEnvironmentColor(scene.skyboxColor);
-#ifdef VEX_BACKEND_OPENGL
         m_rasterEnvColor = scene.skyboxColor;
-#endif
         envChanged = true;
     }
 

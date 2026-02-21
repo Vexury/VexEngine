@@ -97,6 +97,10 @@ void VKShader::buildUniformMap()
     m_uniformOffsets["u_lightColor"]    = offsetof(MeshUBO, lightColor);
     m_uniformOffsets["u_sunDirection"]  = offsetof(MeshUBO, sunDirection);
     m_uniformOffsets["u_sunColor"]      = offsetof(MeshUBO, sunColor);
+    m_uniformOffsets["u_envColor"]           = offsetof(MeshUBO, envColor);
+    m_uniformOffsets["u_enableEnvLighting"]  = offsetof(MeshUBO, enableEnvLighting);
+    m_uniformOffsets["u_envLightMultiplier"] = offsetof(MeshUBO, envLightMultiplier);
+    m_uniformOffsets["u_hasEnvMap"]          = offsetof(MeshUBO, hasEnvMap);
 }
 
 bool VKShader::loadFromFiles(const std::string& vertexPath, const std::string& fragmentPath)
@@ -147,11 +151,13 @@ bool VKShader::loadFromFiles(const std::string& vertexPath, const std::string& f
         return false;
     }
 
-    // Pipeline layout with 6 set layouts + push constant
-    // Set 0: UBO, Set 1: diffuse, Set 2: normal, Set 3: roughness, Set 4: metallic, Set 5: emissive
+    // Pipeline layout with 7 set layouts + push constant
+    // Set 0: UBO, Set 1: diffuse, Set 2: normal, Set 3: roughness, Set 4: metallic,
+    // Set 5: emissive, Set 6: env map
     VkDescriptorSetLayout setLayouts[] = {
         m_descriptorSetLayout, m_textureSetLayout, m_textureSetLayout,
-        m_textureSetLayout, m_textureSetLayout, m_textureSetLayout
+        m_textureSetLayout, m_textureSetLayout, m_textureSetLayout,
+        m_textureSetLayout
     };
 
     VkPushConstantRange pushRange{};
@@ -161,7 +167,7 @@ bool VKShader::loadFromFiles(const std::string& vertexPath, const std::string& f
 
     VkPipelineLayoutCreateInfo plInfo{};
     plInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    plInfo.setLayoutCount = 6;
+    plInfo.setLayoutCount = 7;
     plInfo.pSetLayouts = setLayouts;
     plInfo.pushConstantRangeCount = 1;
     plInfo.pPushConstantRanges = &pushRange;
@@ -494,6 +500,12 @@ void VKShader::setFloat(const std::string& name, float value)
         m_pushData.exposure = value;
     else if (name == "u_gamma")
         m_pushData.gamma = value;
+    else
+    {
+        auto it = m_uniformOffsets.find(name);
+        if (it != m_uniformOffsets.end())
+            std::memcpy(reinterpret_cast<char*>(&m_uboData) + it->second, &value, sizeof(float));
+    }
 }
 
 void VKShader::setBool(const std::string& name, bool value)
@@ -539,6 +551,22 @@ void VKShader::setBool(const std::string& name, bool value)
         auto cmd = VKContext::get().getCurrentCommandBuffer();
         vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(MeshPushConstant), &m_pushData);
+    }
+    else if (name == "u_hasEmissiveMap")
+    {
+        m_pushData.hasEmissiveMap = value ? 1u : 0u;
+        auto cmd = VKContext::get().getCurrentCommandBuffer();
+        vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(MeshPushConstant), &m_pushData);
+    }
+    else
+    {
+        auto it = m_uniformOffsets.find(name);
+        if (it != m_uniformOffsets.end())
+        {
+            uint32_t v = value ? 1u : 0u;
+            std::memcpy(reinterpret_cast<char*>(&m_uboData) + it->second, &v, sizeof(uint32_t));
+        }
     }
 }
 

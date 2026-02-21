@@ -31,6 +31,12 @@ struct MeshUBO
     float _pad3 = 0;
     glm::vec3 sunColor;
     float _pad4 = 0;
+    glm::vec3 envColor;
+    float     _pad5 = 0;
+    uint32_t  enableEnvLighting  = 0;
+    float     envLightMultiplier = 1.f;
+    uint32_t  hasEnvMap          = 0;
+    float     _pad6              = 0;
 };
 
 class VKShader : public Shader
@@ -117,7 +123,8 @@ private:
         float    exposure       = 0.0f; // offset 48
         float    gamma          = 2.2f; // offset 52
         uint32_t enableACES     = 1u;  // offset 56
-    };
+        uint32_t hasEmissiveMap = 0;   // offset 60
+    };                                 // total: 64 bytes
     MeshPushConstant m_pushData{};
 
     // Wireframe pipeline
