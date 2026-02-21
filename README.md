@@ -16,29 +16,32 @@ A C++ rendering engine with an interactive editor, supporting both real-time ras
 - Wireframe, depth, normal, UV, albedo, and material-ID debug views
 - Mouse picking and selection outline
 
-**CPU Path Tracer**
-- Unidirectional path tracing with BVH acceleration
-- Next-event estimation (direct light sampling)
-- Anti-aliasing via per-sample jitter
-- Firefly clamping
-- Full PBR material support (diffuse, mirror, dielectric)
+**Path Tracer**
+- Unidirectional path tracing with iterative bounces and Russian roulette termination
+- Next-event estimation (direct light sampling) with CDF-based emissive triangle selection
+- Environment map importance sampling (marginal + conditional CDF)
+- Cook-Torrance GGX BRDF with full PBR material support (diffuse, mirror, dielectric)
+- Depth-of-field (aperture and focus distance)
+- Anti-aliasing via per-sample jitter, firefly clamping
+- Progressive accumulation with automatic reset on camera, scene, or settings change
 
-**GPU Path Tracer**
-- Compute-shader path tracer (OpenGL)
-- Progressive accumulation
-- Matches CPU feature set
+Implemented three ways:
+- **CPU** — multithreaded, SAH BVH acceleration
+- **GPU (OpenGL)** — compute shader, same BVH uploaded to GPU
+- **GPU (Vulkan)** — hardware ray tracing (`VK_KHR_ray_tracing_pipeline`), BLAS/TLAS acceleration structures, alpha-clipped geometry via any-hit shader
 
 **Editor**
 - ImGui-based UI: scene hierarchy, material editor, light controls, environment maps
 - Live switching between all three render modes
 - Save rendered image to PNG
+- Timestamped log output for performance tracking
 
 ## Requirements
 
 - CMake 3.16+
 - Visual Studio 2022 (Windows)
 - OpenGL 4.3+ capable GPU (primary backend)
-- Vulkan SDK (optional, for the Vulkan backend)
+- Vulkan 1.2+ GPU with ray tracing support (for the Vulkan backend)
 
 ## Building
 
