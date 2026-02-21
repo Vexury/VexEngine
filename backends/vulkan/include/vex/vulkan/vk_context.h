@@ -16,10 +16,9 @@ static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
 struct FrameData
 {
-    VkCommandPool   commandPool   = VK_NULL_HANDLE;
-    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
-    VkSemaphore     imageAvailable = VK_NULL_HANDLE;
-    VkSemaphore     renderFinished = VK_NULL_HANDLE;
+    VkCommandPool   commandPool    = VK_NULL_HANDLE;
+    VkCommandBuffer commandBuffer  = VK_NULL_HANDLE;
+    VkSemaphore     imageAvailable = VK_NULL_HANDLE; // signaled when swapchain image is ready to render into
     VkFence         inFlightFence  = VK_NULL_HANDLE;
 };
 
@@ -61,6 +60,9 @@ public:
     // Submit a one-shot command buffer (for uploads)
     void immediateSubmit(std::function<void(VkCommandBuffer cmd)>&& function);
 
+    // RT pipeline properties (shaderGroupHandleSize, alignment, maxRecursionDepth, etc.)
+    const VkPhysicalDeviceRayTracingPipelinePropertiesKHR& getRTProperties() const { return m_rtProperties; }
+
     // Singleton access for Vulkan resource classes
     static VKContext& get();
 
@@ -70,6 +72,8 @@ private:
     void recreateSwapchain();
     void createFrameData();
     void destroyFrameData();
+    void createRenderFinishedSemaphores();
+    void destroyRenderFinishedSemaphores();
 
     Window* m_window = nullptr;
 
@@ -103,6 +107,9 @@ private:
     uint32_t  m_currentFrame = 0;
     uint32_t  m_swapchainImageIndex = 0;
 
+    // One semaphore per swapchain image — reused only when that image is re-acquired
+    std::vector<VkSemaphore> m_renderFinishedSemaphores;
+
     // Immediate submit resources
     VkCommandPool   m_uploadPool   = VK_NULL_HANDLE;
     VkCommandBuffer m_uploadBuffer = VK_NULL_HANDLE;
@@ -110,6 +117,9 @@ private:
 
     // ImGui
     VkDescriptorPool m_imguiPool = VK_NULL_HANDLE;
+
+    // RT pipeline properties — queried once after device creation, used for SBT layout
+    VkPhysicalDeviceRayTracingPipelinePropertiesKHR m_rtProperties{};
 
     static VKContext* s_instance;
 };

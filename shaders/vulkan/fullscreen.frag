@@ -15,9 +15,14 @@ layout(set = 0, binding = 0) uniform UBO {
 
 layout(set = 1, binding = 0) uniform sampler2D u_diffuseMap;
 
+layout(push_constant) uniform PC {
+    layout(offset = 40) uint flipV;
+} pc;
+
 layout(location = 0) out vec4 FragColor;
 
 void main()
 {
-    FragColor = texture(u_diffuseMap, vUV);
+    vec2 uv = pc.flipV != 0u ? vec2(vUV.x, 1.0 - vUV.y) : vUV;
+    FragColor = texture(u_diffuseMap, uv);
 }

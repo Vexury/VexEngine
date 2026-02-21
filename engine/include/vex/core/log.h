@@ -13,7 +13,8 @@ enum class Level { Info, Warn, Error };
 
 struct LogEntry
 {
-    Level level;
+    Level  level;
+    double timestamp; // seconds since program start
     std::string message;
 };
 

@@ -5,6 +5,7 @@
 #include <imgui_impl_vulkan.h>
 
 #include <array>
+#include <cstring>
 
 namespace vex
 {
@@ -131,7 +132,7 @@ void VKFramebuffer::createImages()
         imgInfo.arrayLayers = 1;
         imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        imgInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        imgInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         VmaAllocationCreateInfo allocInfo{};
@@ -320,6 +321,92 @@ uintptr_t VKFramebuffer::getColorAttachmentHandle() const
             m_colorSampler, m_colorImageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
     return reinterpret_cast<uintptr_t>(m_imguiDescriptor);
+}
+
+std::vector<uint8_t> VKFramebuffer::readPixels() const
+{
+    if (!m_colorImage)
+        return {};
+
+    auto& ctx      = VKContext::get();
+    auto  device   = ctx.getDevice();
+    auto  allocator = ctx.getAllocator();
+
+    uint32_t w = m_spec.width;
+    uint32_t h = m_spec.height;
+    VkDeviceSize bufSize = static_cast<VkDeviceSize>(w) * h * 4;
+
+    // Staging buffer (CPU-readable)
+    VkBuffer      stagingBuf;
+    VmaAllocation stagingAlloc;
+    {
+        VkBufferCreateInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bi.size  = bufSize;
+        bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        VmaAllocationCreateInfo ai{};
+        ai.usage = VMA_MEMORY_USAGE_CPU_ONLY;
+        vmaCreateBuffer(allocator, &bi, &ai, &stagingBuf, &stagingAlloc, nullptr);
+    }
+
+    // Wait for any in-flight GPU work using this image to complete
+    vkDeviceWaitIdle(device);
+
+    ctx.immediateSubmit([&](VkCommandBuffer cmd)
+    {
+        // Transition: SHADER_READ_ONLY_OPTIMAL -> TRANSFER_SRC_OPTIMAL
+        VkImageMemoryBarrier toSrc{};
+        toSrc.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        toSrc.srcAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+        toSrc.dstAccessMask       = VK_ACCESS_TRANSFER_READ_BIT;
+        toSrc.oldLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        toSrc.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        toSrc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toSrc.image               = m_colorImage;
+        toSrc.subresourceRange    = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &toSrc);
+
+        // Copy image -> buffer
+        VkBufferImageCopy region{};
+        region.bufferOffset      = 0;
+        region.bufferRowLength   = 0;
+        region.bufferImageHeight = 0;
+        region.imageSubresource  = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        region.imageOffset       = { 0, 0, 0 };
+        region.imageExtent       = { w, h, 1 };
+        vkCmdCopyImageToBuffer(cmd, m_colorImage,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, stagingBuf, 1, &region);
+
+        // Transition back: TRANSFER_SRC_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL
+        VkImageMemoryBarrier toShader{};
+        toShader.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        toShader.srcAccessMask       = VK_ACCESS_TRANSFER_READ_BIT;
+        toShader.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+        toShader.oldLayout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        toShader.newLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        toShader.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toShader.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toShader.image               = m_colorImage;
+        toShader.subresourceRange    = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &toShader);
+    });
+
+    // Map and copy to output vector
+    std::vector<uint8_t> pixels(static_cast<size_t>(bufSize));
+    void* mapped;
+    vmaMapMemory(allocator, stagingAlloc, &mapped);
+    std::memcpy(pixels.data(), mapped, static_cast<size_t>(bufSize));
+    vmaUnmapMemory(allocator, stagingAlloc);
+
+    vmaDestroyBuffer(allocator, stagingBuf, stagingAlloc);
+    return pixels;
 }
 
 } // namespace vex

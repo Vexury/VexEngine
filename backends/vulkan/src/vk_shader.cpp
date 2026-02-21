@@ -37,6 +37,8 @@ VKShader::~VKShader()
         vkDestroyPipeline(device, m_pipeline, nullptr);
     if (m_pipelineLayout)
         vkDestroyPipelineLayout(device, m_pipelineLayout, nullptr);
+    if (m_externalTexturePool)
+        vkDestroyDescriptorPool(device, m_externalTexturePool, nullptr);
     if (m_textureDescriptorPool)
         vkDestroyDescriptorPool(device, m_textureDescriptorPool, nullptr);
     if (m_descriptorPool)
@@ -145,11 +147,11 @@ bool VKShader::loadFromFiles(const std::string& vertexPath, const std::string& f
         return false;
     }
 
-    // Pipeline layout with 5 set layouts + push constant
-    // Set 0: UBO, Set 1: diffuse, Set 2: normal, Set 3: roughness, Set 4: metallic
+    // Pipeline layout with 6 set layouts + push constant
+    // Set 0: UBO, Set 1: diffuse, Set 2: normal, Set 3: roughness, Set 4: metallic, Set 5: emissive
     VkDescriptorSetLayout setLayouts[] = {
         m_descriptorSetLayout, m_textureSetLayout, m_textureSetLayout,
-        m_textureSetLayout, m_textureSetLayout
+        m_textureSetLayout, m_textureSetLayout, m_textureSetLayout
     };
 
     VkPushConstantRange pushRange{};
@@ -159,7 +161,7 @@ bool VKShader::loadFromFiles(const std::string& vertexPath, const std::string& f
 
     VkPipelineLayoutCreateInfo plInfo{};
     plInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    plInfo.setLayoutCount = 5;
+    plInfo.setLayoutCount = 6;
     plInfo.pSetLayouts = setLayouts;
     plInfo.pushConstantRangeCount = 1;
     plInfo.pPushConstantRanges = &pushRange;
@@ -201,6 +203,24 @@ bool VKShader::loadFromFiles(const std::string& vertexPath, const std::string& f
     if (vkCreateDescriptorPool(device, &texDpInfo, nullptr, &m_textureDescriptorPool) != VK_SUCCESS)
     {
         Log::error("Failed to create texture descriptor pool");
+        return false;
+    }
+
+    // Small pool for external image views (e.g. RT output). Kept separate so it
+    // can be reset on resize without disturbing material texture descriptor sets.
+    VkDescriptorPoolSize extPoolSize{};
+    extPoolSize.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    extPoolSize.descriptorCount = 4;
+
+    VkDescriptorPoolCreateInfo extDpInfo{};
+    extDpInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    extDpInfo.maxSets      = 4;
+    extDpInfo.poolSizeCount = 1;
+    extDpInfo.pPoolSizes   = &extPoolSize;
+
+    if (vkCreateDescriptorPool(device, &extDpInfo, nullptr, &m_externalTexturePool) != VK_SUCCESS)
+    {
+        Log::error("Failed to create external texture descriptor pool");
         return false;
     }
 
@@ -468,6 +488,12 @@ void VKShader::setFloat(const std::string& name, float value)
         m_pushData.roughness = value;
     else if (name == "u_metallic")
         m_pushData.metallic = value;
+    else if (name == "u_sampleCount")
+        m_pushData.sampleCount = value;
+    else if (name == "u_exposure")
+        m_pushData.exposure = value;
+    else if (name == "u_gamma")
+        m_pushData.gamma = value;
 }
 
 void VKShader::setBool(const std::string& name, bool value)
@@ -496,6 +522,20 @@ void VKShader::setBool(const std::string& name, bool value)
     else if (name == "u_hasMetallicMap")
     {
         m_pushData.hasMetallicMap = value ? 1u : 0u;
+        auto cmd = VKContext::get().getCurrentCommandBuffer();
+        vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(MeshPushConstant), &m_pushData);
+    }
+    else if (name == "u_flipV")
+    {
+        m_pushData.flipV = value ? 1u : 0u;
+        auto cmd = VKContext::get().getCurrentCommandBuffer();
+        vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(MeshPushConstant), &m_pushData);
+    }
+    else if (name == "u_enableACES")
+    {
+        m_pushData.enableACES = value ? 1u : 0u;
         auto cmd = VKContext::get().getCurrentCommandBuffer();
         vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(MeshPushConstant), &m_pushData);
@@ -579,6 +619,62 @@ void VKShader::setTexture(uint32_t slot, Texture2D* tex)
     }
 
     // Bind to set = 1 + slot (set 1 = diffuse, set 2 = normal map)
+    uint32_t setIndex = 1 + slot;
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
+                            setIndex, 1, &texSet, 0, nullptr);
+}
+
+void VKShader::clearExternalTextureCache()
+{
+    m_externalTextureDescSets.clear();
+    if (m_externalTexturePool)
+        vkResetDescriptorPool(VKContext::get().getDevice(), m_externalTexturePool, 0);
+}
+
+void VKShader::setExternalTextureVK(uint32_t slot, VkImageView view, VkSampler sampler, VkImageLayout layout)
+{
+    auto& ctx = VKContext::get();
+    auto device = ctx.getDevice();
+    auto cmd = ctx.getCurrentCommandBuffer();
+
+    auto it = m_externalTextureDescSets.find(view);
+    VkDescriptorSet texSet;
+
+    if (it != m_externalTextureDescSets.end())
+    {
+        texSet = it->second;
+    }
+    else
+    {
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = m_externalTexturePool;
+        allocInfo.descriptorSetCount = 1;
+        allocInfo.pSetLayouts = &m_textureSetLayout;
+
+        if (vkAllocateDescriptorSets(device, &allocInfo, &texSet) != VK_SUCCESS)
+        {
+            Log::error("Failed to allocate external texture descriptor set");
+            return;
+        }
+
+        VkDescriptorImageInfo imageInfo{};
+        imageInfo.sampler     = sampler;
+        imageInfo.imageView   = view;
+        imageInfo.imageLayout = layout;
+
+        VkWriteDescriptorSet write{};
+        write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet          = texSet;
+        write.dstBinding      = 0;
+        write.descriptorCount = 1;
+        write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo      = &imageInfo;
+
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+        m_externalTextureDescSets[view] = texSet;
+    }
+
     uint32_t setIndex = 1 + slot;
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
                             setIndex, 1, &texSet, 0, nullptr);

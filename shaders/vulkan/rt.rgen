@@ -1,0 +1,417 @@
+#version 460
+#include "rt.common.glsl"
+
+layout(location = 0) rayPayloadEXT HitPayload g_payload;
+layout(location = 1) rayPayloadEXT uint       g_shadowed;
+
+// ── Shadow ray ──────────────────────────────────────────────────────────────
+// g_shadowed is pre-set to 1 (occluded). shadow.rmiss clears it on miss.
+// gl_RayFlagsOpaqueEXT prevents rahit (alpha-clip) from firing on shadow hits;
+// alpha-transparent surfaces will cast shadows (acceptable simplification).
+bool traceShadowRay(vec3 origin, vec3 dir, float maxDist) {
+    g_shadowed = 1u;
+    traceRayEXT(u_tlas,
+        gl_RayFlagsTerminateOnFirstHitEXT |
+        gl_RayFlagsSkipClosestHitShaderEXT |
+        gl_RayFlagsOpaqueEXT,
+        0xFF,   // cull mask
+        0,      // sbtRecordOffset
+        0,      // sbtRecordStride
+        1,      // missIndex -> shadow.rmiss
+        origin, 0.0, dir, maxDist,
+        1);     // payload location 1
+    return g_shadowed != 0u;
+}
+
+// ── Ray generation ──────────────────────────────────────────────────────────
+void generateRay(int x, int y, float jx, float jy,
+                 out vec3 origin, out vec3 direction) {
+    float ndcX = (2.0 * (float(x) + jx) / float(u_uniforms.width))  - 1.0;
+    float ndcY = 1.0 - (2.0 * (float(y) + jy) / float(u_uniforms.height));
+
+    vec4 nearClip = u_uniforms.inverseVP * vec4(ndcX, ndcY, -1.0, 1.0);
+    vec4 farClip  = u_uniforms.inverseVP * vec4(ndcX, ndcY,  1.0, 1.0);
+
+    vec3 nearWorld = nearClip.xyz / nearClip.w;
+    vec3 farWorld  = farClip.xyz  / farClip.w;
+
+    origin    = u_uniforms.cameraOrigin;
+    direction = normalize(farWorld - nearWorld);
+
+    if (u_uniforms.aperture > 0.0) {
+        vec3 focalPoint = origin + direction * u_uniforms.focusDistance;
+        vec2 disk = sampleConcentricDisk(rngNext(), rngNext()) * u_uniforms.aperture;
+        origin    += disk.x * u_uniforms.cameraRight + disk.y * u_uniforms.cameraUp;
+        direction  = normalize(focalPoint - origin);
+    }
+}
+
+// ── Path tracing ────────────────────────────────────────────────────────────
+vec3 pathTrace(vec3 rayOrigin, vec3 rayDirection) {
+    vec3  radiance    = vec3(0.0);
+    vec3  throughput  = vec3(1.0);
+    float prevBsdfPdf = 0.0;
+    bool  prevWasDelta = false;
+    bool  hasLights   = (l_lightCount > 0u);
+
+    vec3 origin    = rayOrigin;
+    vec3 direction = rayDirection;
+
+    for (int depth = 0; depth < u_uniforms.maxDepth; ++depth) {
+        // ── Russian Roulette ───────────────────────────────────────────────
+        if (u_uniforms.enableRR != 0u && depth >= 2) {
+            float p = min(0.2126*throughput.r + 0.7152*throughput.g + 0.0722*throughput.b, 0.95);
+            if (rngNext() > p) break;
+            throughput /= p;
+        }
+
+        // ── Trace ray ─────────────────────────────────────────────────────
+        g_payload.hit = 0u;
+        traceRayEXT(u_tlas, gl_RayFlagsNoneEXT, 0xFF, 0, 0, 0,
+                    origin, u_uniforms.rayEps, direction, FLT_MAX, 0);
+
+        // ── Miss ──────────────────────────────────────────────────────────
+        if (g_payload.hit == 0u) {
+            // Sun disk
+            if (u_uniforms.sunEnabled != 0u) {
+                float sunCosAngle  = cos(u_uniforms.sunAngularRadius);
+                if (dot(direction, -u_uniforms.sunDir) > sunCosAngle) {
+                    float sunSolidAngle = 2.0 * PI * (1.0 - sunCosAngle);
+                    float sunRadiance   = 1.0 / sunSolidAngle;
+                    float lightPdf      = sunRadiance;
+
+                    if (depth == 0 || u_uniforms.enableNEE == 0u || prevWasDelta) {
+                        radiance += throughput * u_uniforms.sunColor * sunRadiance;
+                    } else {
+                        float weight = prevBsdfPdf / (prevBsdfPdf + lightPdf);
+                        radiance += throughput * u_uniforms.sunColor * sunRadiance * weight;
+                    }
+                }
+            }
+
+            // Environment
+            {
+                vec3 envContrib = sampleEnvironment(direction);
+                if (depth == 0) {
+                    radiance += throughput * envContrib;
+                } else if (u_uniforms.enableEnvLighting != 0u) {
+                    vec3 scaledEnv = envContrib * u_uniforms.envLightMultiplier;
+                    if (u_uniforms.enableNEE != 0u && !prevWasDelta && u_uniforms.hasEnvCDF != 0u) {
+                        float ePdf = envMapPdf(direction);
+                        if (ePdf > 1e-8)
+                            scaledEnv *= prevBsdfPdf / (prevBsdfPdf + ePdf);
+                    }
+                    radiance += throughput * scaledEnv;
+                }
+            }
+            break;
+        }
+
+        // ── Hit — unpack payload ──────────────────────────────────────────
+        vec3  hitPos      = g_payload.position;
+        float hitT        = g_payload.t;
+        vec3  shadingN    = g_payload.normal;
+        vec3  geoN        = g_payload.geometricNormal;
+        vec3  hitColor    = g_payload.color;
+        vec3  hitEmissive = g_payload.emissive;
+        vec2  hitUV       = g_payload.uv;
+        uint  triIdx      = g_payload.triangleIndex;
+        int   matType     = g_payload.materialType;
+        float ior         = g_payload.ior;
+        float roughness   = g_payload.roughness;
+        float metallic    = g_payload.metallic;
+        vec3  tangent     = g_payload.tangent;
+        float btSign      = g_payload.bitangentSign;
+        int   texIdx      = g_payload.textureIndex;
+        int   emissTexIdx = g_payload.emissiveTextureIndex;
+        int   normTexIdx  = g_payload.normalMapTextureIndex;
+        int   roughTexIdx = g_payload.roughnessTextureIndex;
+        int   metalTexIdx = g_payload.metallicTextureIndex;
+
+        // ── Front / back face ─────────────────────────────────────────────
+        bool frontFace = dot(geoN, -direction) > 0.0;
+
+        // Opaque back-face hit (inverted-normal mesh): skip, advance past surface
+        if (!frontFace && matType != 2) {
+            origin = hitPos + direction * u_uniforms.rayEps;
+            continue;
+        }
+
+        vec3 offsetNormal = frontFace ? geoN : -geoN;
+
+        // Align shading normal with geometric normal
+        if (dot(shadingN, offsetNormal) < 0.0)
+            shadingN = -shadingN;
+
+        // ── Emission ──────────────────────────────────────────────────────
+        vec3 emission = vec3(0.0);
+        if (u_uniforms.enableEmissive != 0u) {
+            emission = hitEmissive;
+            if (emissTexIdx >= 0)
+                emission = sampleTexture(emissTexIdx, hitUV).rgb;
+        }
+
+        if (length(emission) > 0.001) {
+            float cosLight = dot(geoN, -direction);
+            bool isTexturedEmitter = (emissTexIdx >= 0);
+
+            if (depth == 0 || prevWasDelta || isTexturedEmitter) {
+                if (cosLight > 0.0)
+                    radiance += throughput * emission;
+            } else if (u_uniforms.enableNEE != 0u && hasLights && cosLight > 0.0) {
+                float pdfLight = (hitT * hitT) / (cosLight * u_uniforms.totalLightArea);
+                float weight   = prevBsdfPdf / (prevBsdfPdf + pdfLight);
+                radiance += throughput * emission * weight;
+            } else if (u_uniforms.enableNEE == 0u && cosLight > 0.0) {
+                radiance += throughput * emission;
+            }
+
+            if (!isTexturedEmitter) break;
+        }
+
+        // ── Albedo ────────────────────────────────────────────────────────
+        vec3 albedo = hitColor;
+        if (texIdx >= 0)
+            albedo *= sampleTexture(texIdx, hitUV).rgb;
+
+        // ── Normal map ────────────────────────────────────────────────────
+        if (u_uniforms.enableNormalMapping != 0u && normTexIdx >= 0) {
+            vec3 mapN = sampleTexture(normTexIdx, hitUV).rgb * 2.0 - 1.0;
+            mapN = normalize(mapN);
+            vec3 T = normalize(tangent - dot(tangent, shadingN) * shadingN);
+            vec3 B = cross(shadingN, T) * btSign;
+            shadingN = normalize(T * mapN.x + B * mapN.y + shadingN * mapN.z);
+            if (dot(shadingN, offsetNormal) < 0.0)
+                shadingN = -shadingN;
+        }
+
+        // ── Roughness / metallic textures ─────────────────────────────────
+        if (roughTexIdx >= 0) roughness = sampleTexture(roughTexIdx, hitUV).x;
+        if (metalTexIdx >= 0) metallic  = sampleTexture(metalTexIdx, hitUV).x;
+
+        // ── Material dispatch ─────────────────────────────────────────────
+        vec3 wo = -direction;
+
+        if (matType == 2) {
+            // ── Dielectric ────────────────────────────────────────────────
+            float etaI = frontFace ? 1.0 : ior;
+            float etaT = frontFace ? ior  : 1.0;
+            float eta  = etaI / etaT;
+            float cosI = max(dot(shadingN, wo), 0.0);
+
+            float dF0 = (etaI - etaT) / (etaI + etaT); dF0 = dF0 * dF0;
+            float F   = dF0 + (1.0 - dF0) * pow(1.0 - cosI, 5.0);
+            float sinTSq = eta * eta * (1.0 - cosI * cosI);
+            if (sinTSq > 1.0) F = 1.0;
+
+            vec3 newDir;
+            if (rngNext() < F) {
+                newDir = reflect(-wo, shadingN);
+            } else {
+                newDir = refract(-wo, shadingN, eta);
+                if (length(newDir) < 0.001)
+                    newDir = reflect(-wo, shadingN);
+                else
+                    throughput *= albedo;
+            }
+
+            prevBsdfPdf  = 1.0;
+            prevWasDelta = true;
+
+            origin    = dot(newDir, offsetNormal) > 0.0
+                      ? hitPos + offsetNormal * u_uniforms.rayEps
+                      : hitPos - offsetNormal * u_uniforms.rayEps;
+            direction = newDir;
+
+        } else if (matType == 1 || (metallic > 0.99 && roughness < 0.01)) {
+            // ── Mirror ────────────────────────────────────────────────────
+            vec3 newDir = reflect(-wo, shadingN);
+            throughput  *= albedo;
+            prevBsdfPdf  = 1.0;
+            prevWasDelta = true;
+            origin    = hitPos + offsetNormal * u_uniforms.rayEps;
+            direction = newDir;
+
+        } else {
+            // ── Cook-Torrance GGX ─────────────────────────────────────────
+            float roughClamped = max(roughness, 0.01);
+            float alpha       = roughClamped * roughClamped;
+            float specWeight  = 0.5 * (1.0 + metallic);
+
+            // NEE: emissive triangles
+            if (u_uniforms.enableNEE != 0u && u_uniforms.enableEmissive != 0u && hasLights) {
+                uint lightTriIdx;
+                vec3  lightPos   = sampleLightPoint(lightTriIdx);
+                vec3  toLight    = lightPos - hitPos;
+                float dist       = length(toLight);
+                vec3  lightDir   = toLight / dist;
+                float cosSurface = dot(shadingN, lightDir);
+                float cosLt      = dot(triGeoNormal(lightTriIdx), -lightDir);
+
+                if (cosSurface > 0.0 && cosLt > 0.0 && dot(offsetNormal, lightDir) > 0.0) {
+                    bool occ = traceShadowRay(hitPos + offsetNormal * u_uniforms.rayEps,
+                                              lightDir, dist - 2.0 * u_uniforms.rayEps);
+                    if (!occ) {
+                        float pdfLight  = (dist * dist) / (cosLt * u_uniforms.totalLightArea);
+                        float pdfBsdf   = ctPdf(shadingN, wo, lightDir, alpha, metallic);
+                        float misWeight = pdfLight / (pdfLight + pdfBsdf);
+                        vec3  brdfVal   = ctEvaluate(shadingN, wo, lightDir, albedo, alpha, metallic, ior);
+                        radiance += throughput * brdfVal * triEmissive(lightTriIdx)
+                                  * cosSurface / pdfLight * misWeight;
+                    }
+                }
+            }
+
+            // NEE: point light
+            if (u_uniforms.enableNEE != 0u && u_uniforms.pointLightEnabled != 0u) {
+                vec3  toLight    = u_uniforms.pointLightPos - hitPos;
+                float dist       = length(toLight);
+                vec3  lightDir   = toLight / dist;
+                float cosSurface = dot(shadingN, lightDir);
+
+                if (cosSurface > 0.0 && dot(offsetNormal, lightDir) > 0.0) {
+                    bool occ = traceShadowRay(hitPos + offsetNormal * u_uniforms.rayEps,
+                                              lightDir, dist - 2.0 * u_uniforms.rayEps);
+                    if (!occ) {
+                        vec3 brdfVal = ctEvaluate(shadingN, wo, lightDir, albedo, alpha, metallic, ior);
+                        radiance += throughput * brdfVal * u_uniforms.pointLightColor
+                                  * cosSurface / (dist * dist);
+                    }
+                }
+            }
+
+            // NEE: sun (directional)
+            if (u_uniforms.enableNEE != 0u && u_uniforms.sunEnabled != 0u) {
+                float sunCosAngle   = cos(u_uniforms.sunAngularRadius);
+                float sunSolidAngle = 2.0 * PI * (1.0 - sunCosAngle);
+                float su1 = rngNext(), su2 = rngNext();
+                float cosTheta = 1.0 - su1 * (1.0 - sunCosAngle);
+                float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+                float phi = 2.0 * PI * su2;
+                vec3 toSun = -u_uniforms.sunDir;
+                vec3 st, sb;
+                buildONB(toSun, st, sb);
+                vec3  lightDir   = normalize(st*(cos(phi)*sinTheta) + sb*(sin(phi)*sinTheta) + toSun*cosTheta);
+                float cosSurface = dot(shadingN, lightDir);
+
+                if (cosSurface > 0.0 && dot(offsetNormal, lightDir) > 0.0) {
+                    bool sunOcc = traceShadowRay(hitPos + offsetNormal * u_uniforms.rayEps,
+                                                 lightDir, FLT_MAX);
+                    if (!sunOcc) {
+                        float lightPdf  = 1.0 / sunSolidAngle;
+                        float bsdfPdf   = ctPdf(shadingN, wo, lightDir, alpha, metallic);
+                        float misWeight = lightPdf / (lightPdf + bsdfPdf);
+                        vec3  brdfVal   = ctEvaluate(shadingN, wo, lightDir, albedo, alpha, metallic, ior);
+                        radiance += throughput * brdfVal * u_uniforms.sunColor * cosSurface * misWeight;
+                    }
+                }
+            }
+
+            // NEE: environment map CDF
+            if (u_uniforms.enableNEE != 0u && u_uniforms.enableEnvLighting != 0u &&
+                u_uniforms.hasEnvCDF != 0u) {
+                vec3  envRad;
+                float envPdfVal;
+                vec3  envDir     = sampleEnvMapDirection(envRad, envPdfVal);
+                float cosSurface = dot(shadingN, envDir);
+
+                if (cosSurface > 0.0 && envPdfVal > 1e-8 && dot(offsetNormal, envDir) > 0.0) {
+                    bool envOcc = traceShadowRay(hitPos + offsetNormal * u_uniforms.rayEps,
+                                                 envDir, FLT_MAX);
+                    if (!envOcc) {
+                        float bsdfPdfVal = ctPdf(shadingN, wo, envDir, alpha, metallic);
+                        float misWeight  = envPdfVal / (envPdfVal + bsdfPdfVal);
+                        vec3  brdfVal    = ctEvaluate(shadingN, wo, envDir, albedo, alpha, metallic, ior);
+                        radiance += throughput * brdfVal * envRad
+                                  * u_uniforms.envLightMultiplier * cosSurface
+                                  / envPdfVal * misWeight;
+                    }
+                }
+            }
+
+            // ── BSDF sample for next bounce ──────────────────────────────
+            float bsdfU1 = rngNext(), bsdfU2 = rngNext(), uLobe = rngNext();
+
+            // ONB around shading normal (specular) and geometric normal (diffuse)
+            vec3 t, b;   buildONB(shadingN,    t,  b);
+            vec3 tg, bg; buildONB(offsetNormal, tg, bg);
+
+            vec3 newDir;
+            if (uLobe < specWeight) {
+                // VNDF importance sampling (Heitz 2018)
+                vec3 Vlocal = vec3(dot(wo, t), dot(wo, b), dot(wo, shadingN));
+                vec3 Hlocal = sampleVNDF(Vlocal, alpha, bsdfU1, bsdfU2);
+                vec3 H      = normalize(t * Hlocal.x + b * Hlocal.y + shadingN * Hlocal.z);
+                newDir = reflect(-wo, H);
+
+                // Grazing-angle fallback: VNDF can reflect below Ng — use diffuse sample
+                if (dot(newDir, offsetNormal) <= 0.0) {
+                    float fp2 = 2.0 * PI * bsdfU1;
+                    float ct2 = sqrt(1.0 - bsdfU2);
+                    float st2 = sqrt(bsdfU2);
+                    vec3 ld2  = vec3(cos(fp2)*st2, sin(fp2)*st2, ct2);
+                    newDir = tg*ld2.x + bg*ld2.y + offsetNormal*ld2.z;
+                }
+            } else {
+                // Cosine-weighted diffuse around geometric normal
+                float fp = 2.0 * PI * bsdfU1;
+                float ct = sqrt(1.0 - bsdfU2);
+                float st = sqrt(bsdfU2);
+                vec3 ld  = vec3(cos(fp)*st, sin(fp)*st, ct);
+                newDir = tg*ld.x + bg*ld.y + offsetNormal*ld.z;
+            }
+
+            float NdotL = dot(shadingN, newDir);
+            if (NdotL <= 0.0) break;
+            if (dot(newDir, offsetNormal) < 0.0) break;
+
+            vec3  brdf    = ctEvaluate(shadingN, wo, newDir, albedo, alpha, metallic, ior);
+            float bsdfPdf = ctPdf(shadingN, wo, newDir, alpha, metallic);
+            if (bsdfPdf < 1e-8) break;
+
+            throughput   *= brdf * NdotL / bsdfPdf;
+            prevBsdfPdf   = bsdfPdf;
+            prevWasDelta  = false;
+
+            origin    = hitPos + offsetNormal * u_uniforms.rayEps;
+            direction = newDir;
+        }
+    }
+
+    return radiance;
+}
+
+// ── Entry point ─────────────────────────────────────────────────────────────
+void main() {
+    ivec2 pixel = ivec2(gl_LaunchIDEXT.xy);
+    if (pixel.x >= int(u_uniforms.width) || pixel.y >= int(u_uniforms.height))
+        return;
+
+    // Seed RNG per-pixel, per-sample
+    g_rngState = rngHash(uint(pixel.x) + uint(pixel.y) * u_uniforms.width)
+               ^ rngHash(u_uniforms.sampleCount);
+
+    // Anti-aliasing jitter
+    float jx = u_uniforms.enableAA != 0u ? rngNext() : 0.5;
+    float jy = u_uniforms.enableAA != 0u ? rngNext() : 0.5;
+
+    // Generate and trace primary ray
+    vec3 origin, direction;
+    generateRay(pixel.x, pixel.y, jx, jy, origin, direction);
+
+    vec3 color = pathTrace(origin, direction);
+
+    // Firefly clamping
+    if (u_uniforms.enableFireflyClamping != 0u) {
+        float lum = 0.2126*color.r + 0.7152*color.g + 0.0722*color.b;
+        if (lum > 10.0) color *= 10.0 / lum;
+    }
+
+    // NaN / Inf guard
+    if (any(isnan(color)) || any(isinf(color)))
+        color = vec3(0.0);
+
+    // Accumulate: alpha channel tracks sample count
+    vec4 prev = imageLoad(u_image, pixel);
+    imageStore(u_image, pixel, prev + vec4(color, 1.0));
+}

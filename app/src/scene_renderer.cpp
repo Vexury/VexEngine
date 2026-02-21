@@ -13,6 +13,12 @@
 #include <glad/glad.h>
 #endif
 
+#ifdef VEX_BACKEND_VULKAN
+#include <vex/vulkan/vk_mesh.h>
+#include <vex/vulkan/vk_context.h>
+#include <vex/vulkan/vk_shader.h>
+#endif
+
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -117,6 +123,26 @@ bool SceneRenderer::init([[maybe_unused]] Scene& scene)
 
 #endif
 
+#ifdef VEX_BACKEND_VULKAN
+    m_vkRaytracer = std::make_unique<vex::VKGpuRaytracer>();
+    if (!m_vkRaytracer->init())
+    {
+        vex::Log::error("Failed to initialize Vulkan RT raytracer");
+        m_vkRaytracer.reset();
+    }
+
+    m_vkFullscreenRTShader = vex::Shader::create();
+    if (!m_vkFullscreenRTShader->loadFromFiles(dir + "fullscreen.vert" + ext, dir + "fullscreen_rt.frag" + ext))
+    {
+        vex::Log::error("Failed to load Vulkan fullscreen_rt shader");
+        m_vkFullscreenRTShader.reset();
+    }
+    else
+    {
+        m_vkFullscreenRTShader->preparePipeline(*m_framebuffer);
+    }
+#endif
+
     return true;
 }
 
@@ -129,6 +155,13 @@ void SceneRenderer::shutdown()
         m_gpuRaytracer->shutdown();
     m_gpuRaytracer.reset();
     m_fullscreenRTShader.reset();
+#endif
+
+#ifdef VEX_BACKEND_VULKAN
+    m_vkFullscreenRTShader.reset();
+    if (m_vkRaytracer)
+        m_vkRaytracer->shutdown();
+    m_vkRaytracer.reset();
 #endif
     m_cpuRaytracer.reset();
     m_raytraceTexture.reset();
@@ -194,6 +227,13 @@ void SceneRenderer::setRenderMode(RenderMode mode)
         m_gpuGeometryDirty = true; // force re-upload
     }
 #endif
+#ifdef VEX_BACKEND_VULKAN
+    if (mode == RenderMode::GPURaytrace && m_vkRaytracer)
+    {
+        m_vkRaytracer->reset();
+        m_vkSampleCount = 0;
+    }
+#endif
 }
 
 uint32_t SceneRenderer::getRaytraceSampleCount() const
@@ -201,6 +241,10 @@ uint32_t SceneRenderer::getRaytraceSampleCount() const
 #ifdef VEX_BACKEND_OPENGL
     if (m_renderMode == RenderMode::GPURaytrace && m_gpuRaytracer)
         return m_gpuRaytracer->getSampleCount();
+#endif
+#ifdef VEX_BACKEND_VULKAN
+    if (m_renderMode == RenderMode::GPURaytrace)
+        return m_vkSampleCount;
 #endif
     return m_cpuRaytracer ? m_cpuRaytracer->getSampleCount() : 0;
 }
@@ -267,12 +311,17 @@ void SceneRenderer::setGPUMaxDepth([[maybe_unused]] int d)
 #ifdef VEX_BACKEND_OPENGL
     if (m_gpuRaytracer) m_gpuRaytracer->setMaxDepth(d);
 #endif
+#ifdef VEX_BACKEND_VULKAN
+    if (d != m_vkMaxDepth) { m_vkMaxDepth = d; if (m_vkRaytracer) { m_vkRaytracer->reset(); m_vkSampleCount = 0; } }
+#endif
 }
 
 int SceneRenderer::getGPUMaxDepth() const
 {
 #ifdef VEX_BACKEND_OPENGL
     return m_gpuRaytracer ? m_gpuRaytracer->getMaxDepth() : 5;
+#elif defined(VEX_BACKEND_VULKAN)
+    return m_vkMaxDepth;
 #else
     return 5;
 #endif
@@ -283,12 +332,17 @@ void SceneRenderer::setGPUEnableNEE([[maybe_unused]] bool v)
 #ifdef VEX_BACKEND_OPENGL
     if (m_gpuRaytracer) m_gpuRaytracer->setEnableNEE(v);
 #endif
+#ifdef VEX_BACKEND_VULKAN
+    if (v != m_vkEnableNEE) { m_vkEnableNEE = v; if (m_vkRaytracer) { m_vkRaytracer->reset(); m_vkSampleCount = 0; } }
+#endif
 }
 
 bool SceneRenderer::getGPUEnableNEE() const
 {
 #ifdef VEX_BACKEND_OPENGL
     return m_gpuRaytracer ? m_gpuRaytracer->getEnableNEE() : true;
+#elif defined(VEX_BACKEND_VULKAN)
+    return m_vkEnableNEE;
 #else
     return true;
 #endif
@@ -299,12 +353,17 @@ void SceneRenderer::setGPUEnableAA([[maybe_unused]] bool v)
 #ifdef VEX_BACKEND_OPENGL
     if (m_gpuRaytracer) m_gpuRaytracer->setEnableAA(v);
 #endif
+#ifdef VEX_BACKEND_VULKAN
+    if (v != m_vkEnableAA) { m_vkEnableAA = v; if (m_vkRaytracer) { m_vkRaytracer->reset(); m_vkSampleCount = 0; } }
+#endif
 }
 
 bool SceneRenderer::getGPUEnableAA() const
 {
 #ifdef VEX_BACKEND_OPENGL
     return m_gpuRaytracer ? m_gpuRaytracer->getEnableAA() : true;
+#elif defined(VEX_BACKEND_VULKAN)
+    return m_vkEnableAA;
 #else
     return true;
 #endif
@@ -315,12 +374,17 @@ void SceneRenderer::setGPUEnableFireflyClamping([[maybe_unused]] bool v)
 #ifdef VEX_BACKEND_OPENGL
     if (m_gpuRaytracer) m_gpuRaytracer->setEnableFireflyClamping(v);
 #endif
+#ifdef VEX_BACKEND_VULKAN
+    if (v != m_vkEnableFireflyClamping) { m_vkEnableFireflyClamping = v; if (m_vkRaytracer) { m_vkRaytracer->reset(); m_vkSampleCount = 0; } }
+#endif
 }
 
 bool SceneRenderer::getGPUEnableFireflyClamping() const
 {
 #ifdef VEX_BACKEND_OPENGL
     return m_gpuRaytracer ? m_gpuRaytracer->getEnableFireflyClamping() : true;
+#elif defined(VEX_BACKEND_VULKAN)
+    return m_vkEnableFireflyClamping;
 #else
     return true;
 #endif
@@ -331,12 +395,17 @@ void SceneRenderer::setGPUEnableEnvironment([[maybe_unused]] bool v)
 #ifdef VEX_BACKEND_OPENGL
     if (m_gpuRaytracer) m_gpuRaytracer->setEnableEnvironment(v);
 #endif
+#ifdef VEX_BACKEND_VULKAN
+    if (v != m_vkEnableEnvLighting) { m_vkEnableEnvLighting = v; if (m_vkRaytracer) { m_vkRaytracer->reset(); m_vkSampleCount = 0; } }
+#endif
 }
 
 bool SceneRenderer::getGPUEnableEnvironment() const
 {
 #ifdef VEX_BACKEND_OPENGL
     return m_gpuRaytracer ? m_gpuRaytracer->getEnableEnvironment() : false;
+#elif defined(VEX_BACKEND_VULKAN)
+    return m_vkEnableEnvLighting;
 #else
     return false;
 #endif
@@ -347,12 +416,17 @@ void SceneRenderer::setGPUEnvLightMultiplier([[maybe_unused]] float v)
 #ifdef VEX_BACKEND_OPENGL
     if (m_gpuRaytracer) m_gpuRaytracer->setEnvLightMultiplier(v);
 #endif
+#ifdef VEX_BACKEND_VULKAN
+    if (v != m_vkEnvLightMultiplier) { m_vkEnvLightMultiplier = v; if (m_vkRaytracer) m_vkRaytracer->reset(); m_vkSampleCount = 0; }
+#endif
 }
 
 float SceneRenderer::getGPUEnvLightMultiplier() const
 {
 #ifdef VEX_BACKEND_OPENGL
     return m_gpuRaytracer ? m_gpuRaytracer->getEnvLightMultiplier() : 1.0f;
+#elif defined(VEX_BACKEND_VULKAN)
+    return m_vkEnvLightMultiplier;
 #else
     return 1.0f;
 #endif
@@ -413,12 +487,17 @@ void SceneRenderer::setGPUFlatShading([[maybe_unused]] bool v)
 #ifdef VEX_BACKEND_OPENGL
     if (m_gpuRaytracer) m_gpuRaytracer->setFlatShading(v);
 #endif
+#ifdef VEX_BACKEND_VULKAN
+    if (v != m_vkFlatShading) { m_vkFlatShading = v; if (m_vkRaytracer) { m_vkRaytracer->reset(); m_vkSampleCount = 0; } }
+#endif
 }
 
 bool SceneRenderer::getGPUFlatShading() const
 {
 #ifdef VEX_BACKEND_OPENGL
     return m_gpuRaytracer ? m_gpuRaytracer->getFlatShading() : false;
+#elif defined(VEX_BACKEND_VULKAN)
+    return m_vkFlatShading;
 #else
     return false;
 #endif
@@ -429,12 +508,17 @@ void SceneRenderer::setGPUEnableNormalMapping([[maybe_unused]] bool v)
 #ifdef VEX_BACKEND_OPENGL
     if (m_gpuRaytracer) m_gpuRaytracer->setEnableNormalMapping(v);
 #endif
+#ifdef VEX_BACKEND_VULKAN
+    if (v != m_vkEnableNormalMapping) { m_vkEnableNormalMapping = v; if (m_vkRaytracer) { m_vkRaytracer->reset(); m_vkSampleCount = 0; } }
+#endif
 }
 
 bool SceneRenderer::getGPUEnableNormalMapping() const
 {
 #ifdef VEX_BACKEND_OPENGL
     return m_gpuRaytracer ? m_gpuRaytracer->getEnableNormalMapping() : true;
+#elif defined(VEX_BACKEND_VULKAN)
+    return m_vkEnableNormalMapping;
 #else
     return true;
 #endif
@@ -445,21 +529,28 @@ void SceneRenderer::setGPUEnableEmissive([[maybe_unused]] bool v)
 #ifdef VEX_BACKEND_OPENGL
     if (m_gpuRaytracer) m_gpuRaytracer->setEnableEmissive(v);
 #endif
+#ifdef VEX_BACKEND_VULKAN
+    if (v != m_vkEnableEmissive) { m_vkEnableEmissive = v; if (m_vkRaytracer) { m_vkRaytracer->reset(); m_vkSampleCount = 0; } }
+#endif
 }
 
 bool SceneRenderer::getGPUEnableEmissive() const
 {
 #ifdef VEX_BACKEND_OPENGL
     return m_gpuRaytracer ? m_gpuRaytracer->getEnableEmissive() : true;
+#elif defined(VEX_BACKEND_VULKAN)
+    return m_vkEnableEmissive;
 #else
     return true;
 #endif
 }
 
-void SceneRenderer::setGPUExposure([[maybe_unused]] float v)
+void SceneRenderer::setGPUExposure(float v)
 {
 #ifdef VEX_BACKEND_OPENGL
     m_gpuExposure = v;
+#elif defined(VEX_BACKEND_VULKAN)
+    m_vkExposure = v;
 #endif
 }
 
@@ -467,15 +558,19 @@ float SceneRenderer::getGPUExposure() const
 {
 #ifdef VEX_BACKEND_OPENGL
     return m_gpuExposure;
+#elif defined(VEX_BACKEND_VULKAN)
+    return m_vkExposure;
 #else
     return 0.0f;
 #endif
 }
 
-void SceneRenderer::setGPUGamma([[maybe_unused]] float v)
+void SceneRenderer::setGPUGamma(float v)
 {
 #ifdef VEX_BACKEND_OPENGL
     m_gpuGamma = v;
+#elif defined(VEX_BACKEND_VULKAN)
+    m_vkGamma = v;
 #endif
 }
 
@@ -483,15 +578,19 @@ float SceneRenderer::getGPUGamma() const
 {
 #ifdef VEX_BACKEND_OPENGL
     return m_gpuGamma;
+#elif defined(VEX_BACKEND_VULKAN)
+    return m_vkGamma;
 #else
     return 2.2f;
 #endif
 }
 
-void SceneRenderer::setGPUEnableACES([[maybe_unused]] bool v)
+void SceneRenderer::setGPUEnableACES(bool v)
 {
 #ifdef VEX_BACKEND_OPENGL
     m_gpuEnableACES = v;
+#elif defined(VEX_BACKEND_VULKAN)
+    m_vkEnableACES = v;
 #endif
 }
 
@@ -499,6 +598,8 @@ bool SceneRenderer::getGPUEnableACES() const
 {
 #ifdef VEX_BACKEND_OPENGL
     return m_gpuEnableACES;
+#elif defined(VEX_BACKEND_VULKAN)
+    return m_vkEnableACES;
 #else
     return true;
 #endif
@@ -509,12 +610,17 @@ void SceneRenderer::setGPURayEps([[maybe_unused]] float v)
 #ifdef VEX_BACKEND_OPENGL
     if (m_gpuRaytracer) m_gpuRaytracer->setRayEps(v);
 #endif
+#ifdef VEX_BACKEND_VULKAN
+    if (v != m_vkRayEps) { m_vkRayEps = v; if (m_vkRaytracer) { m_vkRaytracer->reset(); m_vkSampleCount = 0; } }
+#endif
 }
 
 float SceneRenderer::getGPURayEps() const
 {
 #ifdef VEX_BACKEND_OPENGL
     return m_gpuRaytracer ? m_gpuRaytracer->getRayEps() : 1e-4f;
+#elif defined(VEX_BACKEND_VULKAN)
+    return m_vkRayEps;
 #else
     return 1e-4f;
 #endif
@@ -525,12 +631,17 @@ void SceneRenderer::setGPUEnableRR([[maybe_unused]] bool v)
 #ifdef VEX_BACKEND_OPENGL
     if (m_gpuRaytracer) m_gpuRaytracer->setEnableRR(v);
 #endif
+#ifdef VEX_BACKEND_VULKAN
+    if (v != m_vkEnableRR) { m_vkEnableRR = v; if (m_vkRaytracer) { m_vkRaytracer->reset(); m_vkSampleCount = 0; } }
+#endif
 }
 
 bool SceneRenderer::getGPUEnableRR() const
 {
 #ifdef VEX_BACKEND_OPENGL
     return m_gpuRaytracer ? m_gpuRaytracer->getEnableRR() : true;
+#elif defined(VEX_BACKEND_VULKAN)
+    return m_vkEnableRR;
 #else
     return true;
 #endif
@@ -652,127 +763,308 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene)
         }
     }
 
-    // Store copies for GPU upload before moving to CPU raytracer
-    m_rtTextures = textures; // copy
-    m_cpuRaytracer->setGeometry(std::move(triangles), std::move(textures));
+    // Always keep a CPU-side copy of textures — needed for the VK RT texture atlas SSBO.
+    m_rtTextures = textures;
 
-    // Build BVH and reorder triangles for GPU (mirrors CPU raytracer internal logic)
+    // CPU BVH build is expensive (~10s for large scenes).
+    // In the Vulkan build, GPU RT uses BLAS/TLAS so we can skip the CPU BVH when not in CPU RT mode.
+    // In the OpenGL build, GPU RT also uses m_rtTriangles + m_rtBVH, so always build it.
+#ifdef VEX_BACKEND_VULKAN
+    const bool needsCpuBvh = (m_renderMode == RenderMode::CPURaytrace);
+#else
+    const bool needsCpuBvh = true;
+#endif
+    if (needsCpuBvh)
     {
-        // Re-extract triangles from scene (CPU raytracer consumed them)
-        // Actually re-use the CPU raytracer approach: build our own BVH
-        std::vector<vex::CPURaytracer::Triangle> gpuTriangles;
-        std::vector<std::pair<int,int>> gpuTriangleSrc; // {gi, si} per triangle
-        for (int gi = 0; gi < static_cast<int>(scene.meshGroups.size()); ++gi)
+        m_cpuRaytracer->setGeometry(std::move(triangles), std::move(textures));
+
+        // Build ordering BVH for CPU RT triangle data
         {
-            for (int si = 0; si < static_cast<int>(scene.meshGroups[gi].submeshes.size()); ++si)
+            std::vector<vex::CPURaytracer::Triangle> gpuTriangles;
+            std::vector<std::pair<int,int>> gpuTriangleSrc;
+            for (int gi = 0; gi < static_cast<int>(scene.meshGroups.size()); ++gi)
             {
-            const auto& sm = scene.meshGroups[gi].submeshes[si];
-                const auto& verts = sm.meshData.vertices;
-                const auto& idx   = sm.meshData.indices;
+                for (int si = 0; si < static_cast<int>(scene.meshGroups[gi].submeshes.size()); ++si)
+                {
+                const auto& sm = scene.meshGroups[gi].submeshes[si];
+                    const auto& verts = sm.meshData.vertices;
+                    const auto& idx   = sm.meshData.indices;
+
+                    int texIdx           = lookupTexture(sm.meshData.diffuseTexturePath);
+                    int emissiveTexIdx   = lookupTexture(sm.meshData.emissiveTexturePath);
+                    int normalTexIdx2    = lookupTexture(sm.meshData.normalTexturePath);
+                    int roughnessTexIdx2 = lookupTexture(sm.meshData.roughnessTexturePath);
+                    int metallicTexIdx2  = lookupTexture(sm.meshData.metallicTexturePath);
+
+                    for (size_t i = 0; i + 2 < idx.size(); i += 3)
+                    {
+                        const auto& v0 = verts[idx[i + 0]];
+                        const auto& v1 = verts[idx[i + 1]];
+                        const auto& v2 = verts[idx[i + 2]];
+
+                        glm::vec3 edge1 = v1.position - v0.position;
+                        glm::vec3 edge2 = v2.position - v0.position;
+                        glm::vec3 cr = glm::cross(edge1, edge2);
+                        float len = glm::length(cr);
+
+                        vex::CPURaytracer::Triangle tri;
+                        tri.v0 = v0.position; tri.v1 = v1.position; tri.v2 = v2.position;
+                        tri.n0 = v0.normal;   tri.n1 = v1.normal;   tri.n2 = v2.normal;
+                        tri.uv0 = v0.uv;      tri.uv1 = v1.uv;      tri.uv2 = v2.uv;
+                        tri.color = v0.color;
+                        tri.emissive = v0.emissive;
+                        tri.geometricNormal = (len > GEOMETRY_EPSILON) ? (cr / len) : glm::vec3(0, 1, 0);
+                        tri.area = len * 0.5f;
+                        tri.textureIndex = texIdx;
+                        tri.emissiveTextureIndex = emissiveTexIdx;
+                        tri.normalMapTextureIndex = normalTexIdx2;
+                        tri.roughnessTextureIndex = roughnessTexIdx2;
+                        tri.metallicTextureIndex = metallicTexIdx2;
+                        tri.alphaClip = sm.meshData.alphaClip;
+                        tri.materialType = sm.meshData.materialType;
+                        tri.ior = sm.meshData.ior;
+                        tri.roughness = sm.meshData.roughness;
+                        tri.metallic = sm.meshData.metallic;
+
+                        glm::vec2 dUV1 = v1.uv - v0.uv;
+                        glm::vec2 dUV2 = v2.uv - v0.uv;
+                        float det = dUV1.x * dUV2.y - dUV2.x * dUV1.y;
+                        if (std::abs(det) > GEOMETRY_EPSILON)
+                        {
+                            float f = 1.0f / det;
+                            tri.tangent = glm::normalize(f * (dUV2.y * edge1 - dUV1.y * edge2));
+                            glm::vec3 B = f * (-dUV2.x * edge1 + dUV1.x * edge2);
+                            tri.bitangentSign = (glm::dot(glm::cross(tri.geometricNormal, tri.tangent), B) < 0.0f) ? -1.0f : 1.0f;
+                        }
+
+                        gpuTriangles.push_back(tri);
+                        gpuTriangleSrc.push_back({gi, si});
+                    }
+                }
+            }
+
+            uint32_t count = static_cast<uint32_t>(gpuTriangles.size());
+            std::vector<vex::AABB> triBounds(count);
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                triBounds[i].grow(gpuTriangles[i].v0);
+                triBounds[i].grow(gpuTriangles[i].v1);
+                triBounds[i].grow(gpuTriangles[i].v2);
+            }
+            m_rtBVH.build(triBounds);
+
+            const auto& bvhIndices = m_rtBVH.indices();
+            std::vector<vex::CPURaytracer::Triangle> reordered(count);
+            std::vector<std::pair<int,int>> reorderedSrc(count);
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                reordered[i]    = gpuTriangles[bvhIndices[i]];
+                reorderedSrc[i] = gpuTriangleSrc[bvhIndices[i]];
+            }
+            m_rtTriangles          = std::move(reordered);
+            m_rtTriangleSrcSubmesh = std::move(reorderedSrc);
+
+            m_rtLightIndices.clear();
+            m_rtLightCDF.clear();
+            m_rtTotalLightArea = 0.0f;
+            for (uint32_t i = 0; i < static_cast<uint32_t>(m_rtTriangles.size()); ++i)
+            {
+                if (glm::length(m_rtTriangles[i].emissive) > 0.001f)
+                {
+                    m_rtLightIndices.push_back(i);
+                    m_rtTotalLightArea += m_rtTriangles[i].area;
+                    m_rtLightCDF.push_back(m_rtTotalLightArea);
+                }
+            }
+            if (m_rtTotalLightArea > 0.0f)
+                for (float& c : m_rtLightCDF) c /= m_rtTotalLightArea;
+        }
+
+        char sahBuf[32];
+        std::snprintf(sahBuf, sizeof(sahBuf), "%.1f", m_cpuRaytracer->getBVHSAHCost());
+        vex::Log::info("  BVH built: " + std::to_string(m_cpuRaytracer->getBVHNodeCount()) + " nodes, "
+                      + std::to_string(m_rtTriangles.size()) + " triangles, SAH cost " + sahBuf);
+        if (!m_rtLightIndices.empty())
+            vex::Log::info("  " + std::to_string(m_rtLightIndices.size()) + " emissive triangle(s)");
+
+        m_cpuBVHDirty = false;
+    }
+    else
+    {
+        vex::Log::info("  Skipping CPU BVH (not in CPU RT mode)");
+        m_cpuBVHDirty = true;
+    }
+
+#ifdef VEX_BACKEND_VULKAN
+    if (m_vkRaytracer)
+    {
+        m_vkRaytracer->clearAccelerationStructures();
+
+        // Helper: store int/float bit patterns for SSBO fields read via floatBitsToInt/uintBitsToFloat in GLSL
+        auto iBF = [](int   v) -> float    { float    f; std::memcpy(&f, &v, sizeof(f)); return f; };
+        auto fBU = [](float v) -> uint32_t { uint32_t u; std::memcpy(&u, &v, sizeof(u)); return u; };
+
+        m_vkTriShading.clear();
+        m_vkInstanceOffsets.clear();
+
+        std::vector<uint32_t> vkLightIndices;
+        std::vector<float>    vkLightCDF;
+        float vkTotalLightArea = 0.0f;
+        uint32_t globalTriOffset = 0;
+
+        for (const auto& group : scene.meshGroups)
+        {
+            for (const auto& sm : group.submeshes)
+            {
+                auto* vkMesh = static_cast<vex::VKMesh*>(sm.mesh.get());
+                m_vkRaytracer->addBlas(
+                    vkMesh->getVertexBuffer(), vkMesh->getVertexCount(), sizeof(vex::Vertex),
+                    vkMesh->getIndexBuffer(),  vkMesh->getIndexCount());
+
+                m_vkInstanceOffsets.push_back(globalTriOffset);
+
+                const auto& verts   = sm.meshData.vertices;
+                const auto& indices = sm.meshData.indices;
 
                 int texIdx           = lookupTexture(sm.meshData.diffuseTexturePath);
                 int emissiveTexIdx   = lookupTexture(sm.meshData.emissiveTexturePath);
-                int normalTexIdx2    = lookupTexture(sm.meshData.normalTexturePath);
-                int roughnessTexIdx2 = lookupTexture(sm.meshData.roughnessTexturePath);
-                int metallicTexIdx2  = lookupTexture(sm.meshData.metallicTexturePath);
+                int normalTexIdx     = lookupTexture(sm.meshData.normalTexturePath);
+                int roughnessTexIdx  = lookupTexture(sm.meshData.roughnessTexturePath);
+                int metallicTexIdx   = lookupTexture(sm.meshData.metallicTexturePath);
 
-                for (size_t i = 0; i + 2 < idx.size(); i += 3)
+                for (size_t i = 0; i + 2 < indices.size(); i += 3)
                 {
-                    const auto& v0 = verts[idx[i + 0]];
-                    const auto& v1 = verts[idx[i + 1]];
-                    const auto& v2 = verts[idx[i + 2]];
+                    const auto& v0 = verts[indices[i + 0]];
+                    const auto& v1 = verts[indices[i + 1]];
+                    const auto& v2 = verts[indices[i + 2]];
 
-                    glm::vec3 edge1 = v1.position - v0.position;
-                    glm::vec3 edge2 = v2.position - v0.position;
-                    glm::vec3 cr = glm::cross(edge1, edge2);
+                    glm::vec3 e1 = v1.position - v0.position;
+                    glm::vec3 e2 = v2.position - v0.position;
+                    glm::vec3 cr = glm::cross(e1, e2);
                     float len = glm::length(cr);
+                    glm::vec3 geoN = (len > GEOMETRY_EPSILON) ? (cr / len) : glm::vec3(0, 1, 0);
+                    float area = len * 0.5f;
 
-                    vex::CPURaytracer::Triangle tri;
-                    tri.v0 = v0.position; tri.v1 = v1.position; tri.v2 = v2.position;
-                    tri.n0 = v0.normal;   tri.n1 = v1.normal;   tri.n2 = v2.normal;
-                    tri.uv0 = v0.uv;      tri.uv1 = v1.uv;      tri.uv2 = v2.uv;
-                    tri.color = v0.color;
-                    tri.emissive = v0.emissive;
-                    tri.geometricNormal = (len > GEOMETRY_EPSILON) ? (cr / len) : glm::vec3(0, 1, 0);
-                    tri.area = len * 0.5f;
-                    tri.textureIndex = texIdx;
-                    tri.emissiveTextureIndex = emissiveTexIdx;
-                    tri.normalMapTextureIndex = normalTexIdx2;
-                    tri.roughnessTextureIndex = roughnessTexIdx2;
-                    tri.metallicTextureIndex = metallicTexIdx2;
-                    tri.alphaClip = sm.meshData.alphaClip;
-                    tri.materialType = sm.meshData.materialType;
-                    tri.ior = sm.meshData.ior;
-                    tri.roughness = sm.meshData.roughness;
-                    tri.metallic = sm.meshData.metallic;
-
-                    // Compute tangent from UV gradients
+                    // Tangent from UV gradients
                     glm::vec2 dUV1 = v1.uv - v0.uv;
                     glm::vec2 dUV2 = v2.uv - v0.uv;
                     float det = dUV1.x * dUV2.y - dUV2.x * dUV1.y;
+                    glm::vec3 tangent(1, 0, 0);
+                    float bitangentSign = 1.0f;
                     if (std::abs(det) > GEOMETRY_EPSILON)
                     {
                         float f = 1.0f / det;
-                        tri.tangent = glm::normalize(f * (dUV2.y * edge1 - dUV1.y * edge2));
-                        glm::vec3 B = f * (-dUV2.x * edge1 + dUV1.x * edge2);
-                        tri.bitangentSign = (glm::dot(glm::cross(tri.geometricNormal, tri.tangent), B) < 0.0f) ? -1.0f : 1.0f;
+                        tangent = glm::normalize(f * (dUV2.y * e1 - dUV1.y * e2));
+                        glm::vec3 B = f * (-dUV2.x * e1 + dUV1.x * e2);
+                        bitangentSign = (glm::dot(glm::cross(geoN, tangent), B) < 0.0f) ? -1.0f : 1.0f;
                     }
 
-                    gpuTriangles.push_back(tri);
-                    gpuTriangleSrc.push_back({gi, si});
+                    // [0] n0.xyz + roughnessTexIdx (as int bits)
+                    m_vkTriShading.push_back(v0.normal.x); m_vkTriShading.push_back(v0.normal.y);
+                    m_vkTriShading.push_back(v0.normal.z); m_vkTriShading.push_back(iBF(roughnessTexIdx));
+                    // [1] n1.xyz + metallicTexIdx (as int bits)
+                    m_vkTriShading.push_back(v1.normal.x); m_vkTriShading.push_back(v1.normal.y);
+                    m_vkTriShading.push_back(v1.normal.z); m_vkTriShading.push_back(iBF(metallicTexIdx));
+                    // [2] n2.xyz + pad
+                    m_vkTriShading.push_back(v2.normal.x); m_vkTriShading.push_back(v2.normal.y);
+                    m_vkTriShading.push_back(v2.normal.z); m_vkTriShading.push_back(0.0f);
+                    // [3] uv0.xy + uv1.zw
+                    m_vkTriShading.push_back(v0.uv.x); m_vkTriShading.push_back(v0.uv.y);
+                    m_vkTriShading.push_back(v1.uv.x); m_vkTriShading.push_back(v1.uv.y);
+                    // [4] uv2.xy + roughness + metallic
+                    m_vkTriShading.push_back(v2.uv.x); m_vkTriShading.push_back(v2.uv.y);
+                    m_vkTriShading.push_back(sm.meshData.roughness); m_vkTriShading.push_back(sm.meshData.metallic);
+                    // [5] color.xyz + texIdx (as int bits)
+                    m_vkTriShading.push_back(v0.color.x); m_vkTriShading.push_back(v0.color.y);
+                    m_vkTriShading.push_back(v0.color.z); m_vkTriShading.push_back(iBF(texIdx));
+                    // [6] emissive.xyz + area
+                    m_vkTriShading.push_back(v0.emissive.x); m_vkTriShading.push_back(v0.emissive.y);
+                    m_vkTriShading.push_back(v0.emissive.z); m_vkTriShading.push_back(area);
+                    // [7] geoNormal.xyz + normalMapTexIdx (as int bits)
+                    m_vkTriShading.push_back(geoN.x); m_vkTriShading.push_back(geoN.y);
+                    m_vkTriShading.push_back(geoN.z); m_vkTriShading.push_back(iBF(normalTexIdx));
+                    // [8] alphaClip + materialType (float) + ior + emissiveTexIdx (as int bits)
+                    m_vkTriShading.push_back(sm.meshData.alphaClip ? 1.0f : 0.0f);
+                    m_vkTriShading.push_back(static_cast<float>(sm.meshData.materialType));
+                    m_vkTriShading.push_back(sm.meshData.ior);
+                    m_vkTriShading.push_back(iBF(emissiveTexIdx));
+                    // [9] tangent.xyz + bitangentSign
+                    m_vkTriShading.push_back(tangent.x); m_vkTriShading.push_back(tangent.y);
+                    m_vkTriShading.push_back(tangent.z); m_vkTriShading.push_back(bitangentSign);
+                    // [10] v0.xyz + pad
+                    m_vkTriShading.push_back(v0.position.x); m_vkTriShading.push_back(v0.position.y);
+                    m_vkTriShading.push_back(v0.position.z); m_vkTriShading.push_back(0.0f);
+                    // [11] v1.xyz + pad
+                    m_vkTriShading.push_back(v1.position.x); m_vkTriShading.push_back(v1.position.y);
+                    m_vkTriShading.push_back(v1.position.z); m_vkTriShading.push_back(0.0f);
+                    // [12] v2.xyz + pad
+                    m_vkTriShading.push_back(v2.position.x); m_vkTriShading.push_back(v2.position.y);
+                    m_vkTriShading.push_back(v2.position.z); m_vkTriShading.push_back(0.0f);
+
+                    // Track emissive triangles for lights SSBO (per-submesh global index)
+                    if (glm::length(v0.emissive) > 0.001f)
+                    {
+                        vkLightIndices.push_back(globalTriOffset + static_cast<uint32_t>(i / 3));
+                        vkTotalLightArea += area;
+                        vkLightCDF.push_back(vkTotalLightArea);
+                    }
                 }
+                globalTriOffset += static_cast<uint32_t>(indices.size() / 3);
             }
         }
 
-        // Build BVH
-        uint32_t count = static_cast<uint32_t>(gpuTriangles.size());
-        std::vector<vex::AABB> triBounds(count);
-        for (uint32_t i = 0; i < count; ++i)
-        {
-            triBounds[i].grow(gpuTriangles[i].v0);
-            triBounds[i].grow(gpuTriangles[i].v1);
-            triBounds[i].grow(gpuTriangles[i].v2);
-        }
-        m_rtBVH.build(triBounds);
+        // Normalize light CDF to [0, 1]
+        if (vkTotalLightArea > 0.0f)
+            for (float& c : vkLightCDF) c /= vkTotalLightArea;
 
-        // Reorder triangles (and source tracking) to match BVH index order
-        const auto& bvhIndices = m_rtBVH.indices();
-        std::vector<vex::CPURaytracer::Triangle> reordered(count);
-        std::vector<std::pair<int,int>> reorderedSrc(count);
-        for (uint32_t i = 0; i < count; ++i)
-        {
-            reordered[i]    = gpuTriangles[bvhIndices[i]];
-            reorderedSrc[i] = gpuTriangleSrc[bvhIndices[i]];
-        }
-        m_rtTriangles           = std::move(reordered);
-        m_rtTriangleSrcSubmesh  = std::move(reorderedSrc);
+        // ── Build lights SSBO ─────────────────────────────────────────────────
+        // std430 layout: [lightCount uint][totalLightArea float][pad][pad]
+        //   + lightRawData[]: [0..N-1]=tri indices, [N..2N-1]=CDF (float bits via uintBitsToFloat in GLSL)
+        m_vkLights.clear();
+        uint32_t lightCount = static_cast<uint32_t>(vkLightIndices.size());
+        m_vkLights.push_back(lightCount);
+        m_vkLights.push_back(fBU(vkTotalLightArea));
+        m_vkLights.push_back(0); m_vkLights.push_back(0); // pad
+        for (uint32_t idx : vkLightIndices) m_vkLights.push_back(idx);
+        for (float c : vkLightCDF) m_vkLights.push_back(fBU(c));
 
-        // Build light data
-        m_rtLightIndices.clear();
-        m_rtLightCDF.clear();
-        m_rtTotalLightArea = 0.0f;
-        for (uint32_t i = 0; i < static_cast<uint32_t>(m_rtTriangles.size()); ++i)
+        // ── Build texData SSBO ────────────────────────────────────────────────
+        // Layout: [texCount][{offset, w, h, pad} per tex...][packed RGBA8 pixels as uint...]
+        m_vkTexData.clear();
+        uint32_t texCount = static_cast<uint32_t>(m_rtTextures.size());
+        m_vkTexData.push_back(texCount);
+        uint32_t headerSize = 1u + texCount * 4u;
+        m_vkTexData.resize(headerSize, 0u);
+        uint32_t pixelBase = headerSize;
+        for (uint32_t ti = 0; ti < texCount; ++ti)
         {
-            if (glm::length(m_rtTriangles[i].emissive) > 0.001f)
+            const auto& td = m_rtTextures[ti];
+            uint32_t hBase = 1u + ti * 4u;
+            m_vkTexData[hBase + 0] = pixelBase;
+            m_vkTexData[hBase + 1] = static_cast<uint32_t>(td.width);
+            m_vkTexData[hBase + 2] = static_cast<uint32_t>(td.height);
+            m_vkTexData[hBase + 3] = 0u;
+            uint32_t pixelCount = static_cast<uint32_t>(td.width * td.height);
+            for (uint32_t pi = 0; pi < pixelCount; ++pi)
             {
-                m_rtLightIndices.push_back(i);
-                m_rtTotalLightArea += m_rtTriangles[i].area;
-                m_rtLightCDF.push_back(m_rtTotalLightArea);
+                uint8_t r = td.pixels[pi * 4 + 0], g = td.pixels[pi * 4 + 1];
+                uint8_t b = td.pixels[pi * 4 + 2], a = td.pixels[pi * 4 + 3];
+                m_vkTexData.push_back(r | (uint32_t(g) << 8) | (uint32_t(b) << 16) | (uint32_t(a) << 24));
             }
+            pixelBase += pixelCount;
         }
-        if (m_rtTotalLightArea > 0.0f)
-        {
-            for (float& c : m_rtLightCDF)
-                c /= m_rtTotalLightArea;
-        }
-    }
 
-    char sahBuf[32];
-    std::snprintf(sahBuf, sizeof(sahBuf), "%.1f", m_cpuRaytracer->getBVHSAHCost());
-    vex::Log::info("  BVH built: " + std::to_string(m_cpuRaytracer->getBVHNodeCount()) + " nodes, "
-                  + std::to_string(m_rtTriangles.size()) + " triangles, SAH cost " + sahBuf);
-    if (!m_rtLightIndices.empty())
-        vex::Log::info("  " + std::to_string(m_rtLightIndices.size()) + " emissive triangle(s)");
+        m_vkRaytracer->commitBlasBuild(); // single GPU submission for all BLASes
+        m_vkRaytracer->buildTlas();
+        m_vkGeomDirty = true;  // uploadSceneData + createOutputImage deferred to renderVKRaytrace
+        m_vkSampleCount = 0;
+
+        vex::Log::info("  VK RT geometry built: "
+                      + std::to_string(m_vkInstanceOffsets.size()) + " BLASes, "
+                      + std::to_string(m_vkTriShading.size() / 52) + " triangles, "
+                      + std::to_string(lightCount) + " emissive triangle(s)");
+    }
+#endif
 
     m_gpuGeometryDirty = true;
 }
@@ -807,7 +1099,13 @@ void SceneRenderer::rebuildMaterials(Scene& scene)
 void SceneRenderer::renderScene(Scene& scene, int selectedGroup, int selectedSubmesh)
 {
     // Full geometry rebuild (new mesh loaded, etc.)
-    if (scene.geometryDirty)
+    // VK: also trigger when switching to CPU RT with a stale BVH (GPU RT uses BLAS/TLAS, not the CPU BVH).
+    // GL: trigger whenever BVH is dirty — GPU RT also needs m_rtTriangles/m_rtBVH.
+#ifdef VEX_BACKEND_VULKAN
+    if (scene.geometryDirty || (m_renderMode == RenderMode::CPURaytrace && m_cpuBVHDirty))
+#else
+    if (scene.geometryDirty || m_cpuBVHDirty)
+#endif
     {
         rebuildRaytraceGeometry(scene);
         scene.geometryDirty = false;
@@ -828,15 +1126,20 @@ void SceneRenderer::renderScene(Scene& scene, int selectedGroup, int selectedSub
 #ifdef VEX_BACKEND_OPENGL
             renderGPURaytrace(scene);
             break;
+#elif defined(VEX_BACKEND_VULKAN)
+            renderVKRaytrace(scene);
+            break;
+#else
+            // Fall through to rasterize — no backend supports GPU raytracing
+            [[fallthrough]];
 #endif
-            // Fall through to rasterize if not OpenGL
         case RenderMode::Rasterize:
             renderRasterize(scene, selectedGroup, selectedSubmesh);
             break;
     }
 }
 
-void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, int selectedSubmesh)
+void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unused]] int selectedSubmesh)
 {
 #ifdef VEX_BACKEND_OPENGL
     // Keep the intermediate HDR framebuffer in sync with the output framebuffer size
@@ -917,13 +1220,12 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, int selecte
 
     for (int gi = 0; gi < static_cast<int>(scene.meshGroups.size()); ++gi)
     {
-        bool isSelectedGroup = hasSelection && gi == selectedGroup;
-
         for (int si = 0; si < static_cast<int>(scene.meshGroups[gi].submeshes.size()); ++si)
         {
             auto& sm = scene.meshGroups[gi].submeshes[si];
 
 #ifdef VEX_BACKEND_OPENGL
+            bool isSelectedGroup = hasSelection && gi == selectedGroup;
             bool writeStencil = isSelectedGroup && (selectedSubmesh < 0 || si == selectedSubmesh);
             if (writeStencil)
             {
@@ -1502,3 +1804,318 @@ std::pair<int,int> SceneRenderer::pick(Scene& scene, int pixelX, int pixelY)
 
     return {-1, -1};
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Vulkan hardware ray tracing render path
+// ─────────────────────────────────────────────────────────────────────────────
+
+#ifdef VEX_BACKEND_VULKAN
+void SceneRenderer::renderVKRaytrace(Scene& scene)
+{
+    if (!m_vkRaytracer)
+        return;
+
+    const auto& spec = m_framebuffer->getSpec();
+    uint32_t w = spec.width;
+    uint32_t h = spec.height;
+
+    // ── Environment map change detection ──────────────────────────────────────
+    bool envChanged = false;
+
+    bool customPathChanged = (scene.customEnvmapPath != m_prevCustomEnvmapPath);
+    if (customPathChanged)
+        m_prevCustomEnvmapPath = scene.customEnvmapPath;
+
+    if (scene.currentEnvmap != m_prevEnvmapIndex || customPathChanged)
+    {
+        m_prevEnvmapIndex = scene.currentEnvmap;
+        envChanged = true;
+
+        if (scene.currentEnvmap >= Scene::Sky)
+        {
+            std::string envPath;
+            if (scene.currentEnvmap == Scene::CustomHDR)
+            {
+                envPath = scene.customEnvmapPath;
+            }
+            else
+            {
+                std::string base = "assets/textures/envmaps/"
+                                 + std::string(scene.envmapNames[scene.currentEnvmap]) + "/"
+                                 + std::string(scene.envmapNames[scene.currentEnvmap]);
+                envPath = base + ".hdr";
+                int testW, testH, testCh;
+                if (!stbi_info(envPath.c_str(), &testW, &testH, &testCh))
+                    envPath = base + ".jpg";
+            }
+
+            int ew, eh, ech;
+            stbi_set_flip_vertically_on_load(false);
+            float* envData = stbi_loadf(envPath.c_str(), &ew, &eh, &ech, 3);
+            if (envData)
+            {
+                m_vkEnvMapW = ew;
+                m_vkEnvMapH = eh;
+                m_vkEnvMapData.assign(envData, envData + ew * eh * 3);
+                stbi_image_free(envData);
+
+                // Build importance-sampling CDF for the environment map.
+                // Layout: [marginalCDF: H floats][condCDF: W*H floats][totalIntegral: 1 float]
+                int W = ew, H = eh;
+                std::vector<float> luminance(W * H);
+                for (int idx = 0; idx < W * H; ++idx)
+                {
+                    float r = m_vkEnvMapData[idx * 3 + 0];
+                    float g = m_vkEnvMapData[idx * 3 + 1];
+                    float b = m_vkEnvMapData[idx * 3 + 2];
+                    luminance[idx] = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+                }
+
+                // Row integrals weighted by sin(theta) for solid-angle distribution
+                std::vector<float> rowIntegral(H, 0.0f);
+                for (int row = 0; row < H; ++row)
+                {
+                    float sinTheta = std::sin((float(row) + 0.5f) / float(H) * 3.14159265f);
+                    for (int col = 0; col < W; ++col)
+                        rowIntegral[row] += luminance[row * W + col] * sinTheta;
+                }
+
+                m_vkEnvCdfData.assign(H + W * H + 1, 0.0f);
+
+                // Marginal CDF (H entries)
+                float rowSum = 0.0f;
+                for (int row = 0; row < H; ++row)
+                {
+                    rowSum += rowIntegral[row];
+                    m_vkEnvCdfData[row] = rowSum;
+                }
+                float totalIntegral = rowSum;
+                if (totalIntegral > 0.0f)
+                    for (int row = 0; row < H; ++row) m_vkEnvCdfData[row] /= totalIntegral;
+
+                // Conditional CDF per row (W entries each, stored starting at offset H)
+                for (int row = 0; row < H; ++row)
+                {
+                    float sinTheta = std::sin((float(row) + 0.5f) / float(H) * 3.14159265f);
+                    float colSum = 0.0f;
+                    for (int col = 0; col < W; ++col)
+                    {
+                        colSum += luminance[row * W + col] * sinTheta;
+                        m_vkEnvCdfData[H + row * W + col] = colSum;
+                    }
+                    if (colSum > 0.0f)
+                        for (int col = 0; col < W; ++col)
+                            m_vkEnvCdfData[H + row * W + col] /= colSum;
+                }
+
+                // Total integral stored at end (used in PDF formula in GLSL)
+                m_vkEnvCdfData[H + W * H] = totalIntegral;
+            }
+            else
+            {
+                m_vkEnvMapData.clear();
+                m_vkEnvCdfData.clear();
+                m_vkEnvMapW = 0; m_vkEnvMapH = 0;
+            }
+        }
+        else
+        {
+            m_vkEnvMapData.clear();
+            m_vkEnvCdfData.clear();
+            m_vkEnvMapW = 0; m_vkEnvMapH = 0;
+        }
+    }
+
+    if (scene.currentEnvmap == Scene::SolidColor && scene.skyboxColor != m_prevSkyboxColor)
+    {
+        m_prevSkyboxColor = scene.skyboxColor;
+        envChanged = true;
+    }
+
+    // ── Upload scene data if needed ───────────────────────────────────────────
+    bool firstRender = (m_vkRTTexW == 0 && m_vkRTTexH == 0);
+    bool needUpload  = m_vkGeomDirty || envChanged || firstRender;
+    bool needImage   = needUpload || (w != m_vkRTTexW || h != m_vkRTTexH);
+
+    if (needUpload)
+    {
+        m_vkRaytracer->uploadSceneData(
+            m_vkTriShading, m_vkLights, m_vkTexData,
+            m_vkEnvMapData, m_vkEnvCdfData, m_vkInstanceOffsets);
+        m_vkGeomDirty = false;
+    }
+
+    if (needImage)
+    {
+        m_vkRaytracer->createOutputImage(w, h);
+        m_vkRTTexW = w;
+        m_vkRTTexH = h;
+        m_vkRaytracer->reset();
+        m_vkSampleCount = 0;
+        // The RT output image view handle may be recycled by the driver after
+        // destroy+create, so the cached descriptor set would silently point to
+        // the old (freed) GPU allocation. Force re-creation of the descriptor.
+        if (m_vkFullscreenRTShader)
+            static_cast<vex::VKShader*>(m_vkFullscreenRTShader.get())->clearExternalTextureCache();
+    }
+    else if (envChanged)
+    {
+        m_vkRaytracer->reset();
+        m_vkSampleCount = 0;
+    }
+
+    // ── Point light change detection ──────────────────────────────────────────
+    bool lightChanged = (scene.showLight       != m_prevShowLight
+                      || scene.lightPos        != m_prevLightPos
+                      || scene.lightColor      != m_prevLightColor
+                      || scene.lightIntensity  != m_prevLightIntensity);
+    if (lightChanged)
+    {
+        m_vkRaytracer->reset();
+        m_vkSampleCount = 0;
+        m_prevShowLight      = scene.showLight;
+        m_prevLightPos       = scene.lightPos;
+        m_prevLightColor     = scene.lightColor;
+        m_prevLightIntensity = scene.lightIntensity;
+    }
+
+    // ── Sun light change detection ────────────────────────────────────────────
+    glm::vec3 sunDir = scene.getSunDirection();
+    bool sunChanged = (scene.showSun          != m_prevShowSun
+                    || sunDir                  != m_prevSunDirection
+                    || scene.sunColor          != m_prevSunColor
+                    || scene.sunIntensity      != m_prevSunIntensity
+                    || scene.sunAngularRadius  != m_prevSunAngularRadius);
+    if (sunChanged)
+    {
+        m_vkRaytracer->reset();
+        m_vkSampleCount = 0;
+        m_prevShowSun          = scene.showSun;
+        m_prevSunDirection     = sunDir;
+        m_prevSunColor         = scene.sunColor;
+        m_prevSunIntensity     = scene.sunIntensity;
+        m_prevSunAngularRadius = scene.sunAngularRadius;
+    }
+
+    // ── Camera change detection ───────────────────────────────────────────────
+    float aspect = static_cast<float>(w) / static_cast<float>(h);
+    glm::mat4 view = scene.camera.getViewMatrix();
+    glm::mat4 proj = scene.camera.getProjectionMatrix(aspect);
+    glm::vec3 camPos = scene.camera.getPosition();
+
+    if (camPos != m_prevCameraPos || view != m_prevViewMatrix)
+    {
+        m_vkRaytracer->reset();
+        m_vkSampleCount = 0;
+        m_prevCameraPos  = camPos;
+        m_prevViewMatrix = view;
+    }
+
+    if (scene.camera.aperture != m_prevAperture || scene.camera.focusDistance != m_prevFocusDistance)
+    {
+        m_vkRaytracer->reset();
+        m_vkSampleCount = 0;
+        m_prevAperture      = scene.camera.aperture;
+        m_prevFocusDistance = scene.camera.focusDistance;
+    }
+
+    // ── Build RTUniforms ──────────────────────────────────────────────────────
+    glm::vec3 right = glm::vec3(view[0][0], view[1][0], view[2][0]);
+    glm::vec3 up    = glm::vec3(view[0][1], view[1][1], view[2][1]);
+    glm::mat4 vp    = proj * view;
+
+    vex::RTUniforms u{};
+    vex::rtUniformsSetMat4(u.inverseVP,      glm::inverse(vp));
+    vex::rtUniformsSetVec3(u.cameraOrigin,   camPos);
+    u.aperture      = scene.camera.aperture;
+    vex::rtUniformsSetVec3(u.cameraRight,    right);
+    u.focusDistance = scene.camera.focusDistance;
+    vex::rtUniformsSetVec3(u.cameraUp,       up);
+    u.sampleCount   = m_vkSampleCount;
+    u.width         = w;
+    u.height        = h;
+    u.maxDepth      = m_vkMaxDepth;
+    u.rayEps        = m_vkRayEps;
+    u.enableNEE             = m_vkEnableNEE             ? 1u : 0u;
+    u.enableAA              = m_vkEnableAA              ? 1u : 0u;
+    u.enableFireflyClamping = m_vkEnableFireflyClamping ? 1u : 0u;
+    u.enableEnvLighting     = m_vkEnableEnvLighting     ? 1u : 0u;
+    u.envLightMultiplier    = m_vkEnvLightMultiplier;
+    u.flatShading           = m_vkFlatShading           ? 1u : 0u;
+    u.enableNormalMapping   = m_vkEnableNormalMapping   ? 1u : 0u;
+    u.enableEmissive        = m_vkEnableEmissive        ? 1u : 0u;
+    u.enableRR              = m_vkEnableRR              ? 1u : 0u;
+
+    // Point light
+    vex::rtUniformsSetVec3(u.pointLightPos,   scene.lightPos);
+    vex::rtUniformsSetVec3(u.pointLightColor, scene.lightColor * scene.lightIntensity);
+    u.pointLightEnabled = scene.showLight ? 1u : 0u;
+
+    // Sun / directional light
+    vex::rtUniformsSetVec3(u.sunDir,   sunDir);
+    vex::rtUniformsSetVec3(u.sunColor, scene.sunColor * scene.sunIntensity);
+    u.sunAngularRadius = scene.sunAngularRadius;
+    u.sunEnabled       = scene.showSun ? 1u : 0u;
+
+    // Environment
+    vex::rtUniformsSetVec3(u.envColor, scene.skyboxColor);
+    u.hasEnvMap    = (m_vkEnvMapW > 0) ? 1u : 0u;
+    u.envMapWidth  = m_vkEnvMapW;
+    u.envMapHeight = m_vkEnvMapH;
+    u.hasEnvCDF    = m_vkEnvCdfData.empty() ? 0u : 1u;
+
+    // Light count and total area (stored in m_vkLights header)
+    u.lightCount     = 0;
+    u.totalLightArea = 0.0f;
+    if (m_vkLights.size() >= 2)
+    {
+        u.lightCount = m_vkLights[0];
+        std::memcpy(&u.totalLightArea, &m_vkLights[1], sizeof(float));
+    }
+
+    m_vkRaytracer->setUniforms(u);
+
+    // ── Trace one sample into the accumulation image (outside render pass) ────
+    // Skip if there is no TLAS (scene is empty after all objects were deleted).
+    // Tracing without a valid TLAS writes to an uninitialized descriptor and causes
+    // a GPU fault / TDR reset.
+    const bool hasTlas = (m_vkRaytracer->getTlas().handle != VK_NULL_HANDLE);
+
+    auto cmd = vex::VKContext::get().getCurrentCommandBuffer();
+    if (hasTlas)
+    {
+        m_vkRaytracer->trace(cmd);
+        ++m_vkSampleCount;
+        m_vkRaytracer->postTraceBarrier(cmd);
+    }
+
+    // ── GPU-side display: sample accumulation image directly ──────────────────
+    m_framebuffer->bind();
+    m_framebuffer->clear(0.0f, 0.0f, 0.0f, 1.0f);
+
+    if (m_vkFullscreenRTShader && hasTlas)
+    {
+        auto* rtShaderVK = static_cast<vex::VKShader*>(m_vkFullscreenRTShader.get());
+
+        // Update push-constant floats before bind() pushes them
+        m_vkFullscreenRTShader->setFloat("u_sampleCount", static_cast<float>(m_vkSampleCount));
+        m_vkFullscreenRTShader->setFloat("u_exposure",    m_vkExposure);
+        m_vkFullscreenRTShader->setFloat("u_gamma",       m_vkGamma);
+        m_vkFullscreenRTShader->bind();
+        // setBool pushes after bind, ensuring the final push contains all values
+        m_vkFullscreenRTShader->setBool("u_enableACES", m_vkEnableACES);
+        m_vkFullscreenRTShader->setBool("u_flipV",      true);
+
+        rtShaderVK->setExternalTextureVK(0,
+            m_vkRaytracer->getOutputImageView(),
+            m_vkRaytracer->getDisplaySampler(),
+            VK_IMAGE_LAYOUT_GENERAL);
+
+        m_fullscreenQuad->draw();
+        m_vkFullscreenRTShader->unbind();
+    }
+
+    m_framebuffer->unbind();
+    m_drawCalls = 1;
+}
+#endif // VEX_BACKEND_VULKAN

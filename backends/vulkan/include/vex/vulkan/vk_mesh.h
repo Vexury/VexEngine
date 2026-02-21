@@ -21,11 +21,17 @@ public:
     void upload(const MeshData& data) override;
     void draw() const override;
 
+    VkBuffer  getVertexBuffer() const { return m_vertexBuffer; }
+    VkBuffer  getIndexBuffer()  const { return m_indexBuffer; }
+    uint32_t  getVertexCount()  const { return m_vertexCount; }
+    uint32_t  getIndexCount()   const { return m_indexCount; }
+
 private:
     VkBuffer      m_vertexBuffer     = VK_NULL_HANDLE;
     VmaAllocation m_vertexAllocation = VK_NULL_HANDLE;
     VkBuffer      m_indexBuffer      = VK_NULL_HANDLE;
     VmaAllocation m_indexAllocation  = VK_NULL_HANDLE;
+    uint32_t      m_vertexCount      = 0;
     uint32_t      m_indexCount       = 0;
 };
 

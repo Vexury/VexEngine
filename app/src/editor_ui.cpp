@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 #include <vex/core/log.h>
 #include <vex/graphics/framebuffer.h>
@@ -159,7 +160,9 @@ void EditorUI::renderHierarchy(Scene& scene, SceneRenderer& renderer)
     // Import button
     if (ImGui::Button("Import OBJ..."))
     {
+        vex::Log::info("File dialog opened");
         std::string path = openObjFileDialog();
+        vex::Log::info(path.empty() ? "File dialog cancelled" : "File dialog closed: " + path);
         if (!path.empty())
         {
             // Extract filename without extension for display name
@@ -583,6 +586,14 @@ void EditorUI::renderConsole()
                 prefix = "[INFO] ";
                 break;
         }
+        // Dim timestamp
+        char tsBuf[16];
+        std::snprintf(tsBuf, sizeof(tsBuf), "[%7.3fs] ", entry.timestamp);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.45f, 0.45f, 1.0f));
+        ImGui::TextUnformatted(tsBuf);
+        ImGui::PopStyleColor();
+        ImGui::SameLine(0.0f, 0.0f);
+
         ImGui::PushStyleColor(ImGuiCol_Text, color);
         ImGui::TextUnformatted(prefix);
         ImGui::SameLine(0.0f, 0.0f);

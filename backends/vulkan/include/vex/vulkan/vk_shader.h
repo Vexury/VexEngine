@@ -51,6 +51,8 @@ public:
     void setMat4(const std::string& name, const glm::mat4& value) override;
 
     void setTexture(uint32_t slot, Texture2D* tex) override;
+    void setExternalTextureVK(uint32_t slot, VkImageView view, VkSampler sampler, VkImageLayout layout);
+    void clearExternalTextureCache();
 
     void setWireframe(bool enabled) override;
     void preparePipeline(const Framebuffer& fb) override;
@@ -90,22 +92,31 @@ private:
 
     // Texture descriptor set cache (per VKTexture2D*)
     std::unordered_map<VKTexture2D*, VkDescriptorSet> m_textureDescriptorSets;
+    // Separate pool for external image views (e.g. RT output) so it can be
+    // reset independently without touching material texture sets.
+    VkDescriptorPool m_externalTexturePool = VK_NULL_HANDLE;
+    std::unordered_map<VkImageView, VkDescriptorSet> m_externalTextureDescSets;
 
     MeshUBO m_uboData{};
     std::unordered_map<std::string, size_t> m_uniformOffsets;
     size_t m_uboSize = sizeof(MeshUBO);
 
     struct MeshPushConstant {
-        uint32_t alphaClip    = 0;
-        int32_t  debugMode    = 0;
-        float    nearPlane    = 0.01f;
-        float    farPlane     = 1000.0f;
-        int32_t  materialType = 0;
-        float    roughness    = 0.5f;
-        float    metallic     = 0.0f;
-        uint32_t hasNormalMap  = 0;
-        uint32_t hasRoughnessMap = 0;
-        uint32_t hasMetallicMap  = 0;
+        uint32_t alphaClip      = 0;   // offset  0
+        int32_t  debugMode      = 0;   // offset  4
+        float    nearPlane      = 0.01f; // offset 8
+        float    farPlane       = 1000.0f; // offset 12
+        int32_t  materialType   = 0;   // offset 16
+        float    roughness      = 0.5f; // offset 20
+        float    metallic       = 0.0f; // offset 24
+        uint32_t hasNormalMap   = 0;   // offset 28
+        uint32_t hasRoughnessMap = 0;  // offset 32
+        uint32_t hasMetallicMap = 0;   // offset 36
+        uint32_t flipV          = 0;   // offset 40
+        float    sampleCount    = 1.0f; // offset 44
+        float    exposure       = 0.0f; // offset 48
+        float    gamma          = 2.2f; // offset 52
+        uint32_t enableACES     = 1u;  // offset 56
     };
     MeshPushConstant m_pushData{};
 

@@ -7,6 +7,7 @@ add_library(vex_vulkan STATIC
     src/vk_framebuffer.cpp
     src/vk_mesh.cpp
     src/vk_skybox.cpp
+    src/vk_gpu_raytracer.cpp
 )
 
 target_include_directories(vex_vulkan

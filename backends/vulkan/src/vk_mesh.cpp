@@ -71,17 +71,23 @@ static void createGPUBuffer(const void* data, VkDeviceSize size,
 
 void VKMesh::upload(const MeshData& data)
 {
-    m_indexCount = static_cast<uint32_t>(data.indices.size());
+    m_vertexCount = static_cast<uint32_t>(data.vertices.size());
+    m_indexCount  = static_cast<uint32_t>(data.indices.size());
 
     VkDeviceSize vertexSize = static_cast<VkDeviceSize>(data.vertices.size() * sizeof(Vertex));
-    VkDeviceSize indexSize = static_cast<VkDeviceSize>(data.indices.size() * sizeof(uint32_t));
+    VkDeviceSize indexSize  = static_cast<VkDeviceSize>(data.indices.size()  * sizeof(uint32_t));
+
+    // AS build input flags required for BLAS construction
+    constexpr VkBufferUsageFlags kASInputFlags =
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
 
     createGPUBuffer(data.vertices.data(), vertexSize,
-                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | kASInputFlags,
                     m_vertexBuffer, m_vertexAllocation);
 
     createGPUBuffer(data.indices.data(), indexSize,
-                    VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                    VK_BUFFER_USAGE_INDEX_BUFFER_BIT | kASInputFlags,
                     m_indexBuffer, m_indexAllocation);
 }
 

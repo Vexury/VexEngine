@@ -7,22 +7,50 @@ function(compile_shaders TARGET SHADER_DIR)
         message(FATAL_ERROR "glslc not found. Install the Vulkan SDK or add glslc to PATH.")
     endif()
 
+    # Regular graphics / compute shaders
     file(GLOB SHADER_SOURCES
         "${SHADER_DIR}/*.vert"
         "${SHADER_DIR}/*.frag"
         "${SHADER_DIR}/*.comp"
     )
 
+    # Ray tracing shader stages
+    file(GLOB RT_SHADER_SOURCES
+        "${SHADER_DIR}/*.rgen"
+        "${SHADER_DIR}/*.rmiss"
+        "${SHADER_DIR}/*.rchit"
+        "${SHADER_DIR}/*.rahit"
+        "${SHADER_DIR}/*.rint"
+        "${SHADER_DIR}/*.rcall"
+    )
+
     set(SPV_OUTPUTS "")
+
+    # Compile regular shaders
     foreach(SHADER ${SHADER_SOURCES})
         get_filename_component(SHADER_NAME ${SHADER} NAME)
         set(SPV_FILE "${SHADER_DIR}/${SHADER_NAME}.spv")
 
         add_custom_command(
             OUTPUT ${SPV_FILE}
-            COMMAND ${GLSLC} "${SHADER}" -o "${SPV_FILE}"
+            COMMAND ${GLSLC} -I "${SHADER_DIR}" "${SHADER}" -o "${SPV_FILE}"
             DEPENDS ${SHADER}
             COMMENT "Compiling ${SHADER_NAME} -> SPIR-V"
+            VERBATIM
+        )
+        list(APPEND SPV_OUTPUTS ${SPV_FILE})
+    endforeach()
+
+    # Compile RT shaders with Vulkan 1.2 target (required for ray tracing extensions)
+    foreach(SHADER ${RT_SHADER_SOURCES})
+        get_filename_component(SHADER_NAME ${SHADER} NAME)
+        set(SPV_FILE "${SHADER_DIR}/${SHADER_NAME}.spv")
+
+        add_custom_command(
+            OUTPUT ${SPV_FILE}
+            COMMAND ${GLSLC} --target-env=vulkan1.2 -I "${SHADER_DIR}" "${SHADER}" -o "${SPV_FILE}"
+            DEPENDS ${SHADER}
+            COMMENT "Compiling RT shader ${SHADER_NAME} -> SPIR-V"
             VERBATIM
         )
         list(APPEND SPV_OUTPUTS ${SPV_FILE})

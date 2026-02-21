@@ -86,6 +86,9 @@ bool VKContext::init(Window& window)
         .set_surface(m_surface)
         .set_minimum_version(1, 3)
         .set_required_features(requiredFeatures)
+        .add_required_extension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)
+        .add_required_extension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)
+        .add_required_extension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)
         .prefer_gpu_device_type(vkb::PreferredDeviceType::discrete)
         .select();
 
@@ -95,9 +98,25 @@ bool VKContext::init(Window& window)
         return false;
     }
 
-    // 6. Create logical device
+    // 6. Create logical device — chain RT feature structs
+    VkPhysicalDeviceBufferDeviceAddressFeaturesKHR bdaFeatures{};
+    bdaFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES_KHR;
+    bdaFeatures.bufferDeviceAddress = VK_TRUE;
+
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeatures{};
+    asFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+    asFeatures.accelerationStructure = VK_TRUE;
+
+    VkPhysicalDeviceRayTracingPipelineFeaturesKHR rtFeatures{};
+    rtFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
+    rtFeatures.rayTracingPipeline = VK_TRUE;
+
     vkb::DeviceBuilder deviceBuilder(pdRet.value());
-    auto devRet = deviceBuilder.build();
+    auto devRet = deviceBuilder
+        .add_pNext(&bdaFeatures)
+        .add_pNext(&asFeatures)
+        .add_pNext(&rtFeatures)
+        .build();
 
     if (!devRet)
     {
@@ -128,6 +147,7 @@ bool VKContext::init(Window& window)
     vmaFunctions.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
 
     VmaAllocatorCreateInfo allocInfo{};
+    allocInfo.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
     allocInfo.physicalDevice = m_physicalDevice;
     allocInfo.device = m_device;
     allocInfo.instance = m_instance;
@@ -140,8 +160,9 @@ bool VKContext::init(Window& window)
         return false;
     }
 
-    // 10. Create swapchain
+    // 10. Create swapchain + per-image semaphores
     createSwapchain();
+    createRenderFinishedSemaphores();
 
     // 11. Create swapchain render pass
     VkAttachmentDescription colorAttachment{};
@@ -227,9 +248,17 @@ bool VKContext::init(Window& window)
     uploadFenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     vkCreateFence(m_device, &uploadFenceInfo, nullptr, &m_uploadFence);
 
-    VkPhysicalDeviceProperties props;
-    vkGetPhysicalDeviceProperties(m_physicalDevice, &props);
-    Log::info(std::string("Vulkan Device: ") + props.deviceName);
+    // Query RT pipeline properties (needed for SBT alignment in later steps)
+    m_rtProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
+    VkPhysicalDeviceProperties2 props2{};
+    props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    props2.pNext = &m_rtProperties;
+    vkGetPhysicalDeviceProperties2(m_physicalDevice, &props2);
+
+    Log::info(std::string("Vulkan Device: ") + props2.properties.deviceName);
+    Log::info("RT shaderGroupHandleSize:    " + std::to_string(m_rtProperties.shaderGroupHandleSize));
+    Log::info("RT shaderGroupBaseAlignment: " + std::to_string(m_rtProperties.shaderGroupBaseAlignment));
+    Log::info("RT maxRayRecursionDepth:     " + std::to_string(m_rtProperties.maxRayRecursionDepth));
     Log::info("Vulkan context initialized");
 
     return true;
@@ -270,6 +299,10 @@ void VKContext::destroySwapchain()
         vkDestroyFramebuffer(m_device, fb, nullptr);
     m_swapchainFramebuffers.clear();
 
+    for (auto iv : m_swapchainImageViews)
+        vkDestroyImageView(m_device, iv, nullptr);
+    m_swapchainImageViews.clear();
+
     vkb::destroy_swapchain(m_vkbSwapchain);
     m_swapchain = VK_NULL_HANDLE;
 }
@@ -287,18 +320,12 @@ void VKContext::recreateSwapchain()
 
     vkDeviceWaitIdle(m_device);
 
-    // Destroy old framebuffers
-    for (auto fb : m_swapchainFramebuffers)
-        vkDestroyFramebuffer(m_device, fb, nullptr);
-    m_swapchainFramebuffers.clear();
+    destroySwapchain();
 
-    // Destroy old image views
-    for (auto iv : m_swapchainImageViews)
-        vkDestroyImageView(m_device, iv, nullptr);
-    m_swapchainImageViews.clear();
-
-    // Recreate swapchain
+    // Recreate swapchain + per-image semaphores
+    destroyRenderFinishedSemaphores();
     createSwapchain();
+    createRenderFinishedSemaphores();
 
     // Recreate framebuffers
     m_swapchainFramebuffers.resize(m_swapchainImageViews.size());
@@ -337,7 +364,6 @@ void VKContext::createFrameData()
         VkSemaphoreCreateInfo semInfo{};
         semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
         vkCreateSemaphore(m_device, &semInfo, nullptr, &m_frames[i].imageAvailable);
-        vkCreateSemaphore(m_device, &semInfo, nullptr, &m_frames[i].renderFinished);
 
         VkFenceCreateInfo fenceInfo{};
         fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
@@ -351,10 +377,25 @@ void VKContext::destroyFrameData()
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
     {
         vkDestroyFence(m_device, m_frames[i].inFlightFence, nullptr);
-        vkDestroySemaphore(m_device, m_frames[i].renderFinished, nullptr);
         vkDestroySemaphore(m_device, m_frames[i].imageAvailable, nullptr);
         vkDestroyCommandPool(m_device, m_frames[i].commandPool, nullptr);
     }
+}
+
+void VKContext::createRenderFinishedSemaphores()
+{
+    m_renderFinishedSemaphores.resize(m_swapchainImages.size());
+    VkSemaphoreCreateInfo semInfo{};
+    semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    for (auto& sem : m_renderFinishedSemaphores)
+        vkCreateSemaphore(m_device, &semInfo, nullptr, &sem);
+}
+
+void VKContext::destroyRenderFinishedSemaphores()
+{
+    for (auto& sem : m_renderFinishedSemaphores)
+        vkDestroySemaphore(m_device, sem, nullptr);
+    m_renderFinishedSemaphores.clear();
 }
 
 VkCommandBuffer VKContext::getCurrentCommandBuffer() const
@@ -437,6 +478,10 @@ void VKContext::endFrame()
     vkEndCommandBuffer(frame.commandBuffer);
 
     // Submit
+    // renderFinished is indexed by swapchain image, not frame, to avoid reuse while
+    // the presentation engine still holds the semaphore for a previously presented image
+    VkSemaphore renderFinished = m_renderFinishedSemaphores[m_swapchainImageIndex];
+
     VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -446,7 +491,7 @@ void VKContext::endFrame()
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &frame.commandBuffer;
     submitInfo.signalSemaphoreCount = 1;
-    submitInfo.pSignalSemaphores = &frame.renderFinished;
+    submitInfo.pSignalSemaphores = &renderFinished;
 
     vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, frame.inFlightFence);
 
@@ -454,7 +499,7 @@ void VKContext::endFrame()
     VkPresentInfoKHR presentInfo{};
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     presentInfo.waitSemaphoreCount = 1;
-    presentInfo.pWaitSemaphores = &frame.renderFinished;
+    presentInfo.pWaitSemaphores = &renderFinished;
     presentInfo.swapchainCount = 1;
     presentInfo.pSwapchains = &m_swapchain;
     presentInfo.pImageIndices = &m_swapchainImageIndex;
@@ -605,7 +650,8 @@ void VKContext::shutdown()
     // Destroy per-frame data
     destroyFrameData();
 
-    // Destroy swapchain
+    // Destroy swapchain and its per-image semaphores
+    destroyRenderFinishedSemaphores();
     destroySwapchain();
 
     // Destroy render pass

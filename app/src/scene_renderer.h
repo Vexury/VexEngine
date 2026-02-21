@@ -11,6 +11,10 @@
 #include <vex/opengl/gl_gpu_raytracer.h>
 #endif
 
+#ifdef VEX_BACKEND_VULKAN
+#include <vex/vulkan/vk_gpu_raytracer.h>
+#endif
+
 #include <glm/glm.hpp>
 
 #include <memory>
@@ -154,6 +158,9 @@ private:
 #ifdef VEX_BACKEND_OPENGL
     void renderGPURaytrace(Scene& scene);
 #endif
+#ifdef VEX_BACKEND_VULKAN
+    void renderVKRaytrace(Scene& scene);
+#endif
     void rebuildRaytraceGeometry(Scene& scene);
 
     std::unique_ptr<vex::Shader> m_meshShader;
@@ -174,6 +181,7 @@ private:
     bool m_enableNormalMapping = true;
 
     // CPU raytracing
+    bool m_cpuBVHDirty = false; // CPU BVH not yet built for current geometry
     std::unique_ptr<vex::CPURaytracer> m_cpuRaytracer;
     std::unique_ptr<vex::Texture2D> m_raytraceTexture;
     std::unique_ptr<vex::Shader> m_fullscreenShader;
@@ -205,6 +213,46 @@ private:
     float m_gpuExposure = 0.0f;
     float m_gpuGamma = 2.2f;
     bool  m_gpuEnableACES = true;
+#endif
+
+#ifdef VEX_BACKEND_VULKAN
+    std::unique_ptr<vex::VKGpuRaytracer> m_vkRaytracer;
+    std::unique_ptr<vex::Shader> m_vkFullscreenRTShader;
+
+    // VK RT scene data SSBOs (built in rebuildRaytraceGeometry)
+    std::vector<float>    m_vkTriShading;      // 13 vec4s per tri, per-submesh order
+    std::vector<uint32_t> m_vkTexData;         // texCount header + packed RGBA8 pixels
+    std::vector<uint32_t> m_vkLights;          // lightCount/area header + indices + CDF
+    std::vector<uint32_t> m_vkInstanceOffsets; // first global tri index per BLAS
+
+    // VK RT env map data (updated in renderVKRaytrace on env change)
+    std::vector<float>    m_vkEnvMapData;
+    std::vector<float>    m_vkEnvCdfData;
+    int m_vkEnvMapW = 0;
+    int m_vkEnvMapH = 0;
+
+    bool     m_vkGeomDirty   = false; // triShading/lights/tex/offsets need re-upload
+    uint32_t m_vkSampleCount = 0;     // accumulated sample counter (RNG seed)
+    uint32_t m_vkRTTexW      = 0;     // last created output image width
+    uint32_t m_vkRTTexH      = 0;     // last created output image height
+
+    // VK RT rendering settings (mirrors GPU raytracer settings for the Vulkan build)
+    int   m_vkMaxDepth              = 8;
+    bool  m_vkEnableNEE             = true;
+    bool  m_vkEnableAA              = true;
+    bool  m_vkEnableFireflyClamping = true;
+    bool  m_vkEnableEnvLighting     = false;
+    float m_vkEnvLightMultiplier    = 1.0f;
+    bool  m_vkFlatShading           = false;
+    bool  m_vkEnableNormalMapping   = true;
+    bool  m_vkEnableEmissive        = true;
+    float m_vkRayEps                = 1e-4f;
+    bool  m_vkEnableRR              = true;
+
+    // VK GPU RT display tone-mapping settings
+    float m_vkExposure   = 0.0f;
+    float m_vkGamma      = 2.2f;
+    bool  m_vkEnableACES = true;
 #endif
 
     // Camera change detection

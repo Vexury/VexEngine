@@ -21,6 +21,7 @@ public:
 
     uintptr_t getColorAttachmentHandle() const override;
     const FramebufferSpec& getSpec() const override { return m_spec; }
+    std::vector<uint8_t> readPixels() const override;
 
     VkRenderPass getRenderPass() const { return m_renderPass; }
     VkImageView  getColorImageView() const { return m_colorImageView; }

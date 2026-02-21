@@ -1,0 +1,18 @@
+#version 460
+#include "rt.common.glsl"
+
+layout(location = 0) rayPayloadInEXT HitPayload g_payload;
+hitAttributeEXT vec2 g_barycentrics;
+
+void main() {
+    uint triIdx = instanceOffsets[gl_InstanceCustomIndexEXT] + uint(gl_PrimitiveID);
+
+    if (triAlphaClip(triIdx) && triTexIdx(triIdx) >= 0) {
+        float u = g_barycentrics.x;
+        float v = g_barycentrics.y;
+        float w = 1.0 - u - v;
+        vec2 uv = w * triUV0(triIdx) + u * triUV1(triIdx) + v * triUV2(triIdx);
+        if (sampleTexture(triTexIdx(triIdx), uv).a < 0.5)
+            ignoreIntersectionEXT;
+    }
+}
