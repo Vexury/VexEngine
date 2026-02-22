@@ -187,9 +187,12 @@ private:
     float     m_shadowNormalBiasTexels = 1.5f;
     vex::AABB m_sceneAABB;             // rebuilt in rebuildRaytraceGeometry
 
-    // OpenGL-only: picking and outline shaders/framebuffer
-    std::unique_ptr<vex::Shader> m_pickShader;
-    std::unique_ptr<vex::Shader> m_outlineShader;
+    // Screen-space outline (both backends)
+    std::unique_ptr<vex::Framebuffer> m_outlineMaskFB;
+    std::unique_ptr<vex::Shader>      m_outlineMaskShader;
+
+    // OpenGL-only: picking shader/framebuffer
+    std::unique_ptr<vex::Shader>      m_pickShader;
     std::unique_ptr<vex::Framebuffer> m_pickFB;
 
     int m_drawCalls = 0;

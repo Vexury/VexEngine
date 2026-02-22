@@ -572,6 +572,13 @@ void VKShader::setBool(const std::string& name, bool value)
         vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(MeshPushConstant), &m_pushData);
     }
+    else if (name == "u_enableOutline")
+    {
+        m_pushData.enableOutline = value ? 1u : 0u;
+        auto cmd = VKContext::get().getCurrentCommandBuffer();
+        vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(MeshPushConstant), &m_pushData);
+    }
     else
     {
         auto it = m_uniformOffsets.find(name);

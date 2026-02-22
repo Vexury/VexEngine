@@ -30,7 +30,6 @@
 #include <unordered_map>
 #include <vector>
 
-static constexpr float OUTLINE_WIDTH = 0.012f;
 static constexpr float GEOMETRY_EPSILON = 1e-8f;
 
 static vex::MeshData buildFullscreenQuadData()
@@ -77,9 +76,6 @@ bool SceneRenderer::init([[maybe_unused]] Scene& scene)
     if (!m_pickShader->loadFromFiles(dir + "pick.vert" + ext, dir + "pick.frag" + ext))
         return false;
 
-    m_outlineShader = vex::Shader::create();
-    if (!m_outlineShader->loadFromFiles(dir + "outline.vert" + ext, dir + "outline.frag" + ext))
-        return false;
 #endif
 
     // Fullscreen shader and quad for raytracing display
@@ -102,6 +98,12 @@ bool SceneRenderer::init([[maybe_unused]] Scene& scene)
     if (!m_shadowShader->loadFromFiles(dir + "shadow.vert" + ext, dir + "shadow.frag" + ext))
         return false;
 
+    // Screen-space outline mask framebuffer (no depth — captures full silhouette of selected objects)
+    m_outlineMaskFB = vex::Framebuffer::create({ .width = 1280, .height = 720 });
+    m_outlineMaskShader = vex::Shader::create();
+    if (!m_outlineMaskShader->loadFromFiles(dir + "outline_mask.vert" + ext, dir + "outline_mask.frag" + ext))
+        return false;
+
     // Create backend-specific pipelines for the offscreen framebuffer
     m_meshShader->preparePipeline(*m_framebuffer);
     m_fullscreenShader->preparePipeline(*m_framebuffer);
@@ -114,6 +116,11 @@ bool SceneRenderer::init([[maybe_unused]] Scene& scene)
         auto* vkShadowFB     = static_cast<vex::VKFramebuffer*>(m_shadowFB.get());
         vkShadowShader->createPipeline(vkShadowFB->getRenderPass(),
                                        true, true, true, VK_POLYGON_MODE_FILL, true);
+
+        auto* vkMaskShader = static_cast<vex::VKShader*>(m_outlineMaskShader.get());
+        auto* vkMaskFB     = static_cast<vex::VKFramebuffer*>(m_outlineMaskFB.get());
+        vkMaskShader->createPipeline(vkMaskFB->getRenderPass(),
+                                     false, false, true, VK_POLYGON_MODE_FILL);
     }
 #endif
 
@@ -184,6 +191,8 @@ void SceneRenderer::shutdown()
         m_vkRaytracer->shutdown();
     m_vkRaytracer.reset();
 #endif
+    m_outlineMaskShader.reset();
+    m_outlineMaskFB.reset();
     m_rasterHDRFB.reset();
     m_shadowShader.reset();
     m_shadowFB.reset();
@@ -194,7 +203,6 @@ void SceneRenderer::shutdown()
     m_meshShader.reset();
     m_whiteTexture.reset();
     m_flatNormalTexture.reset();
-    m_outlineShader.reset();
     m_pickShader.reset();
     m_pickFB.reset();
     m_framebuffer.reset();
@@ -1432,51 +1440,47 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
 
     m_meshShader->unbind();
 
-#ifdef VEX_BACKEND_OPENGL
-    // --- Outline pass for selected group/submesh (rendered into same HDR buffer) ---
-    if (hasSelection)
+    renderFB->unbind();
+
+    // --- Outline mask pass: render selected geometry as solid white into mask FB ---
+    // Always runs (clears mask each frame); only draws if something is selected.
+    // Running unconditionally ensures correct VK image layout when sampling later.
     {
-        glEnable(GL_STENCIL_TEST);
-        glStencilFunc(GL_NOTEQUAL, 1, 0xFF);
-        glStencilMask(0x00);
-        glDepthMask(GL_FALSE);
+        m_outlineMaskFB->bind();
+        m_outlineMaskFB->clear(0.0f, 0.0f, 0.0f, 1.0f);
 
-        m_outlineShader->bind();
-        m_outlineShader->setMat4("u_view", view);
-        m_outlineShader->setMat4("u_projection", proj);
-        m_outlineShader->setVec3("u_outlineColor", glm::vec3(1.0f, 0.5f, 0.0f));
-
-        auto& outlineSubmeshes = scene.meshGroups[selectedGroup].submeshes;
-        if (selectedSubmesh >= 0 && selectedSubmesh < static_cast<int>(outlineSubmeshes.size()))
+        if (hasSelection)
         {
-            // Draw outline for single submesh only
-            auto& sm = outlineSubmeshes[selectedSubmesh];
-            m_outlineShader->setFloat("u_outlineWidth", OUTLINE_WIDTH);
-            sm.mesh->draw();
-            m_outlineShader->setFloat("u_outlineWidth", -OUTLINE_WIDTH);
-            sm.mesh->draw();
-        }
-        else
-        {
-            // Draw outline for all submeshes in the group
-            for (auto& sm : outlineSubmeshes)
-            {
-                m_outlineShader->setFloat("u_outlineWidth", OUTLINE_WIDTH);
-                sm.mesh->draw();
-                m_outlineShader->setFloat("u_outlineWidth", -OUTLINE_WIDTH);
-                sm.mesh->draw();
-            }
-        }
-
-        m_outlineShader->unbind();
-
-        glDepthMask(GL_TRUE);
-        glStencilMask(0xFF);
-        glDisable(GL_STENCIL_TEST);
-    }
+#ifdef VEX_BACKEND_OPENGL
+            glDisable(GL_DEPTH_TEST);
+#endif
+#ifdef VEX_BACKEND_VULKAN
+            // VK: bind() flushes UBO to GPU, so uniforms must be written first.
+            m_outlineMaskShader->setMat4("u_view", view);
+            m_outlineMaskShader->setMat4("u_projection", proj);
+            m_outlineMaskShader->bind();
+#else
+            // GL: glUniform* requires the shader to be bound first.
+            m_outlineMaskShader->bind();
+            m_outlineMaskShader->setMat4("u_view", view);
+            m_outlineMaskShader->setMat4("u_projection", proj);
 #endif
 
-    renderFB->unbind();
+            auto& maskSubmeshes = scene.meshGroups[selectedGroup].submeshes;
+            if (selectedSubmesh >= 0 && selectedSubmesh < static_cast<int>(maskSubmeshes.size()))
+                maskSubmeshes[selectedSubmesh].mesh->draw();
+            else
+                for (auto& sm : maskSubmeshes)
+                    sm.mesh->draw();
+
+            m_outlineMaskShader->unbind();
+#ifdef VEX_BACKEND_OPENGL
+            glEnable(GL_DEPTH_TEST);
+#endif
+        }
+
+        m_outlineMaskFB->unbind();
+    }
 
 #ifdef VEX_BACKEND_OPENGL
     // --- Tone-map blit: HDR intermediate buffer → output framebuffer ---
@@ -1491,11 +1495,15 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(m_rasterHDRFB->getColorAttachmentHandle()));
         m_fullscreenRTShader->setInt("u_accumMap", 0);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(m_outlineMaskFB->getColorAttachmentHandle()));
+        m_fullscreenRTShader->setInt("u_outlineMask", 1);
         m_fullscreenRTShader->setFloat("u_sampleCount", 1.0f);
         m_fullscreenRTShader->setFloat("u_exposure", m_rasterExposure);
         m_fullscreenRTShader->setFloat("u_gamma", m_rasterGamma);
         m_fullscreenRTShader->setBool("u_enableACES", m_rasterEnableACES);
         m_fullscreenRTShader->setBool("u_flipV", false); // GL framebuffer: natural bottom-left origin, no flip needed
+        m_fullscreenRTShader->setBool("u_enableOutline", hasSelection);
         m_fullscreenQuad->draw();
         m_fullscreenRTShader->unbind();
 
@@ -1526,6 +1534,14 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
             vkHDRFB->getColorImageView(),
             vkHDRFB->getColorSampler(),
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+        auto* vkMaskFB = static_cast<vex::VKFramebuffer*>(m_outlineMaskFB.get());
+        rtShaderVK->setExternalTextureVK(1,
+            vkMaskFB->getColorImageView(),
+            vkMaskFB->getColorSampler(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+        m_vkFullscreenRTShader->setBool("u_enableOutline", hasSelection);
 
         m_fullscreenQuad->draw();
         m_vkFullscreenRTShader->unbind();
@@ -1956,14 +1972,86 @@ void SceneRenderer::renderGPURaytrace(Scene& scene)
 
 std::pair<int,int> SceneRenderer::pick(Scene& scene, int pixelX, int pixelY)
 {
+#ifdef VEX_BACKEND_VULKAN
+    // CPU ray-triangle intersection (Möller–Trumbore) — no GPU readback needed.
+    // pixelX/Y come from ImGui in top-left origin space.
+    const auto& spec = m_framebuffer->getSpec();
+    float aspect = static_cast<float>(spec.width) / static_cast<float>(spec.height);
+
+    glm::mat4 view  = scene.camera.getViewMatrix();
+    glm::mat4 proj  = scene.camera.getProjectionMatrix(aspect);
+    glm::mat4 invVP = glm::inverse(proj * view);
+
+    // Convert pixel to NDC (y flipped: ImGui y=0 is top, NDC y=+1 is top).
+    float ndcX = (pixelX + 0.5f) / static_cast<float>(spec.width)  * 2.0f - 1.0f;
+    float ndcY = 1.0f - (pixelY + 0.5f) / static_cast<float>(spec.height) * 2.0f;
+
+    glm::vec4 nearH = invVP * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
+    glm::vec4 farH  = invVP * glm::vec4(ndcX, ndcY,  1.0f, 1.0f);
+    nearH /= nearH.w;
+    farH  /= farH.w;
+
+    glm::vec3 rayOrigin = glm::vec3(nearH);
+    glm::vec3 rayDir    = glm::normalize(glm::vec3(farH) - rayOrigin);
+
+    float bestT       = std::numeric_limits<float>::max();
+    int   bestGroup   = -1;
+    int   bestSubmesh = -1;
+
+    constexpr float EPS = 1e-7f;
+
+    for (int gi = 0; gi < static_cast<int>(scene.meshGroups.size()); ++gi)
+    {
+        for (int si = 0; si < static_cast<int>(scene.meshGroups[gi].submeshes.size()); ++si)
+        {
+            const auto& md      = scene.meshGroups[gi].submeshes[si].meshData;
+            const auto& verts   = md.vertices;
+            const auto& indices = md.indices;
+
+            for (size_t i = 0; i + 2 < indices.size(); i += 3)
+            {
+                glm::vec3 v0 = verts[indices[i + 0]].position;
+                glm::vec3 v1 = verts[indices[i + 1]].position;
+                glm::vec3 v2 = verts[indices[i + 2]].position;
+
+                glm::vec3 e1 = v1 - v0;
+                glm::vec3 e2 = v2 - v0;
+                glm::vec3 h  = glm::cross(rayDir, e2);
+                float     a  = glm::dot(e1, h);
+                if (a > -EPS && a < EPS) continue;
+
+                float     f = 1.0f / a;
+                glm::vec3 s = rayOrigin - v0;
+                float     u = f * glm::dot(s, h);
+                if (u < 0.0f || u > 1.0f) continue;
+
+                glm::vec3 q = glm::cross(s, e1);
+                float     v = f * glm::dot(rayDir, q);
+                if (v < 0.0f || u + v > 1.0f) continue;
+
+                float t = f * glm::dot(e2, q);
+                if (t > EPS && t < bestT)
+                {
+                    bestT       = t;
+                    bestGroup   = gi;
+                    bestSubmesh = si;
+                }
+            }
+        }
+    }
+
+    return { bestGroup, bestSubmesh };
+#endif
+
+#ifdef VEX_BACKEND_OPENGL
     if (!m_pickShader || !m_pickFB)
         return {-1, -1};
 
     const auto& mainSpec = m_framebuffer->getSpec();
-    const auto& spec = m_pickFB->getSpec();
+    const auto& pickSpec = m_pickFB->getSpec();
 
     // Ensure pick FB matches main viewport size
-    if (spec.width != mainSpec.width || spec.height != mainSpec.height)
+    if (pickSpec.width != mainSpec.width || pickSpec.height != mainSpec.height)
         m_pickFB->resize(mainSpec.width, mainSpec.height);
 
     m_pickFB->bind();
@@ -2008,6 +2096,7 @@ std::pair<int,int> SceneRenderer::pick(Scene& scene, int pixelX, int pixelY)
         return drawToMesh[objectID];
 
     return {-1, -1};
+#endif
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

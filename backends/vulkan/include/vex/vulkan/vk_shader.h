@@ -129,7 +129,8 @@ private:
         float    gamma          = 2.2f; // offset 52
         uint32_t enableACES     = 1u;  // offset 56
         uint32_t hasEmissiveMap = 0;   // offset 60
-    };                                 // total: 64 bytes
+        uint32_t enableOutline  = 0;   // offset 64
+    };                                 // total: 68 bytes
     MeshPushConstant m_pushData{};
 
     // Wireframe pipeline

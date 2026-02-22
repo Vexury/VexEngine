@@ -10,6 +10,10 @@ uniform float u_outlineWidth;
 
 void main()
 {
-    vec3 pos = aPos + normalize(aNormal) * u_outlineWidth;
-    gl_Position = u_projection * u_view * vec4(pos, 1.0);
+    vec4 clipPos  = u_projection * u_view * vec4(aPos, 1.0);
+    vec4 clipNorm = u_projection * u_view * vec4(aNormal, 0.0);
+    // Offset in clip space so the outline is u_outlineWidth NDC units thick
+    // regardless of camera distance (multiply by w to cancel perspective divide).
+    clipPos.xy += normalize(clipNorm.xy) * u_outlineWidth * clipPos.w;
+    gl_Position = clipPos;
 }

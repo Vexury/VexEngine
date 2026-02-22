@@ -8,6 +8,8 @@ uniform float u_exposure;
 uniform float u_gamma;
 uniform bool  u_enableACES;
 uniform bool  u_flipV;   // true when sampling an OpenGL framebuffer texture (row 0 = bottom)
+uniform sampler2D u_outlineMask;
+uniform bool  u_enableOutline;
 
 void main()
 {
@@ -36,6 +38,19 @@ void main()
     // Gamma correction
     float invGamma = 1.0 / u_gamma;
     c = pow(c, vec3(invGamma));
+
+    // Screen-space outline composite (display-space overlay)
+    if (u_enableOutline)
+    {
+        vec2 ts   = 1.0 / vec2(textureSize(u_outlineMask, 0));
+        float orig = texture(u_outlineMask, uv).r;
+        float dil  = 0.0;
+        for (int dx = -2; dx <= 2; dx++)
+            for (int dy = -2; dy <= 2; dy++)
+                dil = max(dil, texture(u_outlineMask, uv + vec2(dx, dy) * ts).r);
+        float ring = dil * (1.0 - orig);
+        c = mix(c, vec3(1.0, 0.5, 0.0), ring);
+    }
 
     FragColor = vec4(c, 1.0);
 }
