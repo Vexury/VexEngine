@@ -12,6 +12,7 @@ struct FramebufferSpec
     uint32_t width = 1280;
     uint32_t height = 720;
     bool hasDepth = false;
+    bool depthOnly = false; // depth-only framebuffer (for shadow maps)
 };
 
 class Framebuffer

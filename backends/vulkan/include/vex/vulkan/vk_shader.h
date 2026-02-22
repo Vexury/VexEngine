@@ -37,6 +37,10 @@ struct MeshUBO
     float     envLightMultiplier = 1.f;
     uint32_t  hasEnvMap          = 0;
     float     _pad6              = 0;
+    glm::mat4 sunShadowVP;           // light view-projection for shadow mapping
+    uint32_t  enableShadows     = 0;
+    float     shadowNormalBias  = 0.0f; // world-space normal offset scale (texel-sized)
+    float     _pad7[2]          = {};
 };
 
 class VKShader : public Shader
@@ -70,7 +74,8 @@ public:
     // Allow external render pass (for offscreen rendering)
     void createPipeline(VkRenderPass renderPass, bool depthTest = true,
                        bool depthWrite = true, bool hasVertexInput = true,
-                       VkPolygonMode polygonMode = VK_POLYGON_MODE_FILL);
+                       VkPolygonMode polygonMode = VK_POLYGON_MODE_FILL,
+                       bool depthOnly = false);
 
 private:
     VkShaderModule loadShaderModule(const std::string& path);

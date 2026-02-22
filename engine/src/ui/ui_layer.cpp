@@ -111,7 +111,7 @@ void UILayer::beginFrame()
         // Carve out the four outer regions first
         ImGuiID dockBottom = ImGui::DockBuilderSplitNode(dockMain,   ImGuiDir_Down,  0.30f, nullptr, &dockMain);
         ImGuiID dockLeft   = ImGui::DockBuilderSplitNode(dockMain,   ImGuiDir_Left,  0.20f, nullptr, &dockMain);
-        ImGuiID dockRight  = ImGui::DockBuilderSplitNode(dockMain,   ImGuiDir_Right, 0.25f, nullptr, &dockMain);
+        ImGuiID dockRight  = ImGui::DockBuilderSplitNode(dockMain,   ImGuiDir_Right, 0.35f, nullptr, &dockMain);
 
         // Right panel: Inspector on top, Settings below
         ImGuiID dockRightBottom;

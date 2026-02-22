@@ -101,6 +101,9 @@ void VKShader::buildUniformMap()
     m_uniformOffsets["u_enableEnvLighting"]  = offsetof(MeshUBO, enableEnvLighting);
     m_uniformOffsets["u_envLightMultiplier"] = offsetof(MeshUBO, envLightMultiplier);
     m_uniformOffsets["u_hasEnvMap"]          = offsetof(MeshUBO, hasEnvMap);
+    m_uniformOffsets["u_shadowViewProj"]     = offsetof(MeshUBO, sunShadowVP);
+    m_uniformOffsets["u_enableShadows"]      = offsetof(MeshUBO, enableShadows);
+    m_uniformOffsets["u_shadowNormalBias"]   = offsetof(MeshUBO, shadowNormalBias);
 }
 
 bool VKShader::loadFromFiles(const std::string& vertexPath, const std::string& fragmentPath)
@@ -151,13 +154,13 @@ bool VKShader::loadFromFiles(const std::string& vertexPath, const std::string& f
         return false;
     }
 
-    // Pipeline layout with 7 set layouts + push constant
+    // Pipeline layout with 8 set layouts + push constant
     // Set 0: UBO, Set 1: diffuse, Set 2: normal, Set 3: roughness, Set 4: metallic,
-    // Set 5: emissive, Set 6: env map
+    // Set 5: emissive, Set 6: env map, Set 7: shadow map
     VkDescriptorSetLayout setLayouts[] = {
         m_descriptorSetLayout, m_textureSetLayout, m_textureSetLayout,
         m_textureSetLayout, m_textureSetLayout, m_textureSetLayout,
-        m_textureSetLayout
+        m_textureSetLayout, m_textureSetLayout
     };
 
     VkPushConstantRange pushRange{};
@@ -167,7 +170,7 @@ bool VKShader::loadFromFiles(const std::string& vertexPath, const std::string& f
 
     VkPipelineLayoutCreateInfo plInfo{};
     plInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    plInfo.setLayoutCount = 7;
+    plInfo.setLayoutCount = 8;
     plInfo.pSetLayouts = setLayouts;
     plInfo.pushConstantRangeCount = 1;
     plInfo.pPushConstantRanges = &pushRange;
@@ -212,15 +215,15 @@ bool VKShader::loadFromFiles(const std::string& vertexPath, const std::string& f
         return false;
     }
 
-    // Small pool for external image views (e.g. RT output). Kept separate so it
+    // Small pool for external image views (e.g. RT output, shadow map). Kept separate so it
     // can be reset on resize without disturbing material texture descriptor sets.
     VkDescriptorPoolSize extPoolSize{};
     extPoolSize.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    extPoolSize.descriptorCount = 4;
+    extPoolSize.descriptorCount = 8;
 
     VkDescriptorPoolCreateInfo extDpInfo{};
     extDpInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    extDpInfo.maxSets      = 4;
+    extDpInfo.maxSets      = 8;
     extDpInfo.poolSizeCount = 1;
     extDpInfo.pPoolSizes   = &extPoolSize;
 
@@ -301,7 +304,7 @@ void VKShader::preparePipeline(const Framebuffer& fb)
 
 void VKShader::createPipeline(VkRenderPass renderPass, bool depthTest,
                                bool depthWrite, bool hasVertexInput,
-                               VkPolygonMode polygonMode)
+                               VkPolygonMode polygonMode, bool depthOnly)
 {
     auto device = VKContext::get().getDevice();
 
@@ -380,6 +383,7 @@ void VKShader::createPipeline(VkRenderPass renderPass, bool depthTest,
     rasterizer.cullMode = VK_CULL_MODE_NONE;
     rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterizer.lineWidth = 1.0f;
+    rasterizer.depthBiasEnable = VK_TRUE; // values set dynamically via vkCmdSetDepthBias
 
     VkPipelineMultisampleStateCreateInfo multisampling{};
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
@@ -397,13 +401,22 @@ void VKShader::createPipeline(VkRenderPass renderPass, bool depthTest,
 
     VkPipelineColorBlendStateCreateInfo blending{};
     blending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    blending.attachmentCount = 1;
-    blending.pAttachments = &blendAttachment;
+    if (depthOnly)
+    {
+        blending.attachmentCount = 0;
+        blending.pAttachments = nullptr;
+    }
+    else
+    {
+        blending.attachmentCount = 1;
+        blending.pAttachments = &blendAttachment;
+    }
 
-    VkDynamicState dynamicStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkDynamicState dynamicStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
+                                       VK_DYNAMIC_STATE_DEPTH_BIAS };
     VkPipelineDynamicStateCreateInfo dynamicState{};
     dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dynamicState.dynamicStateCount = 2;
+    dynamicState.dynamicStateCount = 3;
     dynamicState.pDynamicStates = dynamicStates;
 
     VkGraphicsPipelineCreateInfo pipelineInfo{};

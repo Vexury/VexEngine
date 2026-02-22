@@ -25,6 +25,10 @@ public:
     {
         return static_cast<uintptr_t>(m_colorAttachment);
     }
+    uint32_t getDepthAttachment() const { return m_depthAttachment; }
+    // Toggle compare mode so the depth texture can be sampled as a plain float in ImGui
+    void prepareDepthForDisplay();
+    void restoreDepthForSampling();
     const FramebufferSpec& getSpec() const override { return m_spec; }
 
 private:

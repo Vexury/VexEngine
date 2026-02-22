@@ -11,6 +11,7 @@
 
 #ifdef VEX_BACKEND_OPENGL
 #include <glad/glad.h>
+#include <vex/opengl/gl_framebuffer.h>
 #endif
 
 #ifdef VEX_BACKEND_VULKAN
@@ -94,11 +95,27 @@ bool SceneRenderer::init([[maybe_unused]] Scene& scene)
     m_pickFB = vex::Framebuffer::create({ .width = 1280, .height = 720, .hasDepth = true });
 #endif
 
+    // Shadow map framebuffer (depth-only, fixed resolution)
+    m_shadowFB = vex::Framebuffer::create({ .width = SHADOW_MAP_SIZE, .height = SHADOW_MAP_SIZE,
+                                            .hasDepth = true, .depthOnly = true });
+    m_shadowShader = vex::Shader::create();
+    if (!m_shadowShader->loadFromFiles(dir + "shadow.vert" + ext, dir + "shadow.frag" + ext))
+        return false;
+
     // Create backend-specific pipelines for the offscreen framebuffer
     m_meshShader->preparePipeline(*m_framebuffer);
     m_fullscreenShader->preparePipeline(*m_framebuffer);
     if (scene.skybox)
         scene.skybox->preparePipeline(*m_framebuffer);
+
+#ifdef VEX_BACKEND_VULKAN
+    {
+        auto* vkShadowShader = static_cast<vex::VKShader*>(m_shadowShader.get());
+        auto* vkShadowFB     = static_cast<vex::VKFramebuffer*>(m_shadowFB.get());
+        vkShadowShader->createPipeline(vkShadowFB->getRenderPass(),
+                                       true, true, true, VK_POLYGON_MODE_FILL, true);
+    }
+#endif
 
     // Initialize CPU raytracer
     m_cpuRaytracer = std::make_unique<vex::CPURaytracer>();
@@ -168,6 +185,8 @@ void SceneRenderer::shutdown()
     m_vkRaytracer.reset();
 #endif
     m_rasterHDRFB.reset();
+    m_shadowShader.reset();
+    m_shadowFB.reset();
     m_cpuRaytracer.reset();
     m_raytraceTexture.reset();
     m_fullscreenQuad.reset();
@@ -666,6 +685,13 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene)
         return it != textureMap.end() ? it->second : -1;
     };
 
+    // Rebuild the cached scene AABB used for shadow frustum fitting.
+    m_sceneAABB = vex::AABB{};
+    for (const auto& group : scene.meshGroups)
+        for (const auto& sm : group.submeshes)
+            for (const auto& v : sm.meshData.vertices)
+                m_sceneAABB.grow(v.position);
+
     for (const auto& group : scene.meshGroups)
     {
         for (const auto& sm : group.submeshes)
@@ -1123,6 +1149,115 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
     }
     vex::Framebuffer* renderFB = m_rasterHDRFB.get();
 
+    // --- Compute light view-projection for shadow mapping ---
+    glm::mat4 lightVP         = glm::mat4(1.0f);
+    float     shadowNormalBias = 0.0f;
+    if (scene.showSun && m_shadowFB && m_shadowShader)
+    {
+        glm::vec3 sunDir = scene.getSunDirection();
+        glm::vec3 up = (std::abs(sunDir.y) < 0.99f) ? glm::vec3(0.0f, 1.0f, 0.0f)
+                                                     : glm::vec3(1.0f, 0.0f, 0.0f);
+
+        // Fit the shadow frustum to the world-space AABB of all scene geometry.
+        // Use the cached scene AABB (built once in rebuildRaytraceGeometry).
+        // Scale it 2% from its center so PCF taps near the frustum edge don't
+        // fall outside the shadow map and get clamped to the border color.
+        // Fall back to a unit cube around the camera target if no geometry is loaded yet.
+        glm::vec3 aabbMin = m_sceneAABB.min;
+        glm::vec3 aabbMax = m_sceneAABB.max;
+        if (aabbMin.x > aabbMax.x)
+        {
+            aabbMin = scene.camera.getTarget() - glm::vec3(1.0f);
+            aabbMax = scene.camera.getTarget() + glm::vec3(1.0f);
+        }
+        glm::vec3 sceneCenter = (aabbMin + aabbMax) * 0.5f;
+        glm::vec3 halfExtent  = (aabbMax - aabbMin) * (0.5f * 1.02f);
+        aabbMin = sceneCenter - halfExtent;
+        aabbMax = sceneCenter + halfExtent;
+
+        // Eye position along the light direction doesn't matter for an ortho projection;
+        // any point behind the scene along -sunDir gives the correct view orientation.
+        glm::mat4 lightView = glm::lookAt(sceneCenter - sunDir * 100.0f, sceneCenter, up);
+
+        // Project all 8 AABB corners into light view space and read exact extents
+        float lMin = std::numeric_limits<float>::max(), lMax = -std::numeric_limits<float>::max();
+        float bMin = std::numeric_limits<float>::max(), bMax = -std::numeric_limits<float>::max();
+        float zNear = std::numeric_limits<float>::max(), zFar = -std::numeric_limits<float>::max();
+        for (int i = 0; i < 8; ++i)
+        {
+            glm::vec3 corner(
+                (i & 1) ? aabbMax.x : aabbMin.x,
+                (i & 2) ? aabbMax.y : aabbMin.y,
+                (i & 4) ? aabbMax.z : aabbMin.z
+            );
+            glm::vec4 lv = lightView * glm::vec4(corner, 1.0f);
+            lMin  = std::min(lMin,  lv.x);  lMax  = std::max(lMax,  lv.x);
+            bMin  = std::min(bMin,  lv.y);  bMax  = std::max(bMax,  lv.y);
+            zNear = std::min(zNear, -lv.z); zFar  = std::max(zFar,  -lv.z);
+        }
+
+        // Small margin so shadow casters exactly at the boundary don't get clipped
+        float margin    = (zFar - zNear) * 0.05f + 0.1f;
+        float lightNear = std::max(0.01f, zNear - margin);
+        float lightFar  = zFar + margin;
+
+#ifdef VEX_BACKEND_VULKAN
+        glm::mat4 lightProj = glm::orthoRH_ZO(lMin, lMax, bMin, bMax, lightNear, lightFar);
+#else
+        glm::mat4 lightProj = glm::ortho(lMin, lMax, bMin, bMax, lightNear, lightFar);
+#endif
+        lightVP = lightProj * lightView;
+
+        // Normal offset bias scaled to the actual world-space texel size.
+        // Use the larger of the two ortho extents to stay conservative.
+        float orthoSize = std::max(lMax - lMin, bMax - bMin) * 0.5f;
+        shadowNormalBias = m_shadowNormalBiasTexels * (2.0f * orthoSize / float(SHADOW_MAP_SIZE));
+
+        // --- Shadow pass (depth-only) ---
+        // Restore GL depth compare mode in case it was disabled for ImGui display last frame
+#ifdef VEX_BACKEND_OPENGL
+        static_cast<vex::GLFramebuffer*>(m_shadowFB.get())->restoreDepthForSampling();
+#endif
+        // Set VP into shadow shader's UBO before bind() so Vulkan sees it this frame
+        m_shadowShader->setMat4("u_shadowViewProj", lightVP);
+
+        m_shadowFB->bind();
+        m_shadowFB->clear(0.0f, 0.0f, 0.0f, 1.0f);
+        m_shadowShader->bind();
+
+        // OpenGL: set the actual GL uniform (after bind, program is active)
+        // Vulkan: "u_lightViewProj" not in uniform map → no-op
+        m_shadowShader->setMat4("u_lightViewProj", lightVP);
+
+        // Small constant hardware depth bias during shadow rendering.
+        // Normal offset (in mesh.frag) handles grazing angles; this tiny constant
+        // covers surfaces that directly face the light (where normal offset → 0).
+        // Slope-scale is intentionally zero: at grazing angles tan(theta) → infinity,
+        // which creates the exact peter-panning gap we are trying to avoid.
+#ifdef VEX_BACKEND_OPENGL
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(0.0f, 4.0f); // constant only, no slope component
+#endif
+#ifdef VEX_BACKEND_VULKAN
+        vkCmdSetDepthBias(vex::VKContext::get().getCurrentCommandBuffer(), 1.25f, 0.0f, 0.0f);
+#endif
+
+        for (auto& group : scene.meshGroups)
+            for (auto& sm : group.submeshes)
+                sm.mesh->draw();
+
+#ifdef VEX_BACKEND_OPENGL
+        glDisable(GL_POLYGON_OFFSET_FILL);
+#endif
+#ifdef VEX_BACKEND_VULKAN
+        vkCmdSetDepthBias(vex::VKContext::get().getCurrentCommandBuffer(), 0.0f, 0.0f, 0.0f);
+#endif
+
+        m_shadowShader->unbind();
+        m_shadowFB->unbind();
+        m_shadowMapEverRendered = true;
+    }
+
     renderFB->bind();
 
 #ifdef VEX_BACKEND_VULKAN
@@ -1191,6 +1326,17 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
         m_meshShader->setVec3("u_envColor", envCol);
         m_meshShader->setFloat("u_envLightMultiplier", m_rasterEnvLightMultiplier);
 
+        // Bind shadow map (slot 6) and set shadow uniforms
+        if (m_shadowFB)
+        {
+            auto* glShadowFB = static_cast<vex::GLFramebuffer*>(m_shadowFB.get());
+            glActiveTexture(GL_TEXTURE6);
+            glBindTexture(GL_TEXTURE_2D, glShadowFB->getDepthAttachment());
+            m_meshShader->setInt("u_shadowMap", 6);
+            m_meshShader->setMat4("u_shadowViewProj", lightVP);
+            m_meshShader->setBool("u_enableShadows", scene.showSun);
+            m_meshShader->setFloat("u_shadowNormalBias", shadowNormalBias);
+        }
     }
 #endif
 
@@ -1204,6 +1350,21 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
         m_meshShader->setBool("u_hasEnvMap", hasEnvMap && m_rasterEnableEnvLighting);
         // Bind env map at slot 5 (→ descriptor set 6)
         m_meshShader->setTexture(5, hasEnvMap ? m_vkRasterEnvTex.get() : m_whiteTexture.get());
+
+        // Shadow map and shadow uniforms
+        m_meshShader->setMat4("u_shadowViewProj", lightVP);
+        m_meshShader->setBool("u_enableShadows", scene.showSun);
+        m_meshShader->setFloat("u_shadowNormalBias", shadowNormalBias);
+        if (m_shadowFB)
+        {
+            auto* vkShadowFB    = static_cast<vex::VKFramebuffer*>(m_shadowFB.get());
+            auto* vkMeshShader  = static_cast<vex::VKShader*>(m_meshShader.get());
+            // Bind shadow depth at slot 6 (→ descriptor set 7)
+            vkMeshShader->setExternalTextureVK(6,
+                vkShadowFB->getDepthImageView(),
+                vkShadowFB->getDepthCompSampler(),
+                VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+        }
     }
 #endif
 
@@ -2163,3 +2324,33 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
     m_drawCalls = 1;
 }
 #endif // VEX_BACKEND_VULKAN
+
+// ---------------------------------------------------------------------------
+// Shadow map debug display
+// ---------------------------------------------------------------------------
+
+uintptr_t SceneRenderer::getShadowMapDisplayHandle()
+{
+    if (!m_shadowFB || !m_shadowMapEverRendered)
+        return 0;
+
+#ifdef VEX_BACKEND_OPENGL
+    auto* fb = static_cast<vex::GLFramebuffer*>(m_shadowFB.get());
+    fb->prepareDepthForDisplay();
+    return static_cast<uintptr_t>(fb->getDepthAttachment());
+#else
+    auto* fb = static_cast<vex::VKFramebuffer*>(m_shadowFB.get());
+    return fb->getDepthImGuiHandle();
+#endif
+}
+
+bool SceneRenderer::shadowMapFlipsUV() const
+{
+#ifdef VEX_BACKEND_VULKAN
+    // Shadow map uses standard (non-Y-flipped) viewport → row 0 = NDC y=-1 = scene bottom.
+    // ImGui's UV y=0 maps to image top, so the display appears inverted — flip to correct.
+    return m_shadowFB != nullptr;
+#else
+    return m_shadowFB ? m_shadowFB->flipsUV() : false;
+#endif
+}

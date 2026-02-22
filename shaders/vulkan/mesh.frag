@@ -26,6 +26,11 @@ layout(set = 0, binding = 0) uniform UBO {
     float envLightMultiplier;
     uint  hasEnvMap;
     float _pad6;
+    mat4  sunShadowVP;
+    uint  enableShadows;
+    float shadowNormalBias; // world-space normal offset per shadow texel
+    float _pad7b;
+    float _pad7c;
 };
 
 layout(set = 1, binding = 0) uniform sampler2D u_diffuseMap;
@@ -34,6 +39,7 @@ layout(set = 3, binding = 0) uniform sampler2D u_roughnessMap;
 layout(set = 4, binding = 0) uniform sampler2D u_metallicMap;
 layout(set = 5, binding = 0) uniform sampler2D u_emissiveMap;
 layout(set = 6, binding = 0) uniform sampler2D u_envMap;
+layout(set = 7, binding = 0) uniform sampler2DShadow u_shadowMap;
 
 layout(push_constant) uniform PC {
     uint  alphaClip;
@@ -216,6 +222,61 @@ void main()
     // Directional (sun) light
     vec3 sunL = normalize(-sunDirection);
     vec3 sunContrib = cookTorranceBRDF(N, V, sunL, baseColor, alpha, metallic) * sunColor;
+
+    // Shadow map (PCF 3x3) with normal offset bias.
+    // Instead of biasing the depth value (which causes either acne or peter-panning),
+    // we shift the shadow lookup point along the surface normal in world space.
+    // The offset scales with sin(theta) = sqrt(1 - NdotL^2): zero when the surface
+    // directly faces the light (no offset needed), maximum at grazing angles (most needed).
+    // shadowNormalBias is pre-scaled to world-space texel size on the CPU.
+    // PCF 3x3 with normal offset + receiver plane depth bias (RPDB).
+    //
+    // Normal offset: shifts the shadow lookup point along the surface normal by
+    //   sin(theta)*shadowNormalBias world units. Prevents acne and peter-panning
+    //   at grazing angles without requiring a per-scene depth bias tweak.
+    //
+    // RPDB: the 3x3 kernel samples at ±1 texel offsets in shadow UV space, but a
+    //   sloped receiver surface has different depths at those neighbor texels. Using
+    //   the same shadowCoord.z for all 9 taps causes the corner taps to compare
+    //   against the wrong depth → acne on moderately-lit faces. RPDB computes
+    //   dZ/dU and dZ/dV via screen-space derivatives and adjusts each tap's
+    //   reference depth to match the actual surface slope, fixing the acne cleanly.
+    if (enableShadows != 0u)
+    {
+        float nDotL    = max(dot(N, sunL), 0.0);
+        float sinTheta = sqrt(max(0.0, 1.0 - nDotL * nDotL));
+        vec3  biasedPos = vWorldPos + N * (shadowNormalBias * sinTheta);
+
+        vec4 shadowClip = sunShadowVP * vec4(biasedPos, 1.0);
+        vec3 shadowCoord = shadowClip.xyz / shadowClip.w;
+        shadowCoord.xy = shadowCoord.xy * 0.5 + 0.5;
+
+        // Receiver plane depth bias: solve the 2x2 Jacobian for dZ/d(UV).
+        // dsc_dx/dy are screen-space derivatives of the shadow UV+depth triple.
+        vec3  dsc_dx = dFdx(shadowCoord);
+        vec3  dsc_dy = dFdy(shadowCoord);
+        float det    = dsc_dx.x * dsc_dy.y - dsc_dy.x * dsc_dx.y;
+        vec2  dzdUV  = vec2(0.0);
+        if (abs(det) > 1e-10)
+        {
+            dzdUV.x = dsc_dy.y * dsc_dx.z - dsc_dx.y * dsc_dy.z;
+            dzdUV.y = dsc_dx.x * dsc_dy.z - dsc_dy.x * dsc_dx.z;
+            dzdUV  /= det;
+        }
+
+        float shadow   = 0.0;
+        vec2  texelSize = 1.0 / vec2(textureSize(u_shadowMap, 0));
+        for (int x = -1; x <= 1; ++x)
+            for (int y = -1; y <= 1; ++y)
+            {
+                vec2  tapOffset = vec2(x, y) * texelSize;
+                // Clamp per-tap depth adjustment to avoid blow-up at triangle edges.
+                float tapZ = shadowCoord.z + clamp(dot(tapOffset, dzdUV), -0.005, 0.005);
+                shadow += texture(u_shadowMap, vec3(shadowCoord.xy + tapOffset, tapZ));
+            }
+        shadow /= 9.0;
+        sunContrib *= shadow;
+    }
 
     vec3 result = ambient
                 + pointContrib * attenuation

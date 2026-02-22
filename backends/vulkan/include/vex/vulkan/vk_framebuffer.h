@@ -26,6 +26,9 @@ public:
     VkRenderPass getRenderPass() const { return m_renderPass; }
     VkImageView  getColorImageView() const { return m_colorImageView; }
     VkSampler    getColorSampler()   const { return m_colorSampler; }
+    VkImageView  getDepthImageView()    const { return m_depthImageView; }
+    VkSampler    getDepthCompSampler()  const { return m_depthCompSampler; }
+    uintptr_t    getDepthImGuiHandle()  const; // for debug display (non-compare sampler)
 
 private:
     void createRenderPass();
@@ -43,15 +46,18 @@ private:
     VkSampler     m_colorSampler    = VK_NULL_HANDLE;
 
     // Depth attachment
-    VkImage       m_depthImage      = VK_NULL_HANDLE;
-    VmaAllocation m_depthAllocation = VK_NULL_HANDLE;
-    VkImageView   m_depthImageView  = VK_NULL_HANDLE;
+    VkImage       m_depthImage         = VK_NULL_HANDLE;
+    VmaAllocation m_depthAllocation    = VK_NULL_HANDLE;
+    VkImageView   m_depthImageView     = VK_NULL_HANDLE;
+    VkSampler     m_depthCompSampler    = VK_NULL_HANDLE; // compare sampler for shadow mapping
+    VkSampler     m_depthDisplaySampler = VK_NULL_HANDLE; // regular sampler for ImGui preview
 
     VkRenderPass  m_renderPass  = VK_NULL_HANDLE;
     VkFramebuffer m_framebuffer = VK_NULL_HANDLE;
 
-    // ImGui descriptor for displaying the color attachment
-    VkDescriptorSet m_imguiDescriptor = VK_NULL_HANDLE;
+    // ImGui descriptors
+    VkDescriptorSet m_imguiDescriptor      = VK_NULL_HANDLE; // color attachment display
+    VkDescriptorSet m_depthImGuiDescriptor = VK_NULL_HANDLE; // depth attachment display
 };
 
 } // namespace vex

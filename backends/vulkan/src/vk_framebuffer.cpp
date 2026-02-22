@@ -40,6 +40,60 @@ void VKFramebuffer::createRenderPass()
     VkFormat colorFormat = VK_FORMAT_R8G8B8A8_UNORM;
     VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
 
+    if (m_spec.depthOnly)
+    {
+        // Depth-only render pass for shadow mapping
+        VkAttachmentDescription depthAttachment{};
+        depthAttachment.format = depthFormat;
+        depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+
+        VkAttachmentReference depthRef{};
+        depthRef.attachment = 0;
+        depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 0;
+        subpass.pDepthStencilAttachment = &depthRef;
+
+        std::array<VkSubpassDependency, 2> deps{};
+        deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+        deps[0].dstSubpass = 0;
+        deps[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        deps[0].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        deps[0].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        deps[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+
+        deps[1].srcSubpass = 0;
+        deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+        deps[1].srcStageMask = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        deps[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        deps[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+
+        VkRenderPassCreateInfo rpInfo{};
+        rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        rpInfo.attachmentCount = 1;
+        rpInfo.pAttachments = &depthAttachment;
+        rpInfo.subpassCount = 1;
+        rpInfo.pSubpasses = &subpass;
+        rpInfo.dependencyCount = 2;
+        rpInfo.pDependencies = deps.data();
+
+        if (vkCreateRenderPass(device, &rpInfo, nullptr, &m_renderPass) != VK_SUCCESS)
+            Log::error("Failed to create depth-only render pass");
+
+        return;
+    }
+
     std::array<VkAttachmentDescription, 2> attachments{};
     // Color
     attachments[0].format = colorFormat;
@@ -120,6 +174,73 @@ void VKFramebuffer::createImages()
 
     VkFormat colorFormat = VK_FORMAT_R8G8B8A8_UNORM;
     VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
+
+    if (m_spec.depthOnly)
+    {
+        // --- Depth-only image for shadow mapping ---
+        VkImageCreateInfo imgInfo{};
+        imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imgInfo.imageType = VK_IMAGE_TYPE_2D;
+        imgInfo.format = depthFormat;
+        imgInfo.extent = { m_spec.width, m_spec.height, 1 };
+        imgInfo.mipLevels = 1;
+        imgInfo.arrayLayers = 1;
+        imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imgInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        VmaAllocationCreateInfo allocInfo{};
+        allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+        vmaCreateImage(allocator, &imgInfo, &allocInfo,
+                       &m_depthImage, &m_depthAllocation, nullptr);
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_depthImage;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = depthFormat;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        vkCreateImageView(device, &viewInfo, nullptr, &m_depthImageView);
+
+        // Compare sampler for sampler2DShadow
+        VkSamplerCreateInfo samplerInfo{};
+        samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        samplerInfo.magFilter = VK_FILTER_LINEAR;
+        samplerInfo.minFilter = VK_FILTER_LINEAR;
+        samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+        samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+        samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+        samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+        samplerInfo.compareEnable = VK_TRUE;
+        samplerInfo.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+
+        vkCreateSampler(device, &samplerInfo, nullptr, &m_depthCompSampler);
+
+        // Regular (non-compare) sampler for ImGui depth preview
+        samplerInfo.compareEnable = VK_FALSE;
+        samplerInfo.compareOp     = VK_COMPARE_OP_NEVER;
+        vkCreateSampler(device, &samplerInfo, nullptr, &m_depthDisplaySampler);
+
+        // --- VkFramebuffer (depth-only) ---
+        VkFramebufferCreateInfo fbInfo{};
+        fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fbInfo.renderPass = m_renderPass;
+        fbInfo.attachmentCount = 1;
+        fbInfo.pAttachments = &m_depthImageView;
+        fbInfo.width = m_spec.width;
+        fbInfo.height = m_spec.height;
+        fbInfo.layers = 1;
+
+        if (vkCreateFramebuffer(device, &fbInfo, nullptr, &m_framebuffer) != VK_SUCCESS)
+            Log::error("Failed to create depth-only framebuffer");
+
+        return;
+    }
 
     // --- Color image ---
     {
@@ -225,20 +346,29 @@ void VKFramebuffer::destroyImages()
         ImGui_ImplVulkan_RemoveTexture(m_imguiDescriptor);
         m_imguiDescriptor = VK_NULL_HANDLE;
     }
+    if (m_depthImGuiDescriptor != VK_NULL_HANDLE)
+    {
+        ImGui_ImplVulkan_RemoveTexture(m_depthImGuiDescriptor);
+        m_depthImGuiDescriptor = VK_NULL_HANDLE;
+    }
 
-    if (m_framebuffer)    vkDestroyFramebuffer(device, m_framebuffer, nullptr);
-    if (m_colorSampler)   vkDestroySampler(device, m_colorSampler, nullptr);
-    if (m_colorImageView) vkDestroyImageView(device, m_colorImageView, nullptr);
-    if (m_colorImage)     vmaDestroyImage(allocator, m_colorImage, m_colorAllocation);
-    if (m_depthImageView) vkDestroyImageView(device, m_depthImageView, nullptr);
-    if (m_depthImage)     vmaDestroyImage(allocator, m_depthImage, m_depthAllocation);
+    if (m_framebuffer)          vkDestroyFramebuffer(device, m_framebuffer, nullptr);
+    if (m_colorSampler)         vkDestroySampler(device, m_colorSampler, nullptr);
+    if (m_colorImageView)       vkDestroyImageView(device, m_colorImageView, nullptr);
+    if (m_colorImage)           vmaDestroyImage(allocator, m_colorImage, m_colorAllocation);
+    if (m_depthCompSampler)     vkDestroySampler(device, m_depthCompSampler, nullptr);
+    if (m_depthDisplaySampler)  vkDestroySampler(device, m_depthDisplaySampler, nullptr);
+    if (m_depthImageView)       vkDestroyImageView(device, m_depthImageView, nullptr);
+    if (m_depthImage)           vmaDestroyImage(allocator, m_depthImage, m_depthAllocation);
 
-    m_framebuffer    = VK_NULL_HANDLE;
-    m_colorSampler   = VK_NULL_HANDLE;
-    m_colorImageView = VK_NULL_HANDLE;
-    m_colorImage     = VK_NULL_HANDLE;
-    m_depthImageView = VK_NULL_HANDLE;
-    m_depthImage     = VK_NULL_HANDLE;
+    m_framebuffer         = VK_NULL_HANDLE;
+    m_colorSampler        = VK_NULL_HANDLE;
+    m_colorImageView      = VK_NULL_HANDLE;
+    m_colorImage          = VK_NULL_HANDLE;
+    m_depthCompSampler    = VK_NULL_HANDLE;
+    m_depthDisplaySampler = VK_NULL_HANDLE;
+    m_depthImageView      = VK_NULL_HANDLE;
+    m_depthImage          = VK_NULL_HANDLE;
 }
 
 void VKFramebuffer::bind()
@@ -250,8 +380,11 @@ void VKFramebuffer::bind()
         vkDeviceWaitIdle(VKContext::get().getDevice());
         destroyImages();
         createImages();
-        m_imguiDescriptor = ImGui_ImplVulkan_AddTexture(
-            m_colorSampler, m_colorImageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        if (!m_spec.depthOnly)
+        {
+            m_imguiDescriptor = ImGui_ImplVulkan_AddTexture(
+                m_colorSampler, m_colorImageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        }
     }
 
     auto cmd = VKContext::get().getCurrentCommandBuffer();
@@ -266,18 +399,38 @@ void VKFramebuffer::bind()
     clearValues[0].color = { { m_clearColor[0], m_clearColor[1], m_clearColor[2], m_clearColor[3] } };
     clearValues[1].depthStencil = { 1.0f, 0 };
 
-    rpBegin.clearValueCount = m_spec.hasDepth ? 2 : 1;
+    if (m_spec.depthOnly)
+    {
+        // Depth-only: one clear value, depth only
+        clearValues[0].depthStencil = { 1.0f, 0 };
+        rpBegin.clearValueCount = 1;
+    }
+    else
+    {
+        rpBegin.clearValueCount = m_spec.hasDepth ? 2 : 1;
+    }
     rpBegin.pClearValues = clearValues.data();
 
     vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
 
     VkViewport viewport{};
-    viewport.x = 0.0f;
-    viewport.y = static_cast<float>(m_spec.height);
-    viewport.width = static_cast<float>(m_spec.width);
-    viewport.height = -static_cast<float>(m_spec.height);
+    viewport.x      = 0.0f;
+    viewport.width  = static_cast<float>(m_spec.width);
     viewport.minDepth = 0.0f;
     viewport.maxDepth = 1.0f;
+    if (m_spec.depthOnly)
+    {
+        // Shadow map: no Y-flip — depth values must map straight to the light
+        // projection's coordinate system so that UV lookups in the mesh shader are correct.
+        viewport.y      = 0.0f;
+        viewport.height = static_cast<float>(m_spec.height);
+    }
+    else
+    {
+        // Color framebuffer: flip Y so glm (OpenGL convention) renders right-side-up in Vulkan.
+        viewport.y      = static_cast<float>(m_spec.height);
+        viewport.height = -static_cast<float>(m_spec.height);
+    }
     vkCmdSetViewport(cmd, 0, 1, &viewport);
 
     VkRect2D scissor{};
@@ -311,6 +464,19 @@ void VKFramebuffer::setClearColor(float r, float g, float b, float a)
 void VKFramebuffer::clear(float r, float g, float b, float a)
 {
     setClearColor(r, g, b, a);
+}
+
+uintptr_t VKFramebuffer::getDepthImGuiHandle() const
+{
+    if (!m_depthImageView || !m_depthDisplaySampler)
+        return 0;
+    if (m_depthImGuiDescriptor == VK_NULL_HANDLE)
+    {
+        const_cast<VKFramebuffer*>(this)->m_depthImGuiDescriptor = ImGui_ImplVulkan_AddTexture(
+            m_depthDisplaySampler, m_depthImageView,
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+    }
+    return reinterpret_cast<uintptr_t>(m_depthImGuiDescriptor);
 }
 
 uintptr_t VKFramebuffer::getColorAttachmentHandle() const

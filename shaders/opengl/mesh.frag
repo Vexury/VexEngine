@@ -29,6 +29,11 @@ uniform bool u_enableEnvLighting;
 uniform vec3  u_envColor;
 uniform float u_envLightMultiplier;
 
+uniform mat4            u_shadowViewProj;
+uniform sampler2DShadow u_shadowMap;
+uniform bool            u_enableShadows;
+uniform float           u_shadowNormalBias;
+
 uniform int   u_debugMode;
 uniform float u_nearPlane;
 uniform float u_farPlane;
@@ -196,6 +201,48 @@ void main()
     // Directional (sun) light
     vec3 sunL = normalize(-u_sunDirection);
     vec3 sunContrib = cookTorranceBRDF(N, V, sunL, baseColor, alpha, metallic) * u_sunColor;
+
+    // Shadow map (PCF 3x3)
+    // Shadow map (PCF 3x3) with normal offset bias.
+    // Shifts the lookup point along the surface normal by sin(theta) * shadowNormalBias,
+    // where sin(theta) = sqrt(1 - NdotL^2). At grazing angles (NdotL→0) the offset is
+    // maximum; when facing the light (NdotL=1) it is zero. shadowNormalBias is pre-scaled
+    // to world-space texel size on the CPU, making it resolution and frustum invariant.
+    // PCF 3x3 with normal offset + receiver plane depth bias (RPDB). See VK shader for details.
+    if (u_enableShadows)
+    {
+        float nDotL    = max(dot(N, sunL), 0.0);
+        float sinTheta = sqrt(max(0.0, 1.0 - nDotL * nDotL));
+        vec3  biasedPos = vWorldPos + N * (u_shadowNormalBias * sinTheta);
+
+        vec4 shadowClip = u_shadowViewProj * vec4(biasedPos, 1.0);
+        vec3 shadowCoord = shadowClip.xyz / shadowClip.w;
+        shadowCoord.xy = shadowCoord.xy * 0.5 + 0.5;
+        shadowCoord.z  = shadowCoord.z  * 0.5 + 0.5;
+
+        vec3  dsc_dx = dFdx(shadowCoord);
+        vec3  dsc_dy = dFdy(shadowCoord);
+        float det    = dsc_dx.x * dsc_dy.y - dsc_dy.x * dsc_dx.y;
+        vec2  dzdUV  = vec2(0.0);
+        if (abs(det) > 1e-10)
+        {
+            dzdUV.x = dsc_dy.y * dsc_dx.z - dsc_dx.y * dsc_dy.z;
+            dzdUV.y = dsc_dx.x * dsc_dy.z - dsc_dy.x * dsc_dx.z;
+            dzdUV  /= det;
+        }
+
+        float shadow    = 0.0;
+        vec2  texelSize = 1.0 / vec2(textureSize(u_shadowMap, 0));
+        for (int x = -1; x <= 1; ++x)
+            for (int y = -1; y <= 1; ++y)
+            {
+                vec2  tapOffset = vec2(x, y) * texelSize;
+                float tapZ = shadowCoord.z + clamp(dot(tapOffset, dzdUV), -0.005, 0.005);
+                shadow += texture(u_shadowMap, vec3(shadowCoord.xy + tapOffset, tapZ));
+            }
+        shadow /= 9.0;
+        sunContrib *= shadow;
+    }
 
     vec3 result = ambient
                 + pointContrib * attenuation

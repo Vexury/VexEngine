@@ -346,6 +346,34 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                 if (ImGui::SliderFloat("Angular Radius", &angDeg, 0.1f, 5.0f, "%.2f deg"))
                     scene.sunAngularRadius = glm::radians(angDeg);
             }
+            ImGui::SeparatorText("Shadow Map");
+            {
+                float bias = renderer.getShadowNormalBiasTexels();
+                if (ImGui::SliderFloat("Normal Bias (texels)", &bias, 0.0f, 6.0f, "%.2f"))
+                    renderer.setShadowNormalBiasTexels(bias);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(
+                        "World-space normal offset per shadow texel.\n"
+                        "Increase to reduce acne; decrease to tighten shadow edges.\n"
+                        "Scales automatically with scene/frustum size.");
+
+                uintptr_t shadowHandle = renderer.getShadowMapDisplayHandle();
+                if (shadowHandle != 0)
+                {
+                    float avail = ImGui::GetContentRegionAvail().x;
+                    ImTextureID texID = static_cast<ImTextureID>(shadowHandle);
+                    if (renderer.shadowMapFlipsUV())
+                        ImGui::Image(texID, ImVec2(avail, avail), ImVec2(0, 1), ImVec2(1, 0));
+                    else
+                        ImGui::Image(texID, ImVec2(avail, avail));
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Shadow depth map (4096x4096)\nVulkan: red channel = depth");
+                }
+                else
+                {
+                    ImGui::TextDisabled("(enable Sun to see shadow map)");
+                }
+            }
             break;
 
         case Selection::Camera:
@@ -410,6 +438,7 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
         float rGamma = renderer.getRasterGamma();
         if (ImGui::SliderFloat("Gamma##raster", &rGamma, 1.0f, 3.0f, "%.2f"))
             renderer.setRasterGamma(rGamma);
+
     }
 
     if (m_renderModeIndex == 1)

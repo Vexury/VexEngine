@@ -31,28 +31,52 @@ void GLFramebuffer::create()
     glGenFramebuffers(1, &m_fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
 
-    // Color attachment
-    glGenTextures(1, &m_colorAttachment);
-    glBindTexture(GL_TEXTURE_2D, m_colorAttachment);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F,
-                 static_cast<GLsizei>(m_spec.width),
-                 static_cast<GLsizei>(m_spec.height),
-                 0, GL_RGBA, GL_FLOAT, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_colorAttachment, 0);
-
-    // Depth attachment
-    if (m_spec.hasDepth)
+    if (m_spec.depthOnly)
     {
+        // Depth-only framebuffer for shadow mapping
         glGenTextures(1, &m_depthAttachment);
         glBindTexture(GL_TEXTURE_2D, m_depthAttachment);
-        glTexStorage2D(GL_TEXTURE_2D, 1, GL_DEPTH24_STENCIL8,
-                       static_cast<GLsizei>(m_spec.width),
-                       static_cast<GLsizei>(m_spec.height));
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, m_depthAttachment, 0);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F,
+                     static_cast<GLsizei>(m_spec.width),
+                     static_cast<GLsizei>(m_spec.height),
+                     0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+        float borderColor[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+        glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, m_depthAttachment, 0);
+        glDrawBuffer(GL_NONE);
+        glReadBuffer(GL_NONE);
+    }
+    else
+    {
+        // Color attachment
+        glGenTextures(1, &m_colorAttachment);
+        glBindTexture(GL_TEXTURE_2D, m_colorAttachment);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F,
+                     static_cast<GLsizei>(m_spec.width),
+                     static_cast<GLsizei>(m_spec.height),
+                     0, GL_RGBA, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_colorAttachment, 0);
+
+        // Depth attachment
+        if (m_spec.hasDepth)
+        {
+            glGenTextures(1, &m_depthAttachment);
+            glBindTexture(GL_TEXTURE_2D, m_depthAttachment);
+            glTexStorage2D(GL_TEXTURE_2D, 1, GL_DEPTH24_STENCIL8,
+                           static_cast<GLsizei>(m_spec.width),
+                           static_cast<GLsizei>(m_spec.height));
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, m_depthAttachment, 0);
+        }
     }
 
     GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
@@ -98,9 +122,17 @@ void GLFramebuffer::unbind()
 
 void GLFramebuffer::clear(float r, float g, float b, float a)
 {
-    glClearColor(r, g, b, a);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-    glEnable(GL_DEPTH_TEST);
+    if (m_spec.depthOnly)
+    {
+        glClear(GL_DEPTH_BUFFER_BIT);
+        glEnable(GL_DEPTH_TEST);
+    }
+    else
+    {
+        glClearColor(r, g, b, a);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+        glEnable(GL_DEPTH_TEST);
+    }
 }
 
 int GLFramebuffer::readPixel(int x, int y) const
@@ -137,6 +169,24 @@ std::vector<uint8_t> GLFramebuffer::readPixels() const
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return pixels;
+}
+
+void GLFramebuffer::prepareDepthForDisplay()
+{
+    if (!m_depthAttachment || !m_spec.depthOnly) return;
+    // Disable compare mode so ImGui can sample the raw depth value
+    glTextureParameteri(m_depthAttachment, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+    // Swizzle depth (R channel) into all RGB channels for grayscale display
+    GLint swizzle[] = { GL_RED, GL_RED, GL_RED, GL_ONE };
+    glTextureParameteriv(m_depthAttachment, GL_TEXTURE_SWIZZLE_RGBA, swizzle);
+}
+
+void GLFramebuffer::restoreDepthForSampling()
+{
+    if (!m_depthAttachment || !m_spec.depthOnly) return;
+    glTextureParameteri(m_depthAttachment, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+    GLint swizzle[] = { GL_RED, GL_GREEN, GL_BLUE, GL_ALPHA };
+    glTextureParameteriv(m_depthAttachment, GL_TEXTURE_SWIZZLE_RGBA, swizzle);
 }
 
 void GLFramebuffer::resize(uint32_t width, uint32_t height)

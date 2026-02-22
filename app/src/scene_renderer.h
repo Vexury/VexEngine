@@ -49,6 +49,16 @@ public:
     vex::Framebuffer* getFramebuffer() { return m_framebuffer.get(); }
     int getDrawCalls() const { return m_drawCalls; }
 
+    // Shadow map debug display
+    // Returns an ImTextureID-compatible handle (0 if shadow map not yet rendered).
+    // For GL the depth texture compare mode is temporarily disabled; it is restored
+    // automatically at the start of the next renderRasterize() shadow pass.
+    uintptr_t getShadowMapDisplayHandle();
+    bool      shadowMapFlipsUV() const; // true on GL (origin bottom-left)
+
+    float getShadowNormalBiasTexels() const { return m_shadowNormalBiasTexels; }
+    void  setShadowNormalBiasTexels(float v) { m_shadowNormalBiasTexels = v; }
+
     bool saveImage(const std::string& path) const;
 
     void setRenderMode(RenderMode mode);
@@ -155,6 +165,8 @@ private:
     void renderRasterize(Scene& scene, int selectedGroup, int selectedSubmesh);
     void renderCPURaytrace(Scene& scene);
     void rebuildMaterials(Scene& scene);
+
+    static constexpr uint32_t SHADOW_MAP_SIZE = 4096;
 #ifdef VEX_BACKEND_OPENGL
     void renderGPURaytrace(Scene& scene);
 #endif
@@ -167,6 +179,13 @@ private:
     std::unique_ptr<vex::Framebuffer> m_framebuffer;
     std::unique_ptr<vex::Texture2D> m_whiteTexture;
     std::unique_ptr<vex::Texture2D> m_flatNormalTexture;
+
+    // Shadow map (directional / sun light)
+    std::unique_ptr<vex::Framebuffer> m_shadowFB;
+    std::unique_ptr<vex::Shader>      m_shadowShader;
+    bool      m_shadowMapEverRendered  = false;
+    float     m_shadowNormalBiasTexels = 1.5f;
+    vex::AABB m_sceneAABB;             // rebuilt in rebuildRaytraceGeometry
 
     // OpenGL-only: picking and outline shaders/framebuffer
     std::unique_ptr<vex::Shader> m_pickShader;
