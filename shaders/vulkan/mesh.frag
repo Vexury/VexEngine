@@ -185,13 +185,6 @@ void main()
 
     // --- Cook-Torrance GGX shading ---
 
-    // Emissive surfaces glow directly
-    if (length(vEmissive) > 0.001)
-    {
-        FragColor = vec4(vEmissive, 1.0);
-        return;
-    }
-
     vec3 V = normalize(cameraPos - vWorldPos);
     float roughness = (pc.hasRoughnessMap != 0u) ? texture(u_roughnessMap, vUV).r : pc.roughness;
     float metallic  = (pc.hasMetallicMap  != 0u) ? texture(u_metallicMap,  vUV).r : pc.metallic;
@@ -281,6 +274,7 @@ void main()
     vec3 result = ambient
                 + pointContrib * attenuation
                 + sunContrib;
+    result += vEmissive;
     if (pc.hasEmissiveMap != 0u)
         result += texture(u_emissiveMap, vUV).rgb;
     FragColor = vec4(result, 1.0);

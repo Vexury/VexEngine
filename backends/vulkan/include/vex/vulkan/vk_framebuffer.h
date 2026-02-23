@@ -29,6 +29,7 @@ public:
     VkImageView  getDepthImageView()    const { return m_depthImageView; }
     VkSampler    getDepthCompSampler()  const { return m_depthCompSampler; }
     uintptr_t    getDepthImGuiHandle()  const; // for debug display (non-compare sampler)
+    std::vector<float> readDepthPixels() const; // CPU readback of D32_SFLOAT depth image
 
 private:
     void createRenderPass();

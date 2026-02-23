@@ -223,6 +223,76 @@ bool SceneRenderer::saveImage(const std::string& path) const
     return stbi_write_png(path.c_str(), w, h, 4, pixels.data(), w * 4) != 0;
 }
 
+bool SceneRenderer::saveShadowMap(const std::string& path) const
+{
+    if (!m_shadowFB || !m_shadowMapEverRendered)
+        return false;
+
+    constexpr uint32_t OUT  = 1024;
+    constexpr uint32_t SRC  = SHADOW_MAP_SIZE; // 4096
+    constexpr uint32_t STEP = SRC / OUT;       // 4
+
+    std::vector<float>   srcDepth;
+    std::vector<uint8_t> outPixels(OUT * OUT);
+
+#ifdef VEX_BACKEND_OPENGL
+    {
+        auto* fb = static_cast<vex::GLFramebuffer*>(m_shadowFB.get());
+        fb->prepareDepthForDisplay(); // disable compare mode for raw float read
+        srcDepth.resize(static_cast<size_t>(SRC) * SRC);
+        glBindTexture(GL_TEXTURE_2D, fb->getDepthAttachment());
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, GL_FLOAT, srcDepth.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+        // compare mode stays disabled until the next shadow pass calls restoreDepthForSampling()
+
+        // Box-filter downsample; flip vertically (GL stores bottom-to-top)
+        for (uint32_t oy = 0; oy < OUT; ++oy)
+        {
+            uint32_t sy0 = (OUT - 1 - oy) * STEP;
+            for (uint32_t ox = 0; ox < OUT; ++ox)
+            {
+                float sum = 0.0f;
+                uint32_t sx0 = ox * STEP;
+                for (uint32_t dy = 0; dy < STEP; ++dy)
+                    for (uint32_t dx = 0; dx < STEP; ++dx)
+                        sum += srcDepth[(sy0 + dy) * SRC + sx0 + dx];
+                outPixels[oy * OUT + ox] = static_cast<uint8_t>(
+                    std::clamp(sum * (1.0f / float(STEP * STEP)), 0.0f, 1.0f) * 255.0f + 0.5f);
+            }
+        }
+    }
+#endif
+
+#ifdef VEX_BACKEND_VULKAN
+    {
+        auto* fb = static_cast<vex::VKFramebuffer*>(m_shadowFB.get());
+        srcDepth = fb->readDepthPixels();
+        if (srcDepth.empty())
+            return false;
+
+        // Box-filter downsample; flip vertically (shadow map row 0 = scene bottom in VK)
+        for (uint32_t oy = 0; oy < OUT; ++oy)
+        {
+            uint32_t sy0 = (OUT - 1 - oy) * STEP;
+            for (uint32_t ox = 0; ox < OUT; ++ox)
+            {
+                float sum = 0.0f;
+                uint32_t sx0 = ox * STEP;
+                for (uint32_t dy = 0; dy < STEP; ++dy)
+                    for (uint32_t dx = 0; dx < STEP; ++dx)
+                        sum += srcDepth[(sy0 + dy) * SRC + sx0 + dx];
+                outPixels[oy * OUT + ox] = static_cast<uint8_t>(
+                    std::clamp(sum * (1.0f / float(STEP * STEP)), 0.0f, 1.0f) * 255.0f + 0.5f);
+            }
+        }
+    }
+#endif
+
+    return stbi_write_png(path.c_str(),
+        static_cast<int>(OUT), static_cast<int>(OUT),
+        1, outPixels.data(), static_cast<int>(OUT)) != 0;
+}
+
 void SceneRenderer::setRenderMode(RenderMode mode)
 {
     if (m_renderMode == mode)
@@ -1160,7 +1230,7 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
     // --- Compute light view-projection for shadow mapping ---
     glm::mat4 lightVP         = glm::mat4(1.0f);
     float     shadowNormalBias = 0.0f;
-    if (scene.showSun && m_shadowFB && m_shadowShader)
+    if (scene.showSun && m_rasterEnableShadows && m_shadowFB && m_shadowShader)
     {
         glm::vec3 sunDir = scene.getSunDirection();
         glm::vec3 up = (std::abs(sunDir.y) < 0.99f) ? glm::vec3(0.0f, 1.0f, 0.0f)
@@ -1185,7 +1255,10 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
 
         // Eye position along the light direction doesn't matter for an ortho projection;
         // any point behind the scene along -sunDir gives the correct view orientation.
-        glm::mat4 lightView = glm::lookAt(sceneCenter - sunDir * 100.0f, sceneCenter, up);
+        // Place the eye far enough back that ALL AABB corners are in front of it —
+        // the half-diagonal of the AABB is the worst-case projection along any direction.
+        float eyeDist = glm::length(halfExtent) + 1.0f;
+        glm::mat4 lightView = glm::lookAt(sceneCenter - sunDir * eyeDist, sceneCenter, up);
 
         // Project all 8 AABB corners into light view space and read exact extents
         float lMin = std::numeric_limits<float>::max(), lMax = -std::numeric_limits<float>::max();
@@ -1342,7 +1415,7 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
             glBindTexture(GL_TEXTURE_2D, glShadowFB->getDepthAttachment());
             m_meshShader->setInt("u_shadowMap", 6);
             m_meshShader->setMat4("u_shadowViewProj", lightVP);
-            m_meshShader->setBool("u_enableShadows", scene.showSun);
+            m_meshShader->setBool("u_enableShadows", scene.showSun && m_rasterEnableShadows);
             m_meshShader->setFloat("u_shadowNormalBias", shadowNormalBias);
         }
     }
@@ -1361,7 +1434,7 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
 
         // Shadow map and shadow uniforms
         m_meshShader->setMat4("u_shadowViewProj", lightVP);
-        m_meshShader->setBool("u_enableShadows", scene.showSun);
+        m_meshShader->setBool("u_enableShadows", scene.showSun && m_rasterEnableShadows);
         m_meshShader->setFloat("u_shadowNormalBias", shadowNormalBias);
         if (m_shadowFB)
         {
@@ -1744,8 +1817,9 @@ void SceneRenderer::renderCPURaytrace(Scene& scene)
         m_cpuRaytracer->setDoF(scene.camera.aperture, scene.camera.focusDistance, right, up);
     }
 
-    // Trace one sample
-    m_cpuRaytracer->traceSample();
+    // Trace one sample (skip if sample limit reached)
+    if (m_cpuMaxSamples == 0 || m_cpuRaytracer->getSampleCount() < m_cpuMaxSamples)
+        m_cpuRaytracer->traceSample();
 
     // Upload result to texture
     const auto& pixels = m_cpuRaytracer->getPixelBuffer();
@@ -1938,8 +2012,9 @@ void SceneRenderer::renderGPURaytrace(Scene& scene)
         m_gpuRaytracer->setDoF(scene.camera.aperture, scene.camera.focusDistance, right, up);
     }
 
-    // Dispatch compute shader
-    m_gpuRaytracer->traceSample();
+    // Dispatch compute shader (skip if sample limit reached)
+    if (m_gpuMaxSamples == 0 || m_gpuRaytracer->getSampleCount() < m_gpuMaxSamples)
+        m_gpuRaytracer->traceSample();
 
     // Display result with tone mapping
     m_framebuffer->bind();
@@ -2114,7 +2189,8 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
     uint32_t h = spec.height;
 
     // ── Environment map change detection ──────────────────────────────────────
-    bool envChanged = false;
+    bool envChanged     = false; // any env change → accumulation reset
+    bool envDataChanged = false; // env SSBO data changed → full scene data re-upload
 
     bool customPathChanged = (scene.customEnvmapPath != m_prevCustomEnvmapPath);
     if (customPathChanged)
@@ -2123,7 +2199,8 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
     if (scene.currentEnvmap != m_prevEnvmapIndex || customPathChanged)
     {
         m_prevEnvmapIndex = scene.currentEnvmap;
-        envChanged = true;
+        envChanged     = true;
+        envDataChanged = true; // HDR pixel data (or its absence) changed in the SSBOs
 
         if (scene.currentEnvmap >= Scene::Sky)
         {
@@ -2228,7 +2305,7 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
 
     // ── Upload scene data if needed ───────────────────────────────────────────
     bool firstRender = (m_vkRTTexW == 0 && m_vkRTTexH == 0);
-    bool needUpload  = m_vkGeomDirty || envChanged || firstRender;
+    bool needUpload  = m_vkGeomDirty || envDataChanged || firstRender;
     bool needImage   = needUpload || (w != m_vkRTTexW || h != m_vkRTTexH);
 
     if (needUpload)
@@ -2376,7 +2453,7 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
     const bool hasTlas = (m_vkRaytracer->getTlas().handle != VK_NULL_HANDLE);
 
     auto cmd = vex::VKContext::get().getCurrentCommandBuffer();
-    if (hasTlas)
+    if (hasTlas && (m_gpuMaxSamples == 0 || m_vkSampleCount < m_gpuMaxSamples))
     {
         m_vkRaytracer->trace(cmd);
         ++m_vkSampleCount;

@@ -59,7 +59,16 @@ public:
     float getShadowNormalBiasTexels() const { return m_shadowNormalBiasTexels; }
     void  setShadowNormalBiasTexels(float v) { m_shadowNormalBiasTexels = v; }
 
+    bool  getRasterEnableShadows() const { return m_rasterEnableShadows; }
+    void  setRasterEnableShadows(bool v) { m_rasterEnableShadows = v; }
+
+    uint32_t getCPUMaxSamples() const { return m_cpuMaxSamples; }
+    void     setCPUMaxSamples(uint32_t v) { m_cpuMaxSamples = v; }
+    uint32_t getGPUMaxSamples() const { return m_gpuMaxSamples; }
+    void     setGPUMaxSamples(uint32_t v) { m_gpuMaxSamples = v; }
+
     bool saveImage(const std::string& path) const;
+    bool saveShadowMap(const std::string& path) const;
 
     void setRenderMode(RenderMode mode);
     RenderMode getRenderMode() const { return m_renderMode; }
@@ -185,6 +194,10 @@ private:
     std::unique_ptr<vex::Shader>      m_shadowShader;
     bool      m_shadowMapEverRendered  = false;
     float     m_shadowNormalBiasTexels = 1.5f;
+    bool      m_rasterEnableShadows    = true;
+
+    uint32_t  m_cpuMaxSamples = 0; // 0 = unlimited
+    uint32_t  m_gpuMaxSamples = 0; // 0 = unlimited (shared by GL and VK GPU RT)
     vex::AABB m_sceneAABB;             // rebuilt in rebuildRaytraceGeometry
 
     // Screen-space outline (both backends)

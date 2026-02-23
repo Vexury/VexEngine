@@ -201,11 +201,11 @@ bool VKShader::loadFromFiles(const std::string& vertexPath, const std::string& f
     // Texture descriptor pool (for per-material texture sets — diffuse + normal maps)
     VkDescriptorPoolSize texPoolSize{};
     texPoolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    texPoolSize.descriptorCount = 128;
+    texPoolSize.descriptorCount = 4096;
 
     VkDescriptorPoolCreateInfo texDpInfo{};
     texDpInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    texDpInfo.maxSets = 128;
+    texDpInfo.maxSets = 4096;
     texDpInfo.poolSizeCount = 1;
     texDpInfo.pPoolSizes = &texPoolSize;
 

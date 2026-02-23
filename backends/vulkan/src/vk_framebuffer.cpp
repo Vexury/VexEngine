@@ -479,6 +479,86 @@ uintptr_t VKFramebuffer::getDepthImGuiHandle() const
     return reinterpret_cast<uintptr_t>(m_depthImGuiDescriptor);
 }
 
+std::vector<float> VKFramebuffer::readDepthPixels() const
+{
+    if (!m_depthImage || !m_spec.depthOnly)
+        return {};
+
+    auto& ctx      = VKContext::get();
+    auto  device   = ctx.getDevice();
+    auto  allocator = ctx.getAllocator();
+
+    uint32_t w = m_spec.width;
+    uint32_t h = m_spec.height;
+    VkDeviceSize bufSize = static_cast<VkDeviceSize>(w) * h * sizeof(float);
+
+    VkBuffer      stagingBuf;
+    VmaAllocation stagingAlloc;
+    {
+        VkBufferCreateInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bi.size  = bufSize;
+        bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        VmaAllocationCreateInfo ai{};
+        ai.usage = VMA_MEMORY_USAGE_CPU_ONLY;
+        vmaCreateBuffer(allocator, &bi, &ai, &stagingBuf, &stagingAlloc, nullptr);
+    }
+
+    vkDeviceWaitIdle(device);
+
+    ctx.immediateSubmit([&](VkCommandBuffer cmd)
+    {
+        VkImageMemoryBarrier toSrc{};
+        toSrc.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        toSrc.srcAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+        toSrc.dstAccessMask       = VK_ACCESS_TRANSFER_READ_BIT;
+        toSrc.oldLayout           = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        toSrc.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        toSrc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toSrc.image               = m_depthImage;
+        toSrc.subresourceRange    = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1 };
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &toSrc);
+
+        VkBufferImageCopy region{};
+        region.bufferOffset      = 0;
+        region.bufferRowLength   = 0;
+        region.bufferImageHeight = 0;
+        region.imageSubresource  = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1 };
+        region.imageOffset       = { 0, 0, 0 };
+        region.imageExtent       = { w, h, 1 };
+        vkCmdCopyImageToBuffer(cmd, m_depthImage,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, stagingBuf, 1, &region);
+
+        VkImageMemoryBarrier toShader{};
+        toShader.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        toShader.srcAccessMask       = VK_ACCESS_TRANSFER_READ_BIT;
+        toShader.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+        toShader.oldLayout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        toShader.newLayout           = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        toShader.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toShader.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toShader.image               = m_depthImage;
+        toShader.subresourceRange    = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1 };
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &toShader);
+    });
+
+    std::vector<float> pixels(static_cast<size_t>(w) * h);
+    void* mapped;
+    vmaMapMemory(allocator, stagingAlloc, &mapped);
+    std::memcpy(pixels.data(), mapped, static_cast<size_t>(bufSize));
+    vmaUnmapMemory(allocator, stagingAlloc);
+
+    vmaDestroyBuffer(allocator, stagingBuf, stagingAlloc);
+    return pixels;
+}
+
 uintptr_t VKFramebuffer::getColorAttachmentHandle() const
 {
     if (m_imguiDescriptor == VK_NULL_HANDLE)

@@ -368,6 +368,18 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                         ImGui::Image(texID, ImVec2(avail, avail));
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("Shadow depth map (4096x4096)\nVulkan: red channel = depth");
+
+                    if (ImGui::Button("Save Shadow Map..."))
+                    {
+                        std::string savePath = saveImageFileDialog();
+                        if (!savePath.empty())
+                        {
+                            if (renderer.saveShadowMap(savePath))
+                                vex::Log::info("Saved shadow map: " + savePath);
+                            else
+                                vex::Log::error("Failed to save shadow map: " + savePath);
+                        }
+                    }
                 }
                 else
                 {
@@ -420,6 +432,11 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
         if (ImGui::Checkbox("Normal Mapping", &normalMap))
             renderer.setEnableNormalMapping(normalMap);
 
+        ImGui::SeparatorText("Shadows");
+        bool shadows = renderer.getRasterEnableShadows();
+        if (ImGui::Checkbox("Shadow Mapping", &shadows))
+            renderer.setRasterEnableShadows(shadows);
+
         ImGui::SeparatorText("Environment");
         bool rEnv = renderer.getRasterEnableEnvLighting();
         if (ImGui::Checkbox("Environment Lighting##raster", &rEnv))
@@ -443,7 +460,27 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
 
     if (m_renderModeIndex == 1)
     {
-        ImGui::Text("Samples: %u", renderer.getRaytraceSampleCount());
+        {
+            uint32_t samples = renderer.getRaytraceSampleCount();
+            uint32_t maxSamp = renderer.getCPUMaxSamples();
+            if (maxSamp > 0 && samples >= maxSamp)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 1.0f, 0.4f, 1.0f));
+                ImGui::Text("Samples: %u / %u  (converged)", samples, maxSamp);
+                ImGui::PopStyleColor();
+            }
+            else if (maxSamp > 0)
+                ImGui::Text("Samples: %u / %u", samples, maxSamp);
+            else
+                ImGui::Text("Samples: %u", samples);
+        }
+        {
+            int v = static_cast<int>(renderer.getCPUMaxSamples());
+            if (ImGui::DragInt("Max Samples##cpu", &v, 8.0f, 0, 1 << 20))
+                renderer.setCPUMaxSamples(static_cast<uint32_t>(std::max(0, v)));
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("0 = unlimited");
+        }
 
         int maxDepth = renderer.getMaxDepth();
         if (ImGui::SliderInt("Max Depth", &maxDepth, 1, 16))
@@ -512,8 +549,27 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
     }
     else if (m_renderModeIndex == 2)
     {
-        ImGui::Text("Samples: %u", renderer.getRaytraceSampleCount());
-        ImGui::SameLine();
+        {
+            uint32_t samples = renderer.getRaytraceSampleCount();
+            uint32_t maxSamp = renderer.getGPUMaxSamples();
+            if (maxSamp > 0 && samples >= maxSamp)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 1.0f, 0.4f, 1.0f));
+                ImGui::Text("Samples: %u / %u  (converged)", samples, maxSamp);
+                ImGui::PopStyleColor();
+            }
+            else if (maxSamp > 0)
+                ImGui::Text("Samples: %u / %u", samples, maxSamp);
+            else
+                ImGui::Text("Samples: %u", samples);
+        }
+        {
+            int v = static_cast<int>(renderer.getGPUMaxSamples());
+            if (ImGui::DragInt("Max Samples##gpu", &v, 8.0f, 0, 1 << 20))
+                renderer.setGPUMaxSamples(static_cast<uint32_t>(std::max(0, v)));
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("0 = unlimited");
+        }
         if (ImGui::SmallButton("Reload Shader (F5)"))
             renderer.reloadGPUShader();
 
