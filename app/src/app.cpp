@@ -33,7 +33,7 @@ bool App::init(const vex::EngineConfig& config)
     if (config.headless)
         return true;
 
-    if (!m_scene.importOBJ("assets/scenes/CornellBox/CornellBox-Original.obj", "Cornell Box"))
+    if (!m_scene.importOBJ("VexAssetsCC0/Scenes/ChessSet/ChessSet.obj", "Chess Set"))
         return false;
 
     m_scene.skybox = vex::Skybox::create();
@@ -41,8 +41,27 @@ bool App::init(const vex::EngineConfig& config)
     if (!m_renderer.init(m_scene))
         return false;
 
-    m_scene.camera.setOrbit(glm::vec3(0.0f, 1.0f, 0.0f), 4.5f, 0.0f, 0.15f);
     m_scene.camera.fov = 45.0f;
+
+    // Focus camera on the loaded scene
+    if (!m_scene.meshGroups.empty())
+    {
+        glm::vec3 sceneCenter{0.0f};
+        for (const auto& g : m_scene.meshGroups)
+            sceneCenter += g.center;
+        sceneCenter /= static_cast<float>(m_scene.meshGroups.size());
+
+        float sceneRadius = 0.0f;
+        for (const auto& g : m_scene.meshGroups)
+            sceneRadius = std::max(sceneRadius, glm::length(g.center - sceneCenter) + g.radius);
+
+        m_scene.camera.setOrbit(sceneCenter, sceneRadius * 2.5f, 0.0f, 0.15f);
+        m_scene.camera.farPlane = std::max(100.0f, sceneRadius * 4.5f);
+    }
+    else
+    {
+        m_scene.camera.setOrbit(glm::vec3(0.0f, 1.0f, 0.0f), 4.5f, 0.0f, 0.15f);
+    }
 
     m_engine.getWindow().setScrollCallback([this](double yoffset)
     {
