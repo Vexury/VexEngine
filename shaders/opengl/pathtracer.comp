@@ -89,6 +89,7 @@ uniform uint  u_triangleCount;
 uniform uint  u_bvhNodeCount;
 uniform float u_rayEps;
 uniform bool  u_enableRR;
+uniform bool  u_bilinearFiltering;
 
 uniform float u_aperture;
 uniform float u_focusDistance;
@@ -184,6 +185,11 @@ vec4 sampleTexture(int texIndex, vec2 uv) {
     float u = uv.x - floor(uv.x);
     float v = 1.0 - (uv.y - floor(uv.y));
 
+    if (!u_bilinearFiltering)
+        return fetchTexel(pixelOffset, tw, th,
+                          clamp(int(u * float(tw)), 0, tw - 1),
+                          clamp(int(v * float(th)), 0, th - 1));
+
     // Bilinear filtering: map to texel-center space
     float fu = u * float(tw) - 0.5;
     float fv = v * float(th) - 0.5;
@@ -211,6 +217,10 @@ vec3 sampleEnvironment(vec3 dir) {
     if (u_hasEnvMap && u_envMapWidth > 0) {
         float u = 0.5 + atan(dir.z, dir.x) / (2.0 * PI);
         float v = 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / PI;
+
+        if (!u_bilinearFiltering)
+            return fetchEnvTexel(clamp(int(u * float(u_envMapWidth)),  0, u_envMapWidth  - 1),
+                                 clamp(int(v * float(u_envMapHeight)), 0, u_envMapHeight - 1));
 
         float fu = u * float(u_envMapWidth)  - 0.5;
         float fv = v * float(u_envMapHeight) - 0.5;

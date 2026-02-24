@@ -133,6 +133,7 @@ void GLGPURaytracer::cacheUniformLocations()
     m_locFlatShading         = loc("u_flatShading");
     m_locEnableNormalMapping = loc("u_enableNormalMapping");
     m_locEnableEmissive      = loc("u_enableEmissive");
+    m_locBilinearFiltering   = loc("u_bilinearFiltering");
     m_locTriangleCount       = loc("u_triangleCount");
     m_locBvhNodeCount        = loc("u_bvhNodeCount");
     m_locRayEps              = loc("u_rayEps");
@@ -565,6 +566,13 @@ void GLGPURaytracer::setEnableEmissive(bool v)
     reset();
 }
 
+void GLGPURaytracer::setBilinearFiltering(bool v)
+{
+    if (m_bilinearFiltering == v) return;
+    m_bilinearFiltering = v;
+    reset();
+}
+
 void GLGPURaytracer::resize(uint32_t w, uint32_t h)
 {
     if (m_width == w && m_height == h)
@@ -622,6 +630,7 @@ void GLGPURaytracer::traceSample()
     glUniform1i(m_locFlatShading, m_flatShading ? 1 : 0);
     glUniform1i(m_locEnableNormalMapping, m_enableNormalMapping ? 1 : 0);
     glUniform1i(m_locEnableEmissive, m_enableEmissive ? 1 : 0);
+    glUniform1i(m_locBilinearFiltering, m_bilinearFiltering ? 1 : 0);
 
     glUniform3fv(m_locPointLightPos, 1, glm::value_ptr(m_pointLightPos));
     glUniform3fv(m_locPointLightColor, 1, glm::value_ptr(m_pointLightColor));

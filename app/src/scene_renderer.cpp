@@ -623,6 +623,27 @@ bool SceneRenderer::getGPUEnableEmissive() const
 #endif
 }
 
+void SceneRenderer::setGPUBilinearFiltering([[maybe_unused]] bool v)
+{
+#ifdef VEX_BACKEND_OPENGL
+    if (m_gpuRaytracer) m_gpuRaytracer->setBilinearFiltering(v);
+#endif
+#ifdef VEX_BACKEND_VULKAN
+    if (v != m_vkBilinearFiltering) { m_vkBilinearFiltering = v; if (m_vkRaytracer) { m_vkRaytracer->reset(); m_vkSampleCount = 0; } }
+#endif
+}
+
+bool SceneRenderer::getGPUBilinearFiltering() const
+{
+#ifdef VEX_BACKEND_OPENGL
+    return m_gpuRaytracer ? m_gpuRaytracer->getBilinearFiltering() : true;
+#elif defined(VEX_BACKEND_VULKAN)
+    return m_vkBilinearFiltering;
+#else
+    return true;
+#endif
+}
+
 void SceneRenderer::setGPUExposure(float v)
 {
 #ifdef VEX_BACKEND_OPENGL
@@ -2422,6 +2443,7 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
     u.flatShading           = m_vkFlatShading           ? 1u : 0u;
     u.enableNormalMapping   = m_vkEnableNormalMapping   ? 1u : 0u;
     u.enableEmissive        = m_vkEnableEmissive        ? 1u : 0u;
+    u.bilinearFiltering     = m_vkBilinearFiltering     ? 1u : 0u;
     u.enableRR              = m_vkEnableRR              ? 1u : 0u;
 
     // Point light

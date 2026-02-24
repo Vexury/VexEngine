@@ -156,6 +156,8 @@ public:
     bool getGPUEnableNormalMapping() const;
     void setGPUEnableEmissive(bool v);
     bool getGPUEnableEmissive() const;
+    void setGPUBilinearFiltering(bool v);
+    bool getGPUBilinearFiltering() const;
     void setGPUExposure(float v);
     float getGPUExposure() const;
     void setGPUGamma(float v);
@@ -284,6 +286,7 @@ private:
     bool  m_vkFlatShading           = false;
     bool  m_vkEnableNormalMapping   = true;
     bool  m_vkEnableEmissive        = true;
+    bool  m_vkBilinearFiltering     = true;
     float m_vkRayEps                = 1e-4f;
     bool  m_vkEnableRR              = true;
 

@@ -24,6 +24,9 @@ function(compile_shaders TARGET SHADER_DIR)
         "${SHADER_DIR}/*.rcall"
     )
 
+    # Include files that RT shaders depend on (via GL_GOOGLE_include_directive)
+    file(GLOB RT_SHADER_INCLUDES "${SHADER_DIR}/*.glsl")
+
     set(SPV_OUTPUTS "")
 
     # Compile regular shaders
@@ -49,7 +52,7 @@ function(compile_shaders TARGET SHADER_DIR)
         add_custom_command(
             OUTPUT ${SPV_FILE}
             COMMAND ${GLSLC} --target-env=vulkan1.2 -I "${SHADER_DIR}" "${SHADER}" -o "${SPV_FILE}"
-            DEPENDS ${SHADER}
+            DEPENDS ${SHADER} ${RT_SHADER_INCLUDES}
             COMMENT "Compiling RT shader ${SHADER_NAME} -> SPIR-V"
             VERBATIM
         )

@@ -76,7 +76,7 @@ layout(set = 0, binding = 2) uniform Uniforms {
     uint  hasEnvCDF;
     float totalLightArea;
     uint  lightCount;        // offset 272
-    uint  _pad2a;            // offset 276
+    uint  bilinearFiltering; // offset 276
     uint  _pad2b;            // offset 280
     uint  _pad2c;            // offset 284
 } u_uniforms;
@@ -194,6 +194,11 @@ vec4 sampleTexture(int texIndex, vec2 uv) {
     float u = uv.x - floor(uv.x);
     float v = 1.0 - (uv.y - floor(uv.y));
 
+    if (u_uniforms.bilinearFiltering == 0u)
+        return fetchTexel(pixelOffset, tw, th,
+                          clamp(int(u * float(tw)), 0, tw - 1),
+                          clamp(int(v * float(th)), 0, th - 1));
+
     // Bilinear filtering: map to texel-center space
     float fu = u * float(tw) - 0.5;
     float fv = v * float(th) - 0.5;
@@ -223,6 +228,10 @@ vec3 sampleEnvironment(vec3 dir) {
         float v = 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / PI;
         int W = u_uniforms.envMapWidth;
         int H = u_uniforms.envMapHeight;
+
+        if (u_uniforms.bilinearFiltering == 0u)
+            return fetchEnvTexel(clamp(int(u * float(W)), 0, W - 1),
+                                 clamp(int(v * float(H)), 0, H - 1));
 
         float fu = u * float(W) - 0.5;
         float fv = v * float(H) - 0.5;

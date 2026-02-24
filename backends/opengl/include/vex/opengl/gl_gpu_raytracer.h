@@ -47,6 +47,7 @@ public:
     void setFlatShading(bool v);
     void setEnableNormalMapping(bool v);
     void setEnableEmissive(bool v);
+    void setBilinearFiltering(bool v);
 
     void setRayEps(float v);
     float getRayEps() const { return m_rayEps; }
@@ -66,6 +67,7 @@ public:
     bool  getFlatShading() const { return m_flatShading; }
     bool getEnableNormalMapping() const { return m_enableNormalMapping; }
     bool getEnableEmissive() const { return m_enableEmissive; }
+    bool getBilinearFiltering() const { return m_bilinearFiltering; }
 
     void resize(uint32_t w, uint32_t h);
     void reset();
@@ -126,6 +128,7 @@ private:
     int32_t m_locFlatShading = -1;
     int32_t m_locEnableNormalMapping = -1;
     int32_t m_locEnableEmissive = -1;
+    int32_t m_locBilinearFiltering = -1;
     int32_t m_locTriangleCount = -1;
     int32_t m_locBvhNodeCount = -1;
     int32_t m_locRayEps = -1;
@@ -144,6 +147,7 @@ private:
     bool  m_flatShading = false;
     bool m_enableNormalMapping = true;
     bool m_enableEmissive = true;
+    bool m_bilinearFiltering = true;
 
     // Camera
     glm::vec3 m_cameraOrigin{0.0f};

@@ -615,6 +615,10 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
         if (ImGui::Checkbox("Emissive Materials", &emissive))
             renderer.setGPUEnableEmissive(emissive);
 
+        bool bilinear = renderer.getGPUBilinearFiltering();
+        if (ImGui::Checkbox("Bilinear Filtering", &bilinear))
+            renderer.setGPUBilinearFiltering(bilinear);
+
         ImGui::SeparatorText("Diagnostics");
 
         {
