@@ -21,6 +21,7 @@ target_link_libraries(vex_vulkan
         volk
         vk-bootstrap::vk-bootstrap
         GPUOpen::VulkanMemoryAllocator
+        tinyexr
 )
 
 target_compile_definitions(vex_vulkan PUBLIC VK_NO_PROTOTYPES)

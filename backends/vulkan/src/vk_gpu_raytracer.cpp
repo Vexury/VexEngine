@@ -658,6 +658,11 @@ void VKGpuRaytracer::uploadSceneData(
     const std::vector<float>&    envCdfData,
     const std::vector<uint32_t>& instanceOffsets)
 {
+    // Ensure the previous frame's RT dispatch has finished before destroying
+    // the SSBOs it was reading. The BLAS/TLAS rebuild already called
+    // vkDeviceWaitIdle, but that was before the last trace submission.
+    vkDeviceWaitIdle(VKContext::get().getDevice());
+
     // Destroy old SSBOs
     destroyBuffer(m_triShadingBuffer,      m_triShadingAlloc);
     destroyBuffer(m_lightsBuffer,          m_lightsAlloc);
@@ -848,7 +853,9 @@ bool VKGpuRaytracer::createOutputImage(uint32_t width, uint32_t height)
         vmaCreateBuffer(allocator, &bi, &ai, &m_readbackBuffer, &m_readbackAlloc, nullptr);
     }
 
-    // (Re-)allocate descriptor set
+    // (Re-)allocate descriptor set. The previous frame's RT dispatch may still
+    // be in-flight referencing the current descriptor set, so wait before reset.
+    vkDeviceWaitIdle(device);
     vkResetDescriptorPool(device, m_descPool, 0);
     VkDescriptorSetAllocateInfo setInfo{};
     setInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;

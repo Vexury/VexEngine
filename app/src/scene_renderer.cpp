@@ -8,6 +8,7 @@
 
 #include <stb_image.h>
 #include <stb_image_write.h>
+#include <tinyexr.h>
 
 #ifdef VEX_BACKEND_OPENGL
 #include <glad/glad.h>
@@ -82,6 +83,9 @@ bool SceneRenderer::init([[maybe_unused]] Scene& scene)
     m_fullscreenShader = vex::Shader::create();
     if (!m_fullscreenShader->loadFromFiles(dir + "fullscreen.vert" + ext, dir + "fullscreen.frag" + ext))
         return false;
+#ifdef VEX_BACKEND_VULKAN
+    static_cast<vex::VKShader*>(m_fullscreenShader.get())->setVertexAttrCount(5);
+#endif
 
     m_fullscreenQuad = vex::Mesh::create();
     m_fullscreenQuad->upload(buildFullscreenQuadData());
@@ -115,12 +119,12 @@ bool SceneRenderer::init([[maybe_unused]] Scene& scene)
         auto* vkShadowShader = static_cast<vex::VKShader*>(m_shadowShader.get());
         auto* vkShadowFB     = static_cast<vex::VKFramebuffer*>(m_shadowFB.get());
         vkShadowShader->createPipeline(vkShadowFB->getRenderPass(),
-                                       true, true, true, VK_POLYGON_MODE_FILL, true);
+                                       true, true, 1, VK_POLYGON_MODE_FILL, true);
 
         auto* vkMaskShader = static_cast<vex::VKShader*>(m_outlineMaskShader.get());
         auto* vkMaskFB     = static_cast<vex::VKFramebuffer*>(m_outlineMaskFB.get());
         vkMaskShader->createPipeline(vkMaskFB->getRenderPass(),
-                                     false, false, true, VK_POLYGON_MODE_FILL);
+                                     false, false, 5, VK_POLYGON_MODE_FILL);
     }
 #endif
 
@@ -160,6 +164,7 @@ bool SceneRenderer::init([[maybe_unused]] Scene& scene)
     }
 
     m_vkFullscreenRTShader = vex::Shader::create();
+    static_cast<vex::VKShader*>(m_vkFullscreenRTShader.get())->setVertexAttrCount(5);
     if (!m_vkFullscreenRTShader->loadFromFiles(dir + "fullscreen.vert" + ext, dir + "fullscreen_rt.frag" + ext))
     {
         vex::Log::error("Failed to load Vulkan fullscreen_rt shader");
@@ -172,6 +177,13 @@ bool SceneRenderer::init([[maybe_unused]] Scene& scene)
 #endif
 
     return true;
+}
+
+void SceneRenderer::waitIdle()
+{
+#ifdef VEX_BACKEND_VULKAN
+    vkDeviceWaitIdle(vex::VKContext::get().getDevice());
+#endif
 }
 
 void SceneRenderer::shutdown()
@@ -737,20 +749,56 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene)
         if (path.empty()) return -1;
         auto it = textureMap.find(path);
         if (it != textureMap.end()) return it->second;
-        int tw, th, tch;
-        stbi_set_flip_vertically_on_load(false);
-        unsigned char* texData = stbi_load(path.c_str(), &tw, &th, &tch, 4);
         int idx = -1;
-        if (texData)
+
+        // EXR path (no vertical flip — raytracer UV space matches stbi no-flip convention)
+        if (path.size() >= 4 &&
+            (path.compare(path.size() - 4, 4, ".exr") == 0 ||
+             path.compare(path.size() - 4, 4, ".EXR") == 0))
         {
-            idx = static_cast<int>(textures.size());
-            vex::CPURaytracer::TextureData td;
-            td.width  = tw;
-            td.height = th;
-            td.pixels.assign(texData, texData + tw * th * 4);
-            textures.push_back(std::move(td));
-            stbi_image_free(texData);
+            float* exrRGBA = nullptr;
+            int tw = 0, th = 0;
+            const char* err = nullptr;
+            if (LoadEXR(&exrRGBA, &tw, &th, path.c_str(), &err) == TINYEXR_SUCCESS)
+            {
+                idx = static_cast<int>(textures.size());
+                vex::CPURaytracer::TextureData td;
+                td.width  = tw;
+                td.height = th;
+                td.pixels.resize(static_cast<size_t>(tw) * th * 4);
+                for (size_t i = 0; i < td.pixels.size(); ++i)
+                    td.pixels[i] = static_cast<unsigned char>(
+                        std::clamp(exrRGBA[i], 0.0f, 1.0f) * 255.0f + 0.5f);
+                textures.push_back(std::move(td));
+                free(exrRGBA);
+            }
+            else
+            {
+                std::string errMsg = err ? err : "";
+                if (errMsg == "Unknown compression type.")
+                    errMsg += " (DWAA/DWAB not supported, re-export with ZIP or PIZ compression)";
+                vex::Log::error("Failed to load EXR texture: " + path +
+                                (errMsg.empty() ? "" : " (" + errMsg + ")"));
+                FreeEXRErrorMessage(err);
+            }
         }
+        else
+        {
+            int tw, th, tch;
+            stbi_set_flip_vertically_on_load(false);
+            unsigned char* texData = stbi_load(path.c_str(), &tw, &th, &tch, 4);
+            if (texData)
+            {
+                idx = static_cast<int>(textures.size());
+                vex::CPURaytracer::TextureData td;
+                td.width  = tw;
+                td.height = th;
+                td.pixels.assign(texData, texData + tw * th * 4);
+                textures.push_back(std::move(td));
+                stbi_image_free(texData);
+            }
+        }
+
         textureMap[path] = idx;
         return idx;
     };

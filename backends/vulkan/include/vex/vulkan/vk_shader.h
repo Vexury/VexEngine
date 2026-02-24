@@ -71,15 +71,23 @@ public:
     VkPipelineLayout getPipelineLayout() const { return m_pipelineLayout; }
     VkDescriptorSetLayout getDescriptorSetLayout() const { return m_descriptorSetLayout; }
 
+    // Sets how many consecutive vertex attribute locations (starting at 0) are
+    // bound when creating the pipeline via preparePipeline(). Default is 6
+    // (all Vertex fields). Use a lower count for shaders that don't consume
+    // all attributes (e.g. fullscreen quad shaders that only use 0-4).
+    void setVertexAttrCount(uint32_t count) { m_vertexAttrCount = count; }
+
     // Allow external render pass (for offscreen rendering)
     void createPipeline(VkRenderPass renderPass, bool depthTest = true,
-                       bool depthWrite = true, bool hasVertexInput = true,
+                       bool depthWrite = true, uint32_t vertexAttrCount = 6,
                        VkPolygonMode polygonMode = VK_POLYGON_MODE_FILL,
                        bool depthOnly = false);
 
 private:
     VkShaderModule loadShaderModule(const std::string& path);
     void buildUniformMap();
+
+    uint32_t       m_vertexAttrCount = 6;
 
     VkShaderModule m_vertModule = VK_NULL_HANDLE;
     VkShaderModule m_fragModule = VK_NULL_HANDLE;

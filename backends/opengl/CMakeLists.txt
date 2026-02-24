@@ -19,6 +19,7 @@ target_link_libraries(vex_opengl
         vex_core
         glad
         ${OPENGL_LIBRARIES}
+        tinyexr
 )
 
 set_target_properties(vex_opengl PROPERTIES FOLDER "Engine")

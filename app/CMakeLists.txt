@@ -13,6 +13,8 @@ elseif(VEX_BACKEND STREQUAL "Vulkan")
     target_link_libraries(vex_app PRIVATE vex_vulkan)
 endif()
 
+target_link_libraries(vex_app PRIVATE tinyexr)
+
 # Compile Vulkan shaders to SPIR-V
 if(VEX_BACKEND STREQUAL "Vulkan")
     include(${CMAKE_SOURCE_DIR}/cmake/modules/ShaderCompilation.cmake)

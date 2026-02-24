@@ -45,6 +45,9 @@ add_subdirectory(cmake/modules/imgui)
 set(STB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/stb)
 add_subdirectory(cmake/modules/stb)
 
+# tinyexr
+add_subdirectory(cmake/modules/tinyexr)
+
 # Vulkan-only dependencies
 if(VEX_BACKEND STREQUAL "Vulkan")
     set(VOLK_STATIC_DEFINES "" CACHE STRING "" FORCE)
@@ -58,7 +61,7 @@ if(VEX_BACKEND STREQUAL "Vulkan")
 endif()
 
 # --- IDE folder organization ---
-foreach(TARGET glfw glad glm imgui stb)
+foreach(TARGET glfw glad glm imgui stb miniz tinyexr)
     if(TARGET ${TARGET})
         set_target_properties(${TARGET} PROPERTIES FOLDER "External")
     endif()

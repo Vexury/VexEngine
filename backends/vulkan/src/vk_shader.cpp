@@ -291,19 +291,19 @@ void VKShader::preparePipeline(const Framebuffer& fb)
 {
     auto* vkFB = static_cast<const VKFramebuffer*>(&fb);
     m_cachedRenderPass = vkFB->getRenderPass();
-    createPipeline(m_cachedRenderPass, true, true, true, VK_POLYGON_MODE_FILL);
+    createPipeline(m_cachedRenderPass, true, true, m_vertexAttrCount, VK_POLYGON_MODE_FILL);
 
     // Create wireframe pipeline if device supports it
     VkPhysicalDeviceFeatures features;
     vkGetPhysicalDeviceFeatures(VKContext::get().getPhysicalDevice(), &features);
     if (features.fillModeNonSolid)
     {
-        createPipeline(m_cachedRenderPass, true, true, true, VK_POLYGON_MODE_LINE);
+        createPipeline(m_cachedRenderPass, true, true, m_vertexAttrCount, VK_POLYGON_MODE_LINE);
     }
 }
 
 void VKShader::createPipeline(VkRenderPass renderPass, bool depthTest,
-                               bool depthWrite, bool hasVertexInput,
+                               bool depthWrite, uint32_t vertexAttrCount,
                                VkPolygonMode polygonMode, bool depthOnly)
 {
     auto device = VKContext::get().getDevice();
@@ -359,11 +359,11 @@ void VKShader::createPipeline(VkRenderPass renderPass, bool depthTest,
 
     VkPipelineVertexInputStateCreateInfo vertexInput{};
     vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    if (hasVertexInput)
+    if (vertexAttrCount > 0)
     {
         vertexInput.vertexBindingDescriptionCount = 1;
         vertexInput.pVertexBindingDescriptions = &bindingDesc;
-        vertexInput.vertexAttributeDescriptionCount = 6;
+        vertexInput.vertexAttributeDescriptionCount = vertexAttrCount;
         vertexInput.pVertexAttributeDescriptions = attrDescs;
     }
 

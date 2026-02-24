@@ -120,6 +120,7 @@ void App::handleInput()
                 if (idx >= 0 && idx < static_cast<int>(m_scene.meshGroups.size()))
                 {
                     vex::Log::info("Deleted: " + m_scene.meshGroups[idx].name);
+                    m_renderer.waitIdle();
                     m_scene.meshGroups.erase(m_scene.meshGroups.begin() + idx);
                     m_scene.geometryDirty = true;
                 }

@@ -45,6 +45,7 @@ public:
 
     void renderScene(Scene& scene, int selectedGroup, int selectedSubmesh = -1);
     std::pair<int,int> pick(Scene& scene, int pixelX, int pixelY);
+    void waitIdle(); // call before destroying GPU-referenced scene resources
 
     vex::Framebuffer* getFramebuffer() { return m_framebuffer.get(); }
     int getDrawCalls() const { return m_drawCalls; }

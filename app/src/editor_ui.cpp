@@ -226,10 +226,24 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
 
                     if (sm.meshData.materialType == 0)
                     {
-                        ImGui::DragFloat("Roughness", &sm.meshData.roughness, 0.01f, 0.0f, 1.0f, "%.2f");
-                        if (ImGui::IsItemDeactivatedAfterEdit()) scene.materialDirty = true;
-                        ImGui::DragFloat("Metallic", &sm.meshData.metallic, 0.01f, 0.0f, 1.0f, "%.2f");
-                        if (ImGui::IsItemDeactivatedAfterEdit()) scene.materialDirty = true;
+                        bool hasRoughTex = !sm.meshData.roughnessTexturePath.empty();
+                        bool hasMetalTex = !sm.meshData.metallicTexturePath.empty();
+
+                        if (hasRoughTex)
+                            ImGui::TextDisabled("Roughness  (texture)");
+                        else
+                        {
+                            ImGui::DragFloat("Roughness", &sm.meshData.roughness, 0.01f, 0.0f, 1.0f, "%.2f");
+                            if (ImGui::IsItemDeactivatedAfterEdit()) scene.materialDirty = true;
+                        }
+
+                        if (hasMetalTex)
+                            ImGui::TextDisabled("Metallic   (texture)");
+                        else
+                        {
+                            ImGui::DragFloat("Metallic", &sm.meshData.metallic, 0.01f, 0.0f, 1.0f, "%.2f");
+                            if (ImGui::IsItemDeactivatedAfterEdit()) scene.materialDirty = true;
+                        }
                     }
                     else if (sm.meshData.materialType == 2)
                     {
