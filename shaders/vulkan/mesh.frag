@@ -128,7 +128,7 @@ void main()
         float z = gl_FragCoord.z;
         float linear = (pc.nearPlane * pc.farPlane) / (pc.farPlane - z * (pc.farPlane - pc.nearPlane));
         float d = (linear - pc.nearPlane) / (pc.farPlane - pc.nearPlane);
-        FragColor = vec4(vec3(d), 1.0);
+        FragColor = vec4(pow(vec3(d), vec3(2.2)), 1.0);
         return;
     }
 
@@ -136,12 +136,12 @@ void main()
 
     if (pc.debugMode == 3) // Normals (geometric, not perturbed)
     {
-        FragColor = vec4(N * 0.5 + 0.5, 1.0);
+        FragColor = vec4(pow(N * 0.5 + 0.5, vec3(2.2)), 1.0);
         return;
     }
     if (pc.debugMode == 4) // UVs
     {
-        FragColor = vec4(vUV, 0.0, 1.0);
+        FragColor = vec4(pow(vec3(vUV, 0.0), vec3(2.2)), 1.0);
         return;
     }
 
@@ -160,7 +160,10 @@ void main()
 
     if (pc.debugMode == 5) // Albedo (unlit)
     {
-        FragColor = vec4(baseColor, 1.0);
+        // baseColor is sRGB-encoded. The blit pass will apply pow(c, 1/gamma),
+        // which would double-brighten it. Pre-linearize so the blit cancels back
+        // to the original sRGB values the artist intended.
+        FragColor = vec4(pow(baseColor, vec3(2.2)), 1.0);
         return;
     }
     if (pc.debugMode == 6) // Emission
@@ -179,7 +182,7 @@ void main()
             matColor = vec3(0.2, 0.8, 0.7); // Dielectric: cyan
         else
             matColor = vec3(0.2, 0.4, 0.8); // Diffuse: blue
-        FragColor = vec4(matColor, 1.0);
+        FragColor = vec4(pow(matColor, vec3(2.2)), 1.0);
         return;
     }
 
