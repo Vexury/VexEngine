@@ -2074,6 +2074,7 @@ void SceneRenderer::renderGPURaytrace(Scene& scene)
     m_fullscreenRTShader->setFloat("u_gamma", m_gpuGamma);
     m_fullscreenRTShader->setBool("u_enableACES", m_gpuEnableACES);
     m_fullscreenRTShader->setBool("u_flipV", true);   // GPU raytracer accum texture: pixels stored top-to-bottom
+    m_fullscreenRTShader->setBool("u_enableOutline", false);
 
     m_fullscreenQuad->draw();
     m_fullscreenRTShader->unbind();
@@ -2503,8 +2504,9 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
         m_vkFullscreenRTShader->setFloat("u_gamma",       m_vkGamma);
         m_vkFullscreenRTShader->bind();
         // setBool pushes after bind, ensuring the final push contains all values
-        m_vkFullscreenRTShader->setBool("u_enableACES", m_vkEnableACES);
-        m_vkFullscreenRTShader->setBool("u_flipV",      true);
+        m_vkFullscreenRTShader->setBool("u_enableACES",    m_vkEnableACES);
+        m_vkFullscreenRTShader->setBool("u_flipV",         true);
+        m_vkFullscreenRTShader->setBool("u_enableOutline", false);
 
         rtShaderVK->setExternalTextureVK(0,
             m_vkRaytracer->getOutputImageView(),
