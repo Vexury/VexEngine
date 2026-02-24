@@ -24,8 +24,8 @@ endif()
 # Copy assets and shaders to build output
 add_custom_command(TARGET vex_app POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_SOURCE_DIR}/assets
-        $<TARGET_FILE_DIR:vex_app>/assets
+        ${CMAKE_SOURCE_DIR}/VexAssetsCC0
+        $<TARGET_FILE_DIR:vex_app>/VexAssetsCC0
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_SOURCE_DIR}/shaders
         $<TARGET_FILE_DIR:vex_app>/shaders
