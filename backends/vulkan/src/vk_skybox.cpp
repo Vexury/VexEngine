@@ -7,6 +7,7 @@
 
 #include <fstream>
 #include <cstring>
+#include <vector>
 
 namespace vex
 {
@@ -121,17 +122,44 @@ bool VKSkybox::load(const std::string& equirectPath)
         m_textureImage = VK_NULL_HANDLE;
     }
 
-    // Load image
+    // Load image (HDR as float, LDR as uint8)
     int w, h, ch;
     stbi_set_flip_vertically_on_load(false);
-    unsigned char* data = stbi_load(equirectPath.c_str(), &w, &h, &ch, 4);
-    if (!data)
-    {
-        Log::error("Failed to load envmap: " + equirectPath);
-        return false;
-    }
 
-    VkDeviceSize imageSize = static_cast<VkDeviceSize>(w) * h * 4;
+    VkDeviceSize imageSize;
+    void* pixelData;
+    std::vector<float> floatBuf; // owns HDR pixel data until upload
+
+    if (stbi_is_hdr(equirectPath.c_str()))
+    {
+        float* data = stbi_loadf(equirectPath.c_str(), &w, &h, &ch, 4);
+        if (!data)
+        {
+            Log::error("Failed to load envmap: " + equirectPath);
+            return false;
+        }
+        imageSize = static_cast<VkDeviceSize>(w) * h * 4 * sizeof(float);
+        floatBuf.assign(data, data + w * h * 4);
+        stbi_image_free(data);
+        pixelData = floatBuf.data();
+        m_textureFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
+    }
+    else
+    {
+        unsigned char* data = stbi_load(equirectPath.c_str(), &w, &h, &ch, 4);
+        if (!data)
+        {
+            Log::error("Failed to load envmap: " + equirectPath);
+            return false;
+        }
+        imageSize = static_cast<VkDeviceSize>(w) * h * 4;
+        // Wrap in vector for uniform cleanup
+        floatBuf.resize(imageSize); // reuse as byte storage (just need lifetime)
+        std::memcpy(floatBuf.data(), data, static_cast<size_t>(imageSize));
+        stbi_image_free(data);
+        pixelData = floatBuf.data();
+        m_textureFormat = VK_FORMAT_R8G8B8A8_UNORM;
+    }
 
     // Staging buffer
     VkBufferCreateInfo stagingInfo{};
@@ -149,15 +177,14 @@ bool VKSkybox::load(const std::string& equirectPath)
 
     void* mapped;
     vmaMapMemory(allocator, stagingAlloc, &mapped);
-    std::memcpy(mapped, data, static_cast<size_t>(imageSize));
+    std::memcpy(mapped, pixelData, static_cast<size_t>(imageSize));
     vmaUnmapMemory(allocator, stagingAlloc);
-    stbi_image_free(data);
 
     // Create image
     VkImageCreateInfo imgInfo{};
     imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imgInfo.imageType = VK_IMAGE_TYPE_2D;
-    imgInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    imgInfo.format = m_textureFormat;
     imgInfo.extent = { static_cast<uint32_t>(w), static_cast<uint32_t>(h), 1 };
     imgInfo.mipLevels = 1;
     imgInfo.arrayLayers = 1;
@@ -212,7 +239,7 @@ bool VKSkybox::load(const std::string& equirectPath)
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = m_textureImage;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    viewInfo.format = m_textureFormat;
     viewInfo.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
     vkCreateImageView(device, &viewInfo, nullptr, &m_textureImageView);
 

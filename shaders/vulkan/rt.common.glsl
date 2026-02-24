@@ -171,6 +171,16 @@ uint  getLightIndex(uint i) { return lightRawData[i]; }
 float getLightCDF(uint i)   { return uintBitsToFloat(lightRawData[l_lightCount + i]); }
 
 // ── Texture sampling ─────────────────────────────────────────────────────
+vec4 fetchTexel(uint pixelOffset, int tw, int th, int px, int py) {
+    px = clamp(px, 0, tw - 1);
+    py = clamp(py, 0, th - 1);
+    uint word = texHeader[pixelOffset + uint(py * tw + px)];
+    return vec4(float((word >>  0u) & 0xFFu),
+                float((word >>  8u) & 0xFFu),
+                float((word >> 16u) & 0xFFu),
+                float((word >> 24u) & 0xFFu)) / 255.0;
+}
+
 vec4 sampleTexture(int texIndex, vec2 uv) {
     if (texIndex < 0) return vec4(1.0);
     uint texCount = texHeader[0];
@@ -179,29 +189,53 @@ vec4 sampleTexture(int texIndex, vec2 uv) {
     uint pixelOffset = texHeader[headerBase + 0u];
     int  tw          = int(texHeader[headerBase + 1u]);
     int  th          = int(texHeader[headerBase + 2u]);
+
+    // Wrap UVs and flip V
     float u = uv.x - floor(uv.x);
     float v = 1.0 - (uv.y - floor(uv.y));
-    int px = clamp(int(u * float(tw)), 0, tw - 1);
-    int py = clamp(int(v * float(th)), 0, th - 1);
-    uint word = texHeader[pixelOffset + uint(py * tw + px)];
-    return vec4(
-        float((word >>  0u) & 0xFFu) / 255.0,
-        float((word >>  8u) & 0xFFu) / 255.0,
-        float((word >> 16u) & 0xFFu) / 255.0,
-        float((word >> 24u) & 0xFFu) / 255.0);
+
+    // Bilinear filtering: map to texel-center space
+    float fu = u * float(tw) - 0.5;
+    float fv = v * float(th) - 0.5;
+    int   x0 = int(floor(fu));
+    int   y0 = int(floor(fv));
+    float fx = fu - float(x0);
+    float fy = fv - float(y0);
+
+    vec4 c00 = fetchTexel(pixelOffset, tw, th, x0,     y0    );
+    vec4 c10 = fetchTexel(pixelOffset, tw, th, x0 + 1, y0    );
+    vec4 c01 = fetchTexel(pixelOffset, tw, th, x0,     y0 + 1);
+    vec4 c11 = fetchTexel(pixelOffset, tw, th, x0 + 1, y0 + 1);
+    return mix(mix(c00, c10, fx), mix(c01, c11, fx), fy);
 }
 
 // ── Environment sampling ─────────────────────────────────────────────────
+vec3 fetchEnvTexel(int px, int py) {
+    px = clamp(px, 0, u_uniforms.envMapWidth  - 1);
+    py = clamp(py, 0, u_uniforms.envMapHeight - 1);
+    int idx = (py * u_uniforms.envMapWidth + px) * 3;
+    return vec3(envPixels[idx], envPixels[idx+1], envPixels[idx+2]);
+}
+
 vec3 sampleEnvironment(vec3 dir) {
     if (u_uniforms.hasEnvMap != 0u && u_uniforms.envMapWidth > 0) {
         float u = 0.5 + atan(dir.z, dir.x) / (2.0 * PI);
         float v = 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / PI;
         int W = u_uniforms.envMapWidth;
         int H = u_uniforms.envMapHeight;
-        int px = clamp(int(u * float(W)), 0, W - 1);
-        int py = clamp(int(v * float(H)), 0, H - 1);
-        int idx = (py * W + px) * 3;
-        return vec3(envPixels[idx], envPixels[idx+1], envPixels[idx+2]);
+
+        float fu = u * float(W) - 0.5;
+        float fv = v * float(H) - 0.5;
+        int   x0 = int(floor(fu));
+        int   y0 = int(floor(fv));
+        float fx = fu - float(x0);
+        float fy = fv - float(y0);
+
+        vec3 c00 = fetchEnvTexel(x0,     y0    );
+        vec3 c10 = fetchEnvTexel(x0 + 1, y0    );
+        vec3 c01 = fetchEnvTexel(x0,     y0 + 1);
+        vec3 c11 = fetchEnvTexel(x0 + 1, y0 + 1);
+        return mix(mix(c00, c10, fx), mix(c01, c11, fx), fy);
     }
     return u_uniforms.envColor;
 }

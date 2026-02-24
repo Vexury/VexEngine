@@ -44,24 +44,41 @@ void GLSkybox::createQuad()
 
 bool GLSkybox::load(const std::string& equirectPath)
 {
-    // Load HDR or LDR equirectangular image
+    if (m_textureId) { glDeleteTextures(1, &m_textureId); m_textureId = 0; }
+
     int w, h, ch;
     stbi_set_flip_vertically_on_load(true);
-    unsigned char* data = stbi_load(equirectPath.c_str(), &w, &h, &ch, 3);
-    if (!data)
-    {
-        Log::error("Failed to load envmap: " + equirectPath);
-        return false;
-    }
 
     glGenTextures(1, &m_textureId);
     glBindTexture(GL_TEXTURE_2D, m_textureId);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
+
+    if (stbi_is_hdr(equirectPath.c_str()))
+    {
+        float* data = stbi_loadf(equirectPath.c_str(), &w, &h, &ch, 3);
+        if (!data)
+        {
+            Log::error("Failed to load envmap: " + equirectPath);
+            return false;
+        }
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, w, h, 0, GL_RGB, GL_FLOAT, data);
+        stbi_image_free(data);
+    }
+    else
+    {
+        unsigned char* data = stbi_load(equirectPath.c_str(), &w, &h, &ch, 3);
+        if (!data)
+        {
+            Log::error("Failed to load envmap: " + equirectPath);
+            return false;
+        }
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
+        stbi_image_free(data);
+    }
+
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    stbi_image_free(data);
 
     createQuad();
 

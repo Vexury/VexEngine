@@ -64,11 +64,24 @@ struct Scene
                          -cosEl * std::sin(azRad));
     }
 
-    enum Envmap { SolidColor = 0, Sky = 1, Warehouse = 2, CustomHDR = 3, EnvmapCount };
-    static constexpr const char* envmapNames[] = { "Solid Color", "sky", "warehouse" };
+    enum Envmap { SolidColor = 0, HDRI0 = 1, HDRI1 = 2, HDRI2 = 3, HDRI3 = 4, CustomHDR = 5, EnvmapCount = 6 };
+    static constexpr const char* envmapNames[] = {
+        "Solid Color",
+        "Brown Photo Studio 02",
+        "Kloofendal Puresky",
+        "Lilienstein",
+        "Moonless Golf"
+    };
+    static constexpr const char* envmapPaths[] = {
+        "",
+        "VexAssetsCC0/HDRIs/2K/brown_photostudio_02_2k.hdr",
+        "VexAssetsCC0/HDRIs/2K/kloofendal_48d_partly_cloudy_puresky_2k.hdr",
+        "VexAssetsCC0/HDRIs/2K/lilienstein_2k.hdr",
+        "VexAssetsCC0/HDRIs/2K/moonless_golf_2k.hdr"
+    };
 
     int currentEnvmap = SolidColor;
-    glm::vec3 skyboxColor { 0.86f, 0.64f, 0.40f };
+    glm::vec3 skyboxColor { 0.9f, 0.78f, 0.65f };
     std::string customEnvmapPath;
 
     bool showSkybox = true;

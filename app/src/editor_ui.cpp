@@ -298,44 +298,32 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
             ImGui::TextUnformatted("Skybox");
             ImGui::Separator();
             {
-                const char* envItems[] = { "Solid Color", "sky", "warehouse", "Custom HDR..." };
-                if (ImGui::Combo("Background", &scene.currentEnvmap, envItems, Scene::EnvmapCount))
+                int comboSel = (scene.currentEnvmap < Scene::CustomHDR) ? scene.currentEnvmap : 0;
+                if (ImGui::Combo("Background", &comboSel, Scene::envmapNames, Scene::CustomHDR))
                 {
-                    if (scene.currentEnvmap == Scene::CustomHDR)
-                    {
-                        std::string hdrPath = openHdrFileDialog();
-                        if (!hdrPath.empty())
-                        {
-                            scene.customEnvmapPath = hdrPath;
-                        }
-                        else
-                        {
-                            scene.currentEnvmap = m_prevEnvmapForRevert;
-                        }
-                    }
-                    else
-                    {
-                        scene.customEnvmapPath.clear();
-                    }
-
-                    if (scene.currentEnvmap >= Scene::Sky && scene.currentEnvmap <= Scene::Warehouse)
-                    {
-                        std::string path = std::string("assets/textures/envmaps/")
-                                         + scene.envmapNames[scene.currentEnvmap] + "/"
-                                         + scene.envmapNames[scene.currentEnvmap] + ".jpg";
-                        if (scene.skybox)
-                            scene.skybox->load(path);
-                    }
-
+                    scene.currentEnvmap = comboSel;
+                    scene.customEnvmapPath.clear();
+                    if (comboSel > Scene::SolidColor && scene.skybox)
+                        scene.skybox->load(Scene::envmapPaths[comboSel]);
+                    m_prevEnvmapForRevert = scene.currentEnvmap;
+                }
+            }
+            if (ImGui::Button("Load from file..."))
+            {
+                std::string hdrPath = openHdrFileDialog();
+                if (!hdrPath.empty())
+                {
+                    scene.customEnvmapPath = hdrPath;
+                    scene.currentEnvmap = Scene::CustomHDR;
+                    if (scene.skybox)
+                        scene.skybox->load(hdrPath);
                     m_prevEnvmapForRevert = scene.currentEnvmap;
                 }
             }
             if (scene.currentEnvmap == Scene::SolidColor)
                 ImGui::ColorEdit3("Color", &scene.skyboxColor.x);
             if (scene.currentEnvmap == Scene::CustomHDR && !scene.customEnvmapPath.empty())
-            {
                 ImGui::TextWrapped("Path: %s", scene.customEnvmapPath.c_str());
-            }
             break;
 
         case Selection::Light:

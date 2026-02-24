@@ -41,6 +41,7 @@ private:
     VmaAllocation m_textureAllocation = VK_NULL_HANDLE;
     VkImageView   m_textureImageView  = VK_NULL_HANDLE;
     VkSampler     m_textureSampler    = VK_NULL_HANDLE;
+    VkFormat      m_textureFormat     = VK_FORMAT_R8G8B8A8_UNORM;
 
     // Pipeline
     VkShaderModule        m_vertModule         = VK_NULL_HANDLE;

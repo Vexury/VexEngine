@@ -1705,28 +1705,11 @@ void SceneRenderer::renderCPURaytrace(Scene& scene)
         m_prevEnvmapIndex = scene.currentEnvmap;
         envChanged = true;
 
-        if (scene.currentEnvmap >= Scene::Sky)
+        if (scene.currentEnvmap > Scene::SolidColor)
         {
-            std::string envPath;
-
-            // Use custom path if set and this is the custom entry
-            if (scene.currentEnvmap == Scene::CustomHDR)
-            {
-                envPath = scene.customEnvmapPath;
-            }
-            else
-            {
-                // Try .hdr first, fall back to .jpg
-                std::string base = "assets/textures/envmaps/"
-                                 + std::string(scene.envmapNames[scene.currentEnvmap]) + "/"
-                                 + std::string(scene.envmapNames[scene.currentEnvmap]);
-                envPath = base + ".hdr";
-
-                // Test if .hdr exists, fall back to .jpg
-                int testW, testH, testCh;
-                if (!stbi_info(envPath.c_str(), &testW, &testH, &testCh))
-                    envPath = base + ".jpg";
-            }
+            std::string envPath = (scene.currentEnvmap == Scene::CustomHDR)
+                ? scene.customEnvmapPath
+                : std::string(Scene::envmapPaths[scene.currentEnvmap]);
 
             int ew, eh, ech;
             stbi_set_flip_vertically_on_load(false);
@@ -1929,23 +1912,11 @@ void SceneRenderer::renderGPURaytrace(Scene& scene)
         m_prevEnvmapIndex = scene.currentEnvmap;
         envChanged = true;
 
-        if (scene.currentEnvmap >= Scene::Sky)
+        if (scene.currentEnvmap > Scene::SolidColor)
         {
-            std::string envPath;
-            if (scene.currentEnvmap == Scene::CustomHDR)
-            {
-                envPath = scene.customEnvmapPath;
-            }
-            else
-            {
-                std::string base = "assets/textures/envmaps/"
-                                 + std::string(scene.envmapNames[scene.currentEnvmap]) + "/"
-                                 + std::string(scene.envmapNames[scene.currentEnvmap]);
-                envPath = base + ".hdr";
-                int testW, testH, testCh;
-                if (!stbi_info(envPath.c_str(), &testW, &testH, &testCh))
-                    envPath = base + ".jpg";
-            }
+            std::string envPath = (scene.currentEnvmap == Scene::CustomHDR)
+                ? scene.customEnvmapPath
+                : std::string(Scene::envmapPaths[scene.currentEnvmap]);
 
             int ew, eh, ech;
             stbi_set_flip_vertically_on_load(false);
@@ -2250,23 +2221,11 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
         envChanged     = true;
         envDataChanged = true; // HDR pixel data (or its absence) changed in the SSBOs
 
-        if (scene.currentEnvmap >= Scene::Sky)
+        if (scene.currentEnvmap > Scene::SolidColor)
         {
-            std::string envPath;
-            if (scene.currentEnvmap == Scene::CustomHDR)
-            {
-                envPath = scene.customEnvmapPath;
-            }
-            else
-            {
-                std::string base = "assets/textures/envmaps/"
-                                 + std::string(scene.envmapNames[scene.currentEnvmap]) + "/"
-                                 + std::string(scene.envmapNames[scene.currentEnvmap]);
-                envPath = base + ".hdr";
-                int testW, testH, testCh;
-                if (!stbi_info(envPath.c_str(), &testW, &testH, &testCh))
-                    envPath = base + ".jpg";
-            }
+            std::string envPath = (scene.currentEnvmap == Scene::CustomHDR)
+                ? scene.customEnvmapPath
+                : std::string(Scene::envmapPaths[scene.currentEnvmap]);
 
             int ew, eh, ech;
             stbi_set_flip_vertically_on_load(false);

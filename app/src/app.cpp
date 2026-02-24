@@ -146,16 +146,6 @@ void App::handleInput()
                 m_ui.clearSelection();
                 break;
             }
-            case Selection::Skybox:
-                m_scene.showSkybox = false;
-                m_ui.clearSelection();
-                vex::Log::info("Removed Skybox from scene");
-                break;
-            case Selection::Light:
-                m_scene.showLight = false;
-                m_ui.clearSelection();
-                vex::Log::info("Removed Light from scene");
-                break;
             default:
                 break;
         }
