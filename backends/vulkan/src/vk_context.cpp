@@ -514,6 +514,35 @@ void VKContext::endFrame()
     m_window->pollEvents();
 }
 
+void VKContext::beginBatchUpload()
+{
+    m_batchingUploads = true;
+}
+
+void VKContext::deferCopy(VkBuffer src, VkBuffer dst, VkDeviceSize size, VmaAllocation stagingAlloc)
+{
+    m_deferredCopies.push_back({ src, dst, size, stagingAlloc });
+}
+
+void VKContext::endBatchUpload()
+{
+    m_batchingUploads = false;
+    if (m_deferredCopies.empty()) return;
+
+    immediateSubmit([&](VkCommandBuffer cmd)
+    {
+        for (auto& dc : m_deferredCopies)
+        {
+            VkBufferCopy copy{ 0, 0, dc.size };
+            vkCmdCopyBuffer(cmd, dc.src, dc.dst, 1, &copy);
+        }
+    });
+
+    for (auto& dc : m_deferredCopies)
+        vmaDestroyBuffer(m_allocator, dc.src, dc.stagingAlloc);
+    m_deferredCopies.clear();
+}
+
 void VKContext::immediateSubmit(std::function<void(VkCommandBuffer cmd)>&& function)
 {
     vkResetCommandBuffer(m_uploadBuffer, 0);

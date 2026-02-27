@@ -59,14 +59,21 @@ static void createGPUBuffer(const void* data, VkDeviceSize size,
     vmaCreateBuffer(allocator, &bufInfo, &gpuAllocInfo,
                     &outBuffer, &outAlloc, nullptr);
 
-    ctx.immediateSubmit([&](VkCommandBuffer cmd)
+    if (ctx.isBatchingUploads())
     {
-        VkBufferCopy copy{};
-        copy.size = size;
-        vkCmdCopyBuffer(cmd, stagingBuffer, outBuffer, 1, &copy);
-    });
-
-    vmaDestroyBuffer(allocator, stagingBuffer, stagingAlloc);
+        ctx.deferCopy(stagingBuffer, outBuffer, size, stagingAlloc);
+        // staging buffer destroyed by endBatchUpload()
+    }
+    else
+    {
+        ctx.immediateSubmit([&](VkCommandBuffer cmd)
+        {
+            VkBufferCopy copy{};
+            copy.size = size;
+            vkCmdCopyBuffer(cmd, stagingBuffer, outBuffer, 1, &copy);
+        });
+        vmaDestroyBuffer(allocator, stagingBuffer, stagingAlloc);
+    }
 }
 
 void VKMesh::upload(const MeshData& data)
@@ -100,5 +107,8 @@ void VKMesh::draw() const
     vkCmdBindIndexBuffer(cmd, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
     vkCmdDrawIndexed(cmd, m_indexCount, 1, 0, 0, 0);
 }
+
+void Mesh::beginBatchUpload() { VKContext::get().beginBatchUpload(); }
+void Mesh::endBatchUpload()   { VKContext::get().endBatchUpload(); }
 
 } // namespace vex

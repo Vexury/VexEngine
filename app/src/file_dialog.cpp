@@ -9,7 +9,8 @@
 #pragma comment(lib, "ole32.lib")
 
 // Helper: open IFileOpenDialog with a given filter, returns selected path or "".
-static std::string showOpenDialog(const wchar_t* filterName, const wchar_t* filterSpec)
+static std::string showOpenDialog(const wchar_t* filterName, const wchar_t* filterSpec,
+                                   HWND parentHwnd)
 {
     std::string result;
 
@@ -26,7 +27,7 @@ static std::string showOpenDialog(const wchar_t* filterName, const wchar_t* filt
     pfd->GetOptions(&flags);
     pfd->SetOptions(flags | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST | FOS_NOCHANGEDIR);
 
-    hr = pfd->Show(nullptr);
+    hr = pfd->Show(parentHwnd);
     if (SUCCEEDED(hr))
     {
         IShellItem* psi = nullptr;
@@ -55,7 +56,8 @@ static std::string showOpenDialog(const wchar_t* filterName, const wchar_t* filt
 
 static std::string showSaveDialog(const wchar_t* filterName,
                                    const wchar_t* filterSpec,
-                                   const wchar_t* defaultExt)
+                                   const wchar_t* defaultExt,
+                                   HWND parentHwnd)
 {
     std::string result;
 
@@ -73,7 +75,7 @@ static std::string showSaveDialog(const wchar_t* filterName,
     pfd->GetOptions(&flags);
     pfd->SetOptions(flags | FOS_OVERWRITEPROMPT | FOS_NOCHANGEDIR);
 
-    hr = pfd->Show(nullptr);
+    hr = pfd->Show(parentHwnd);
     if (SUCCEEDED(hr))
     {
         IShellItem* psi = nullptr;
@@ -100,26 +102,26 @@ static std::string showSaveDialog(const wchar_t* filterName,
 }
 #endif
 
-std::string openObjFileDialog()
+std::string openObjFileDialog(void* parentHwnd)
 {
 #ifdef _WIN32
-    return showOpenDialog(L"OBJ Files (*.obj)", L"*.obj");
+    return showOpenDialog(L"OBJ Files (*.obj)", L"*.obj", static_cast<HWND>(parentHwnd));
 #endif
     return {};
 }
 
-std::string openHdrFileDialog()
+std::string openHdrFileDialog(void* parentHwnd)
 {
 #ifdef _WIN32
-    return showOpenDialog(L"HDR / Image Files", L"*.hdr;*.jpg;*.png");
+    return showOpenDialog(L"HDR / Image Files", L"*.hdr;*.jpg;*.png", static_cast<HWND>(parentHwnd));
 #endif
     return {};
 }
 
-std::string saveImageFileDialog()
+std::string saveImageFileDialog(void* parentHwnd)
 {
 #ifdef _WIN32
-    return showSaveDialog(L"PNG Image (*.png)", L"*.png", L"png");
+    return showSaveDialog(L"PNG Image (*.png)", L"*.png", L"png", static_cast<HWND>(parentHwnd));
 #endif
     return {};
 }

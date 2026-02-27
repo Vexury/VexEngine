@@ -59,6 +59,15 @@ public:
 
     void setGizmoMode(int mode) { m_gizmoMode = mode; }
 
+    // Deferred import: the Import OBJ button stores the path here instead of blocking
+    // the current frame. App::run() calls consumePendingImport() between frames.
+    bool consumePendingImport(std::string& outPath, std::string& outName);
+
+    // Loading overlay: called by App::runImport() to show progress between frames.
+    void setLoadingState(const std::string& stage, float progress);
+    void clearLoadingState();
+    void renderLoadingOverlay();
+
 private:
     Selection   m_selectionType       = Selection::None;
     int         m_selectionIndex      = 0;
@@ -85,4 +94,12 @@ private:
     bool      m_gizmoRotRefSet   = false;
 
     bool drawGizmo(Scene& scene, ImDrawList* dl, ImVec2 vpOrigin, ImVec2 vpSize);
+
+    // Pending import (set by Import OBJ button, consumed by App between frames)
+    std::string m_pendingImportPath;
+    std::string m_pendingImportName;
+
+    // Loading overlay state
+    std::string m_loadingStage;
+    float       m_loadingProgress = 0.f;
 };

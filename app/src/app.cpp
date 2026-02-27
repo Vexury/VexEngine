@@ -237,10 +237,42 @@ void App::processPicking()
         m_ui.clearSelection();
 }
 
+void App::runImport(const std::string& path, const std::string& name)
+{
+    // Pump a single loading frame: update the overlay and present.
+    auto pumpFrame = [&](const std::string& stage, float progress)
+    {
+        m_ui.setLoadingState(stage, progress);
+        m_engine.beginFrame();
+        m_ui.renderLoadingOverlay();
+        m_engine.endFrame();
+    };
+
+    pumpFrame("Parsing OBJ...", 0.05f);
+
+    if (!m_scene.importOBJ(path, name, pumpFrame))
+    {
+        vex::Log::error("Failed to load: " + path);
+        m_ui.clearLoadingState();
+        return;
+    }
+    vex::Log::info("Imported: " + name);
+
+    // Build BLAS/TLAS/BVH with progress frames shown before each stage.
+    m_renderer.buildGeometry(m_scene, pumpFrame);
+
+    m_ui.clearLoadingState();
+}
+
 void App::run()
 {
     while (m_engine.isRunning())
     {
+        // Handle any deferred import between frames so we can pump the loading overlay.
+        std::string importPath, importName;
+        if (m_ui.consumePendingImport(importPath, importName))
+            runImport(importPath, importName);
+
         m_engine.beginFrame();
         handleInput();
         m_renderer.setRenderMode(static_cast<RenderMode>(m_ui.getRenderModeIndex()));

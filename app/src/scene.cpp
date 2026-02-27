@@ -1,11 +1,14 @@
 #include "scene.h"
 
 #include <vex/scene/mesh_data.h>
+#include <vex/graphics/mesh.h>
 #include <vex/core/log.h>
 
 #include <cfloat>
+#include <unordered_map>
 
-bool Scene::importOBJ(const std::string& path, const std::string& name)
+bool Scene::importOBJ(const std::string& path, const std::string& name,
+                      ProgressFn onProgress)
 {
     auto submeshes = vex::MeshData::loadOBJ(path);
     if (submeshes.empty())
@@ -16,8 +19,26 @@ bool Scene::importOBJ(const std::string& path, const std::string& name)
     MeshGroup group;
     group.name = name;
 
+    // Texture cache: each unique path is loaded once and shared across submeshes.
+    std::unordered_map<std::string, std::shared_ptr<vex::Texture2D>> texCache;
     int texCount = 0;
+
+    auto loadTex = [&](const std::string& p) -> std::shared_ptr<vex::Texture2D>
+    {
+        if (p.empty()) return nullptr;
+        auto it = texCache.find(p);
+        if (it != texCache.end()) return it->second;
+        auto t = vex::Texture2D::createFromFile(p);
+        if (t) ++texCount;
+        auto sp = std::shared_ptr<vex::Texture2D>(std::move(t));
+        texCache[p] = sp;
+        return sp;
+    };
+
+    if (onProgress) onProgress("Uploading meshes and textures...", 0.3f);
+
     glm::vec3 bboxMin(FLT_MAX), bboxMax(-FLT_MAX);
+    vex::Mesh::beginBatchUpload();
     for (size_t i = 0; i < submeshes.size(); ++i)
     {
         for (const auto& v : submeshes[i].vertices)
@@ -29,41 +50,6 @@ bool Scene::importOBJ(const std::string& path, const std::string& name)
         auto mesh = vex::Mesh::create();
         mesh->upload(submeshes[i]);
 
-        std::unique_ptr<vex::Texture2D> tex;
-        if (!submeshes[i].diffuseTexturePath.empty())
-        {
-            tex = vex::Texture2D::createFromFile(submeshes[i].diffuseTexturePath);
-            if (tex) ++texCount;
-        }
-
-        std::unique_ptr<vex::Texture2D> normTex;
-        if (!submeshes[i].normalTexturePath.empty())
-        {
-            normTex = vex::Texture2D::createFromFile(submeshes[i].normalTexturePath);
-            if (normTex) ++texCount;
-        }
-
-        std::unique_ptr<vex::Texture2D> roughTex;
-        if (!submeshes[i].roughnessTexturePath.empty())
-        {
-            roughTex = vex::Texture2D::createFromFile(submeshes[i].roughnessTexturePath);
-            if (roughTex) ++texCount;
-        }
-
-        std::unique_ptr<vex::Texture2D> metalTex;
-        if (!submeshes[i].metallicTexturePath.empty())
-        {
-            metalTex = vex::Texture2D::createFromFile(submeshes[i].metallicTexturePath);
-            if (metalTex) ++texCount;
-        }
-
-        std::unique_ptr<vex::Texture2D> emissiveTex;
-        if (!submeshes[i].emissiveTexturePath.empty())
-        {
-            emissiveTex = vex::Texture2D::createFromFile(submeshes[i].emissiveTexturePath);
-            if (emissiveTex) ++texCount;
-        }
-
         uint32_t vc = static_cast<uint32_t>(submeshes[i].vertices.size());
         uint32_t ic = static_cast<uint32_t>(submeshes[i].indices.size());
 
@@ -71,24 +57,26 @@ bool Scene::importOBJ(const std::string& path, const std::string& name)
         sm.name = submeshes[i].name.empty()
             ? "Submesh " + std::to_string(i)
             : submeshes[i].name;
-        sm.mesh = std::move(mesh);
-        sm.diffuseTexture = std::move(tex);
-        sm.normalTexture = std::move(normTex);
-        sm.roughnessTexture = std::move(roughTex);
-        sm.metallicTexture = std::move(metalTex);
-        sm.emissiveTexture = std::move(emissiveTex);
-        sm.meshData = submeshes[i]; // retain CPU-side data for raytracing
-        sm.vertexCount = vc;
-        sm.indexCount = ic;
+        sm.mesh             = std::move(mesh);
+        sm.diffuseTexture   = loadTex(submeshes[i].diffuseTexturePath);
+        sm.normalTexture    = loadTex(submeshes[i].normalTexturePath);
+        sm.roughnessTexture = loadTex(submeshes[i].roughnessTexturePath);
+        sm.metallicTexture  = loadTex(submeshes[i].metallicTexturePath);
+        sm.emissiveTexture  = loadTex(submeshes[i].emissiveTexturePath);
+        sm.meshData         = submeshes[i];
+        sm.vertexCount      = vc;
+        sm.indexCount       = ic;
         group.submeshes.push_back(std::move(sm));
     }
+    vex::Mesh::endBatchUpload();
     group.center = (bboxMin + bboxMax) * 0.5f;
     group.radius = glm::length(bboxMax - bboxMin) * 0.5f;
     meshGroups.push_back(std::move(group));
     geometryDirty = true;
 
     if (texCount > 0)
-        vex::Log::info("  Loaded " + std::to_string(texCount) + " texture(s)");
+        vex::Log::info("  Loaded " + std::to_string(texCount) + " unique texture(s)"
+                       + " (shared across " + std::to_string(submeshes.size()) + " submeshes)");
 
     return true;
 }

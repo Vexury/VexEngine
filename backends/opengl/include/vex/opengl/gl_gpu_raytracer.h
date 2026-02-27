@@ -142,8 +142,8 @@ private:
     bool m_enableNEE = true;
     bool m_enableAA = true;
     bool m_enableFireflyClamping = true;
-    bool  m_enableEnvironment = false;
-    float m_envLightMultiplier = 1.0f;
+    bool  m_enableEnvironment = true;
+    float m_envLightMultiplier = 0.3f;
     bool  m_flatShading = false;
     bool m_enableNormalMapping = true;
     bool m_enableEmissive = true;

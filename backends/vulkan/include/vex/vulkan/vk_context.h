@@ -60,6 +60,13 @@ public:
     // Submit a one-shot command buffer (for uploads)
     void immediateSubmit(std::function<void(VkCommandBuffer cmd)>&& function);
 
+    // Batch upload: accumulate buffer copies and flush in one submit.
+    // Reduces N fence waits to 1 for bulk mesh imports.
+    void beginBatchUpload();
+    void endBatchUpload();
+    bool isBatchingUploads() const { return m_batchingUploads; }
+    void deferCopy(VkBuffer src, VkBuffer dst, VkDeviceSize size, VmaAllocation stagingAlloc);
+
     // RT pipeline properties (shaderGroupHandleSize, alignment, maxRecursionDepth, etc.)
     const VkPhysicalDeviceRayTracingPipelinePropertiesKHR& getRTProperties() const { return m_rtProperties; }
 
@@ -114,6 +121,11 @@ private:
     VkCommandPool   m_uploadPool   = VK_NULL_HANDLE;
     VkCommandBuffer m_uploadBuffer = VK_NULL_HANDLE;
     VkFence         m_uploadFence  = VK_NULL_HANDLE;
+
+    // Batch upload state
+    struct DeferredCopy { VkBuffer src, dst; VkDeviceSize size; VmaAllocation stagingAlloc; };
+    bool                     m_batchingUploads = false;
+    std::vector<DeferredCopy> m_deferredCopies;
 
     // ImGui
     VkDescriptorPool m_imguiPool = VK_NULL_HANDLE;

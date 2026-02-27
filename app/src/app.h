@@ -15,6 +15,7 @@ struct App
 private:
     void handleInput();
     void processPicking();
+    void runImport(const std::string& path, const std::string& name);
 
     vex::Engine   m_engine;
     Scene         m_scene;

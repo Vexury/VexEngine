@@ -762,7 +762,14 @@ bool SceneRenderer::reloadGPUShader()
 #endif
 }
 
-void SceneRenderer::rebuildRaytraceGeometry(Scene& scene)
+void SceneRenderer::buildGeometry(Scene& scene, ProgressFn progress)
+{
+    rebuildRaytraceGeometry(scene, std::move(progress));
+    scene.geometryDirty = false;
+    scene.materialDirty = false;
+}
+
+void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
 {
     vex::Log::info("Building raytrace geometry...");
 
@@ -1222,7 +1229,9 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene)
             pixelBase += pixelCount;
         }
 
+        if (progress) progress("Building BLASes...", 0.7f);
         m_vkRaytracer->commitBlasBuild(); // single GPU submission for all BLASes
+        if (progress) progress("Building TLAS...", 0.9f);
         m_vkRaytracer->buildTlas(blasTransforms);
         m_vkGeomDirty = true;  // uploadSceneData + createOutputImage deferred to renderVKRaytrace
         m_vkSampleCount = 0;

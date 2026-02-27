@@ -9,6 +9,7 @@
 #include <glm/glm.hpp>
 
 #include <cmath>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -17,11 +18,11 @@ struct SceneMesh
 {
     std::string name;
     std::unique_ptr<vex::Mesh> mesh;
-    std::unique_ptr<vex::Texture2D> diffuseTexture;
-    std::unique_ptr<vex::Texture2D> normalTexture;
-    std::unique_ptr<vex::Texture2D> roughnessTexture;
-    std::unique_ptr<vex::Texture2D> metallicTexture;
-    std::unique_ptr<vex::Texture2D> emissiveTexture;
+    std::shared_ptr<vex::Texture2D> diffuseTexture;
+    std::shared_ptr<vex::Texture2D> normalTexture;
+    std::shared_ptr<vex::Texture2D> roughnessTexture;
+    std::shared_ptr<vex::Texture2D> metallicTexture;
+    std::shared_ptr<vex::Texture2D> emissiveTexture;
     vex::MeshData meshData;
     uint32_t vertexCount = 0;
     uint32_t indexCount  = 0;
@@ -91,5 +92,7 @@ struct Scene
     bool geometryDirty = false;
     bool materialDirty = false;
 
-    bool importOBJ(const std::string& path, const std::string& name);
+    using ProgressFn = std::function<void(const std::string& stage, float progress)>;
+    bool importOBJ(const std::string& path, const std::string& name,
+                   ProgressFn onProgress = nullptr);
 };

@@ -68,6 +68,54 @@ bool EditorUI::consumePickRequest(int& outX, int& outY)
     return true;
 }
 
+bool EditorUI::consumePendingImport(std::string& outPath, std::string& outName)
+{
+    if (m_pendingImportPath.empty()) return false;
+    outPath = std::move(m_pendingImportPath);
+    outName = std::move(m_pendingImportName);
+    m_pendingImportPath.clear();
+    return true;
+}
+
+void EditorUI::setLoadingState(const std::string& stage, float progress)
+{
+    m_loadingStage    = stage;
+    m_loadingProgress = progress;
+}
+
+void EditorUI::clearLoadingState()
+{
+    m_loadingStage.clear();
+    m_loadingProgress = 0.f;
+}
+
+void EditorUI::renderLoadingOverlay()
+{
+    ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos({0.f, 0.f});
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGui::SetNextWindowBgAlpha(0.82f);
+    ImGui::Begin("##loading_overlay", nullptr,
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+        ImGuiWindowFlags_NoNav         | ImGuiWindowFlags_NoMove  |
+        ImGuiWindowFlags_NoSavedSettings);
+
+    float cx = io.DisplaySize.x * 0.5f;
+    float cy = io.DisplaySize.y * 0.5f;
+    float barW = io.DisplaySize.x * 0.38f;
+
+    // Stage label
+    ImVec2 textSz = ImGui::CalcTextSize(m_loadingStage.c_str());
+    ImGui::SetCursorPos({cx - textSz.x * 0.5f, cy - 24.f});
+    ImGui::TextUnformatted(m_loadingStage.c_str());
+
+    // Progress bar
+    ImGui::SetCursorPos({cx - barW * 0.5f, cy});
+    ImGui::ProgressBar(m_loadingProgress, {barW, 18.f}, "");
+
+    ImGui::End();
+}
+
 void EditorUI::renderViewport(SceneRenderer& renderer, Scene& scene)
 {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
@@ -461,8 +509,9 @@ void EditorUI::renderHierarchy(Scene& scene, SceneRenderer& renderer)
     // Import button
     if (ImGui::Button("Import OBJ..."))
     {
+        void* hwnd = ImGui::GetMainViewport()->PlatformHandleRaw;
         vex::Log::info("File dialog opened");
-        std::string path = openObjFileDialog();
+        std::string path = openObjFileDialog(hwnd);
         vex::Log::info(path.empty() ? "File dialog cancelled" : "File dialog closed: " + path);
         if (!path.empty())
         {
@@ -475,17 +524,17 @@ void EditorUI::renderHierarchy(Scene& scene, SceneRenderer& renderer)
             if (dot != std::string::npos)
                 baseName = baseName.substr(0, dot);
 
-            if (scene.importOBJ(path, baseName))
-                vex::Log::info("Imported: " + baseName);
-            else
-                vex::Log::error("Failed to load: " + path);
+            // Defer the actual import to between frames so we can pump a loading overlay.
+            m_pendingImportPath = path;
+            m_pendingImportName = baseName;
         }
     }
 
     ImGui::SameLine();
     if (ImGui::Button("Save Image..."))
     {
-        std::string path = saveImageFileDialog();
+        void* hwnd = ImGui::GetMainViewport()->PlatformHandleRaw;
+        std::string path = saveImageFileDialog(hwnd);
         if (!path.empty())
         {
             if (renderer.saveImage(path))
@@ -522,6 +571,7 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                     ImGui::SeparatorText("Material");
 
                     const char* matTypes[] = { "Microfacet (GGX)", "Mirror", "Dielectric" };
+                    bool isRasterize = (renderer.getRenderMode() == RenderMode::Rasterize);
                     if (ImGui::Combo("Type", &sm.meshData.materialType, matTypes, 3))
                         scene.materialDirty = true;
 
@@ -548,9 +598,14 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                     }
                     else if (sm.meshData.materialType == 2)
                     {
+                        ImGui::BeginDisabled(isRasterize);
                         ImGui::DragFloat("IOR", &sm.meshData.ior, 0.01f, 1.0f, 3.0f, "%.2f");
                         if (ImGui::IsItemDeactivatedAfterEdit()) scene.materialDirty = true;
+                        ImGui::EndDisabled();
                     }
+
+                    if (isRasterize && sm.meshData.materialType != 0)
+                        ImGui::TextDisabled("Rendered as Microfacet in rasterizer.\nSwitch to a path tracer to see this material.");
 
                     ImGui::SeparatorText("Textures");
 
@@ -616,6 +671,7 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                     ImGui::SeparatorText("Materials");
 
                     const char* matTypes[] = { "Microfacet (GGX)", "Mirror", "Dielectric" };
+                    bool isRasterize = (renderer.getRenderMode() == RenderMode::Rasterize);
                     auto texName = [](const std::string& path) -> const char* {
                         if (path.empty()) return "none";
                         auto s = path.find_last_of("/\\");
@@ -654,9 +710,14 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                             }
                             else if (sm.meshData.materialType == 2)
                             {
+                                ImGui::BeginDisabled(isRasterize);
                                 ImGui::DragFloat("IOR", &sm.meshData.ior, 0.01f, 1.f, 3.f, "%.2f");
                                 if (ImGui::IsItemDeactivatedAfterEdit()) scene.materialDirty = true;
+                                ImGui::EndDisabled();
                             }
+
+                            if (isRasterize && sm.meshData.materialType != 0)
+                                ImGui::TextDisabled("Rendered as Microfacet in rasterizer.\nSwitch to a path tracer to see this material.");
 
                             ImGui::Text("Diffuse:   %s", texName(sm.meshData.diffuseTexturePath));
                             ImGui::Text("Normal:    %s", texName(sm.meshData.normalTexturePath));
@@ -712,7 +773,7 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
             }
             if (ImGui::Button("Load from file..."))
             {
-                std::string hdrPath = openHdrFileDialog();
+                std::string hdrPath = openHdrFileDialog(ImGui::GetMainViewport()->PlatformHandleRaw);
                 if (!hdrPath.empty())
                 {
                     scene.customEnvmapPath = hdrPath;
@@ -775,7 +836,7 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
 
                     if (ImGui::Button("Save Shadow Map..."))
                     {
-                        std::string savePath = saveImageFileDialog();
+                        std::string savePath = saveImageFileDialog(ImGui::GetMainViewport()->PlatformHandleRaw);
                         if (!savePath.empty())
                         {
                             if (renderer.saveShadowMap(savePath))

@@ -17,6 +17,7 @@
 
 #include <glm/glm.hpp>
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <cstdint>
@@ -174,6 +175,12 @@ public:
 
     bool reloadGPUShader();
 
+    // Explicitly rebuild acceleration structures / BVH with optional progress callbacks.
+    // Called from App::runImport between frames so the overlay can update at each stage.
+    // Clears scene.geometryDirty so renderScene won't rebuild again on the next frame.
+    using ProgressFn = std::function<void(const std::string& stage, float progress)>;
+    void buildGeometry(Scene& scene, ProgressFn progress = nullptr);
+
 private:
     void renderRasterize(Scene& scene, int selectedGroup, int selectedSubmesh,
                          const std::string& selectedObjectName);
@@ -189,7 +196,7 @@ private:
 #ifdef VEX_BACKEND_VULKAN
     void renderVKRaytrace(Scene& scene);
 #endif
-    void rebuildRaytraceGeometry(Scene& scene);
+    void rebuildRaytraceGeometry(Scene& scene, ProgressFn progress = nullptr);
 
     std::unique_ptr<vex::Shader> m_meshShader;
     std::unique_ptr<vex::Framebuffer> m_framebuffer;
@@ -246,8 +253,8 @@ private:
     float m_rasterGamma      = 2.2f;
     bool  m_rasterEnableACES = true;
     glm::vec3 m_rasterEnvColor { 0.5f };
-    bool  m_rasterEnableEnvLighting  = false;
-    float m_rasterEnvLightMultiplier = 1.0f;
+    bool  m_rasterEnableEnvLighting  = true;
+    float m_rasterEnvLightMultiplier = 0.3f;
 
     // GPU raytracing (OpenGL only)
 #ifdef VEX_BACKEND_OPENGL
@@ -291,8 +298,8 @@ private:
     bool  m_vkEnableNEE             = true;
     bool  m_vkEnableAA              = true;
     bool  m_vkEnableFireflyClamping = true;
-    bool  m_vkEnableEnvLighting     = false;
-    float m_vkEnvLightMultiplier    = 1.0f;
+    bool  m_vkEnableEnvLighting     = true;
+    float m_vkEnvLightMultiplier    = 0.3f;
     bool  m_vkFlatShading           = false;
     bool  m_vkEnableNormalMapping   = true;
     bool  m_vkEnableEmissive        = true;

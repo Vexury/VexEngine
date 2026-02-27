@@ -72,4 +72,7 @@ void GLMesh::draw() const
     glBindVertexArray(0);
 }
 
+void Mesh::beginBatchUpload() {}
+void Mesh::endBatchUpload()   {}
+
 } // namespace vex
