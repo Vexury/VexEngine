@@ -13,8 +13,49 @@
 
 #include <imgui.h>
 
+#include <glm/gtc/matrix_transform.hpp>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/matrix_decompose.hpp>
+
 #include <iterator>
 #include <string>
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Gizmo helpers (file-scope)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Project world pos → viewport screen pos (returns {-99999,-99999} if behind camera)
+static ImVec2 gizmoProject(const glm::vec3& p, const glm::mat4& vp, ImVec2 org, ImVec2 sz)
+{
+    glm::vec4 c = vp * glm::vec4(p, 1.f);
+    if (c.w < 1e-5f) return { -99999.f, -99999.f };
+    float iw = 1.f / c.w;
+    return { org.x + (c.x * iw * .5f + .5f) * sz.x,
+             org.y + (1.f - (c.y * iw * .5f + .5f)) * sz.y };
+}
+
+// 2-D distance from point P to segment AB
+static float gizmoSegDist(ImVec2 p, ImVec2 a, ImVec2 b)
+{
+    float dx = b.x - a.x, dy = b.y - a.y, d2 = dx*dx + dy*dy;
+    if (d2 < 1.f) return hypotf(p.x - a.x, p.y - a.y);
+    float t = glm::clamp(((p.x - a.x)*dx + (p.y - a.y)*dy) / d2, 0.f, 1.f);
+    float ex = a.x + t*dx - p.x, ey = a.y + t*dy - p.y;
+    return sqrtf(ex*ex + ey*ey);
+}
+
+// Draw arrow: line + filled triangle arrowhead
+static void gizmoArrow(ImDrawList* dl, ImVec2 root, ImVec2 tip, ImU32 col)
+{
+    dl->AddLine(root, tip, col, 2.5f);
+    float dx = tip.x - root.x, dy = tip.y - root.y;
+    float len = sqrtf(dx*dx + dy*dy); if (len < 1.f) return;
+    float nx = dx/len, ny = dy/len, px = -ny, py = nx;
+    ImVec2 base = { tip.x - nx*14.f, tip.y - ny*14.f };
+    dl->AddTriangleFilled(tip,
+        { base.x + px*5.f, base.y + py*5.f },
+        { base.x - px*5.f, base.y - py*5.f }, col);
+}
 
 bool EditorUI::consumePickRequest(int& outX, int& outY)
 {
@@ -27,7 +68,7 @@ bool EditorUI::consumePickRequest(int& outX, int& outY)
     return true;
 }
 
-void EditorUI::renderViewport(SceneRenderer& renderer)
+void EditorUI::renderViewport(SceneRenderer& renderer, Scene& scene)
 {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::Begin("Viewport");
@@ -47,7 +88,6 @@ void EditorUI::renderViewport(SceneRenderer& renderer)
         if (spec.width != w || spec.height != h)
             fb->resize(w, h);
 
-        // Detect left-click in viewport for picking
         ImVec2 cursor = ImGui::GetCursorScreenPos();
 
         if (fb->flipsUV())
@@ -66,7 +106,13 @@ void EditorUI::renderViewport(SceneRenderer& renderer)
             );
         }
 
-        if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        bool gizmoActive = false;
+        if (m_selectionType == Selection::Mesh &&
+            renderer.getRenderMode() == RenderMode::Rasterize)
+            gizmoActive = drawGizmo(scene, ImGui::GetWindowDrawList(), cursor, size);
+
+        if (!gizmoActive &&
+            ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         {
             ImVec2 mouse = ImGui::GetMousePos();
             m_pickX = static_cast<int>(mouse.x - cursor.x);
@@ -78,6 +124,250 @@ void EditorUI::renderViewport(SceneRenderer& renderer)
     ImGui::End();
 }
 
+bool EditorUI::drawGizmo(Scene& scene, ImDrawList* dl, ImVec2 vpOrigin, ImVec2 vpSize)
+{
+    if (m_selectionIndex < 0 || m_selectionIndex >= static_cast<int>(scene.meshGroups.size()))
+        return false;
+
+    auto& group = scene.meshGroups[m_selectionIndex];
+
+    float aspect = vpSize.x / vpSize.y;
+    glm::mat4 view = scene.camera.getViewMatrix();
+    glm::mat4 proj = scene.camera.getProjectionMatrix(aspect);
+    glm::mat4 vp   = proj * view;
+
+    glm::vec3 camPos = scene.camera.getPosition();
+    glm::vec3 pivot  = glm::vec3(group.modelMatrix[3]);
+
+    float camDist  = glm::length(camPos - pivot);
+    float gizmoLen = camDist * 0.18f;
+
+    const ImU32 colX  = IM_COL32(220,  50,  50, 255);
+    const ImU32 colY  = IM_COL32( 50, 220,  50, 255);
+    const ImU32 colZ  = IM_COL32( 50,  50, 220, 255);
+    const ImU32 colXH = IM_COL32(255, 150, 150, 255);
+    const ImU32 colYH = IM_COL32(150, 255, 150, 255);
+    const ImU32 colZH = IM_COL32(150, 150, 255, 255);
+    const ImU32 axisColors[3]  = { colX,  colY,  colZ  };
+    const ImU32 axisColorsH[3] = { colXH, colYH, colZH };
+
+    const glm::vec3 axisDirs[3] = {
+        glm::vec3(1, 0, 0),
+        glm::vec3(0, 1, 0),
+        glm::vec3(0, 0, 1)
+    };
+
+    ImVec2 origin2D = gizmoProject(pivot, vp, vpOrigin, vpSize);
+    if (origin2D.x < -9000.f) return false;
+
+    ImVec2 mouse         = ImGui::GetMousePos();
+    bool   lmbDown       = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    bool   lmbJustPressed= ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+    bool   lmbReleased   = ImGui::IsMouseReleased(ImGuiMouseButton_Left);
+
+    int hoveredAxis = m_gizmoDragging ? m_gizmoAxis : -1;
+
+    if (m_gizmoMode == 0 || m_gizmoMode == 2) // Translate or Scale
+    {
+        ImVec2 tips[3];
+        for (int a = 0; a < 3; ++a)
+            tips[a] = gizmoProject(pivot + axisDirs[a] * gizmoLen, vp, vpOrigin, vpSize);
+
+        if (!m_gizmoDragging)
+        {
+            float bestDist = 8.f;
+            hoveredAxis = -1;
+            for (int a = 0; a < 3; ++a)
+            {
+                if (tips[a].x < -9000.f) continue;
+                float d = gizmoSegDist(mouse, origin2D, tips[a]);
+                if (d < bestDist) { bestDist = d; hoveredAxis = a; }
+            }
+        }
+
+        if (!m_gizmoDragging && lmbJustPressed && hoveredAxis >= 0)
+        {
+            m_gizmoDragging  = true;
+            m_gizmoAxis      = hoveredAxis;
+            m_gizmoDragStart = mouse;
+            m_gizmoMatStart  = group.modelMatrix;
+        }
+
+        if (m_gizmoDragging && lmbDown)
+        {
+            int a = m_gizmoAxis;
+            glm::vec3 startPivot = glm::vec3(m_gizmoMatStart[3]);
+            ImVec2 startOrigin2D = gizmoProject(startPivot, vp, vpOrigin, vpSize);
+            ImVec2 startTip2D    = gizmoProject(startPivot + axisDirs[a] * gizmoLen, vp, vpOrigin, vpSize);
+            float dx = startTip2D.x - startOrigin2D.x;
+            float dy = startTip2D.y - startOrigin2D.y;
+            float screenLen = sqrtf(dx*dx + dy*dy);
+            if (screenLen > 1.f)
+            {
+                float nx = dx / screenLen, ny = dy / screenLen;
+                float pixelDist = (mouse.x - m_gizmoDragStart.x) * nx
+                                + (mouse.y - m_gizmoDragStart.y) * ny;
+                float worldDist = pixelDist * gizmoLen / screenLen;
+
+                if (m_gizmoMode == 0)
+                {
+                    group.modelMatrix = glm::translate(m_gizmoMatStart, axisDirs[a] * worldDist);
+                }
+                else
+                {
+                    glm::vec3 sp = glm::vec3(m_gizmoMatStart[3]);
+                    glm::mat4 T  = glm::translate(glm::mat4(1.f),  sp);
+                    glm::mat4 iT = glm::translate(glm::mat4(1.f), -sp);
+                    float sf = glm::max(0.01f, 1.0f + worldDist / gizmoLen);
+                    glm::vec3 sv(1.f); sv[a] = sf;
+                    group.modelMatrix = T * glm::scale(iT * m_gizmoMatStart, sv);
+                }
+            }
+        }
+
+        if (m_gizmoDragging && lmbReleased)
+        {
+            m_gizmoDragging = false;
+            m_gizmoAxis     = -1;
+        }
+
+        for (int a = 0; a < 3; ++a)
+        {
+            if (tips[a].x < -9000.f) continue;
+            bool    active = (hoveredAxis == a);
+            ImU32   col    = active ? axisColorsH[a] : axisColors[a];
+            if (m_gizmoMode == 0)
+            {
+                gizmoArrow(dl, origin2D, tips[a], col);
+            }
+            else
+            {
+                dl->AddLine(origin2D, tips[a], col, 2.5f);
+                float hSize = 6.f;
+                dl->AddRectFilled(
+                    { tips[a].x - hSize, tips[a].y - hSize },
+                    { tips[a].x + hSize, tips[a].y + hSize },
+                    col);
+            }
+        }
+    }
+    else if (m_gizmoMode == 1) // Rotate
+    {
+        float ringRadius = camDist * 0.16f;
+        const int SEGS = 64;
+
+        if (!m_gizmoDragging)
+        {
+            float bestDist = 10.f;
+            hoveredAxis = -1;
+            for (int a = 0; a < 3; ++a)
+            {
+                const glm::vec3& axis = axisDirs[a];
+                glm::vec3 up = (fabsf(axis.z) < 0.9f) ? glm::vec3(0,0,1) : glm::vec3(0,1,0);
+                glm::vec3 t1 = glm::normalize(glm::cross(axis, up));
+                glm::vec3 t2 = glm::cross(axis, t1);
+                for (int s = 0; s < SEGS; ++s)
+                {
+                    float ang0 = static_cast<float>(s)   / SEGS * 2.f * 3.14159265f;
+                    float ang1 = static_cast<float>(s+1) / SEGS * 2.f * 3.14159265f;
+                    glm::vec3 p0 = pivot + (t1 * cosf(ang0) + t2 * sinf(ang0)) * ringRadius;
+                    glm::vec3 p1 = pivot + (t1 * cosf(ang1) + t2 * sinf(ang1)) * ringRadius;
+                    ImVec2 s0 = gizmoProject(p0, vp, vpOrigin, vpSize);
+                    ImVec2 s1 = gizmoProject(p1, vp, vpOrigin, vpSize);
+                    if (s0.x < -9000.f || s1.x < -9000.f) continue;
+                    float d = gizmoSegDist(mouse, s0, s1);
+                    if (d < bestDist) { bestDist = d; hoveredAxis = a; }
+                }
+            }
+        }
+
+        if (!m_gizmoDragging && lmbJustPressed && hoveredAxis >= 0)
+        {
+            m_gizmoDragging  = true;
+            m_gizmoAxis      = hoveredAxis;
+            m_gizmoDragStart = mouse;
+            m_gizmoMatStart  = group.modelMatrix;
+            m_gizmoRotRefSet = false;
+        }
+
+        if (m_gizmoDragging && lmbDown)
+        {
+            int a = m_gizmoAxis;
+            const glm::vec3& axis = axisDirs[a];
+
+            float ndcX = (mouse.x - vpOrigin.x) / vpSize.x * 2.f - 1.f;
+            float ndcY = 1.f - (mouse.y - vpOrigin.y) / vpSize.y * 2.f;
+            glm::mat4 invVP = glm::inverse(vp);
+            glm::vec4 worldFar = invVP * glm::vec4(ndcX, ndcY, 1.f, 1.f);
+            glm::vec3 rayDir = glm::normalize(glm::vec3(worldFar) / worldFar.w - camPos);
+
+            float denom = glm::dot(rayDir, axis);
+            if (fabsf(denom) > 1e-5f)
+            {
+                float t = glm::dot(pivot - camPos, axis) / denom;
+                if (t > 0.f)
+                {
+                    glm::vec3 hitPoint = camPos + rayDir * t;
+                    glm::vec3 hitVec   = hitPoint - pivot;
+                    float hitLen = glm::length(hitVec);
+                    if (hitLen > 1e-5f)
+                    {
+                        hitVec /= hitLen;
+                        if (!m_gizmoRotRefSet)
+                        {
+                            m_gizmoRotRef    = hitVec;
+                            m_gizmoRotRefSet = true;
+                        }
+                        else
+                        {
+                            float cosA  = glm::clamp(glm::dot(m_gizmoRotRef, hitVec), -1.f, 1.f);
+                            float sinA  = glm::dot(glm::cross(m_gizmoRotRef, hitVec), axis);
+                            float angle = atan2f(sinA, cosA);
+                            glm::mat4 T  = glm::translate(glm::mat4(1.f),  pivot);
+                            glm::mat4 iT = glm::translate(glm::mat4(1.f), -pivot);
+                            glm::mat4 R  = glm::rotate(glm::mat4(1.f), angle, axis);
+                            group.modelMatrix = T * R * iT * m_gizmoMatStart;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (m_gizmoDragging && lmbReleased)
+        {
+            m_gizmoDragging  = false;
+            m_gizmoAxis      = -1;
+            m_gizmoRotRefSet = false;
+        }
+
+        for (int a = 0; a < 3; ++a)
+        {
+            const glm::vec3& axis = axisDirs[a];
+            glm::vec3 up = (fabsf(axis.z) < 0.9f) ? glm::vec3(0,0,1) : glm::vec3(0,1,0);
+            glm::vec3 t1 = glm::normalize(glm::cross(axis, up));
+            glm::vec3 t2 = glm::cross(axis, t1);
+            bool  active = (hoveredAxis == a);
+            ImU32 col    = active ? axisColorsH[a] : axisColors[a];
+            for (int s = 0; s < SEGS; ++s)
+            {
+                float ang0 = static_cast<float>(s)   / SEGS * 2.f * 3.14159265f;
+                float ang1 = static_cast<float>(s+1) / SEGS * 2.f * 3.14159265f;
+                glm::vec3 p0 = pivot + (t1 * cosf(ang0) + t2 * sinf(ang0)) * ringRadius;
+                glm::vec3 p1 = pivot + (t1 * cosf(ang1) + t2 * sinf(ang1)) * ringRadius;
+                ImVec2 s0 = gizmoProject(p0, vp, vpOrigin, vpSize);
+                ImVec2 s1 = gizmoProject(p1, vp, vpOrigin, vpSize);
+                if (s0.x < -9000.f || s1.x < -9000.f) continue;
+                dl->AddLine(s0, s1, col, 2.f);
+            }
+        }
+    }
+
+    // Center dot
+    dl->AddCircleFilled(origin2D, 4.f, IM_COL32(255, 255, 255, 200));
+
+    return (hoveredAxis >= 0) || m_gizmoDragging;
+}
+
 void EditorUI::renderHierarchy(Scene& scene, SceneRenderer& renderer)
 {
     ImGui::Begin("Hierarchy");
@@ -85,50 +375,11 @@ void EditorUI::renderHierarchy(Scene& scene, SceneRenderer& renderer)
     ImGui::TextUnformatted("Scene");
     ImGui::Indent();
 
-    // Mesh groups
-    for (int gi = 0; gi < static_cast<int>(scene.meshGroups.size()); ++gi)
+    // Camera
     {
-        bool groupSelected = (m_selectionType == Selection::Mesh && m_selectionIndex == gi);
-
-        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow
-                                 | ImGuiTreeNodeFlags_DefaultOpen;
-        if (groupSelected && m_submeshIndex == -1)
-            flags |= ImGuiTreeNodeFlags_Selected;
-
-        bool open = ImGui::TreeNodeEx(scene.meshGroups[gi].name.c_str(), flags);
-
-        if (ImGui::IsItemClicked())
-        {
-            m_selectionType  = Selection::Mesh;
-            m_selectionIndex = gi;
-            m_submeshIndex   = -1;
-        }
-
-        if (open)
-        {
-            for (int si = 0; si < static_cast<int>(scene.meshGroups[gi].submeshes.size()); ++si)
-            {
-                const auto& sub = scene.meshGroups[gi].submeshes[si];
-                bool subSelected = groupSelected && m_submeshIndex == si;
-                ImGui::Indent();
-                if (ImGui::Selectable(sub.name.c_str(), subSelected))
-                {
-                    m_selectionType  = Selection::Mesh;
-                    m_selectionIndex = gi;
-                    m_submeshIndex   = si;
-                }
-                ImGui::Unindent();
-            }
-            ImGui::TreePop();
-        }
-    }
-
-    // Skybox
-    if (scene.showSkybox)
-    {
-        bool selected = (m_selectionType == Selection::Skybox);
-        if (ImGui::Selectable("Skybox", selected))
-            m_selectionType = Selection::Skybox;
+        bool selected = (m_selectionType == Selection::Camera);
+        if (ImGui::Selectable("Camera", selected))
+            m_selectionType = Selection::Camera;
     }
 
     // Light
@@ -147,11 +398,61 @@ void EditorUI::renderHierarchy(Scene& scene, SceneRenderer& renderer)
             m_selectionType = Selection::Sun;
     }
 
-    // Camera
+    // Skybox
+    if (scene.showSkybox)
     {
-        bool selected = (m_selectionType == Selection::Camera);
-        if (ImGui::Selectable("Camera", selected))
-            m_selectionType = Selection::Camera;
+        bool selected = (m_selectionType == Selection::Skybox);
+        if (ImGui::Selectable("Skybox", selected))
+            m_selectionType = Selection::Skybox;
+    }
+
+    // Mesh groups
+    for (int gi = 0; gi < static_cast<int>(scene.meshGroups.size()); ++gi)
+    {
+        bool groupSelected = (m_selectionType == Selection::Mesh && m_selectionIndex == gi);
+
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow
+                                 | ImGuiTreeNodeFlags_DefaultOpen;
+        if (groupSelected && m_submeshIndex == -1)
+            flags |= ImGuiTreeNodeFlags_Selected;
+
+        bool open = ImGui::TreeNodeEx(scene.meshGroups[gi].name.c_str(), flags);
+
+        if (ImGui::IsItemClicked())
+        {
+            m_selectionType      = Selection::Mesh;
+            m_selectionIndex     = gi;
+            m_submeshIndex       = -1;
+            m_selectedObjectName.clear();
+        }
+
+        if (open)
+        {
+            const auto& submeshes = scene.meshGroups[gi].submeshes;
+            std::string lastObj;
+            for (int si = 0; si < static_cast<int>(submeshes.size()); ++si)
+            {
+                const std::string& objName = submeshes[si].meshData.objectName;
+                // One entry per unique objectName (submeshes from the same shape
+                // are contiguous — skip duplicates).
+                if (objName == lastObj) continue;
+                lastObj = objName;
+
+                const std::string& displayName = objName.empty()
+                    ? submeshes[si].name : objName;
+                bool objSelected = groupSelected
+                    && m_selectedObjectName == objName;
+
+                if (ImGui::Selectable(displayName.c_str(), objSelected))
+                {
+                    m_selectionType         = Selection::Mesh;
+                    m_selectionIndex        = gi;
+                    m_selectedObjectName    = objName;
+                    m_submeshIndex          = -1;
+                }
+            }
+            ImGui::TreePop();
+        }
     }
 
     ImGui::Unindent();
@@ -263,9 +564,111 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                     ImGui::Text("Roughness: %s", texName(sm.meshData.roughnessTexturePath));
                     ImGui::Text("Metallic:  %s", texName(sm.meshData.metallicTexturePath));
                 }
+                else if (!m_selectedObjectName.empty())
+                {
+                    // --- Object (shape) selected — Unity-style: Transform + Materials ---
+                    const std::string& displayName = m_selectedObjectName.empty()
+                        ? group.name : m_selectedObjectName;
+                    ImGui::TextUnformatted(displayName.c_str());
+                    ImGui::Separator();
+
+                    // Transform (shared across all objects in the group via modelMatrix)
+                    ImGui::SeparatorText("Transform");
+
+                    glm::vec3 decompScale, decompTranslation, decompSkew;
+                    glm::vec4 decompPerspective;
+                    glm::quat decompRotation;
+                    glm::decompose(group.modelMatrix, decompScale, decompRotation,
+                                   decompTranslation, decompSkew, decompPerspective);
+                    glm::vec3 eulerDeg = glm::degrees(glm::eulerAngles(glm::conjugate(decompRotation)));
+
+                    bool needRecompose = false;
+                    bool released      = false;
+
+                    if (ImGui::DragFloat3("Translation", &decompTranslation.x, 0.01f, 0.f, 0.f, "%.3f"))
+                        needRecompose = true;
+                    released |= ImGui::IsItemDeactivatedAfterEdit();
+                    if (ImGui::DragFloat3("Rotation",    &eulerDeg.x,          0.5f,  0.f, 0.f, "%.1f"))
+                        needRecompose = true;
+                    released |= ImGui::IsItemDeactivatedAfterEdit();
+                    if (ImGui::DragFloat3("Scale",       &decompScale.x,       0.01f, 0.001f, 0.f, "%.3f"))
+                        needRecompose = true;
+                    released |= ImGui::IsItemDeactivatedAfterEdit();
+
+                    if (needRecompose)
+                    {
+                        decompScale = glm::max(decompScale, glm::vec3(0.001f));
+                        group.modelMatrix = glm::translate(glm::mat4(1.f), decompTranslation)
+                                          * glm::mat4_cast(glm::quat(glm::radians(eulerDeg)))
+                                          * glm::scale(glm::mat4(1.f), decompScale);
+                    }
+                    if (released && renderer.getRenderMode() != RenderMode::Rasterize)
+                        scene.geometryDirty = true;
+
+                    if (ImGui::Button("Reset Transform"))
+                    {
+                        group.modelMatrix = glm::mat4(1.f);
+                        if (renderer.getRenderMode() != RenderMode::Rasterize)
+                            scene.geometryDirty = true;
+                    }
+
+                    // Materials — one collapsible slot per submesh belonging to this object
+                    ImGui::SeparatorText("Materials");
+
+                    const char* matTypes[] = { "Microfacet (GGX)", "Mirror", "Dielectric" };
+                    auto texName = [](const std::string& path) -> const char* {
+                        if (path.empty()) return "none";
+                        auto s = path.find_last_of("/\\");
+                        return path.c_str() + (s != std::string::npos ? s + 1 : 0);
+                    };
+
+                    for (int si = 0; si < static_cast<int>(group.submeshes.size()); ++si)
+                    {
+                        auto& sm = group.submeshes[si];
+                        if (sm.meshData.objectName != m_selectedObjectName) continue;
+
+                        ImGui::PushID(si);
+                        if (ImGui::CollapsingHeader(sm.name.c_str()))
+                        {
+                            ImGui::Text("Vertices:  %u", sm.vertexCount);
+                            ImGui::Text("Triangles: %u", sm.indexCount / 3);
+
+                            if (ImGui::Combo("Type", &sm.meshData.materialType, matTypes, 3))
+                                scene.materialDirty = true;
+
+                            if (sm.meshData.materialType == 0)
+                            {
+                                if (sm.meshData.roughnessTexturePath.empty())
+                                {
+                                    ImGui::DragFloat("Roughness", &sm.meshData.roughness, 0.01f, 0.f, 1.f, "%.2f");
+                                    if (ImGui::IsItemDeactivatedAfterEdit()) scene.materialDirty = true;
+                                }
+                                else ImGui::TextDisabled("Roughness  (texture)");
+
+                                if (sm.meshData.metallicTexturePath.empty())
+                                {
+                                    ImGui::DragFloat("Metallic", &sm.meshData.metallic, 0.01f, 0.f, 1.f, "%.2f");
+                                    if (ImGui::IsItemDeactivatedAfterEdit()) scene.materialDirty = true;
+                                }
+                                else ImGui::TextDisabled("Metallic   (texture)");
+                            }
+                            else if (sm.meshData.materialType == 2)
+                            {
+                                ImGui::DragFloat("IOR", &sm.meshData.ior, 0.01f, 1.f, 3.f, "%.2f");
+                                if (ImGui::IsItemDeactivatedAfterEdit()) scene.materialDirty = true;
+                            }
+
+                            ImGui::Text("Diffuse:   %s", texName(sm.meshData.diffuseTexturePath));
+                            ImGui::Text("Normal:    %s", texName(sm.meshData.normalTexturePath));
+                            ImGui::Text("Roughness: %s", texName(sm.meshData.roughnessTexturePath));
+                            ImGui::Text("Metallic:  %s", texName(sm.meshData.metallicTexturePath));
+                        }
+                        ImGui::PopID();
+                    }
+                }
                 else
                 {
-                    // --- Group selected ---
+                    // --- Group selected (top-level click) ---
                     ImGui::TextUnformatted(group.name.c_str());
                     ImGui::Separator();
                     ImGui::Text("Submeshes: %d", static_cast<int>(group.submeshes.size()));
@@ -281,7 +684,6 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                         ImGui::Text("Root AABB: %.2f x %.2f x %.2f", sz.x, sz.y, sz.z);
                         ImGui::Text("  Min: (%.2f, %.2f, %.2f)", root.min.x, root.min.y, root.min.z);
                         ImGui::Text("  Max: (%.2f, %.2f, %.2f)", root.max.x, root.max.y, root.max.z);
-
                         ImGui::Text("SAH Cost: %.1f", renderer.getBVHSAHCost());
 
                         size_t mem = renderer.getBVHMemoryBytes();

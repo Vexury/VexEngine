@@ -19,7 +19,8 @@ struct Vertex
 
 struct MeshData
 {
-    std::string name;
+    std::string name;       // material group name (from MTL usemtl)
+    std::string objectName; // parent object/shape name (from OBJ o/g tag)
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
     std::string diffuseTexturePath;

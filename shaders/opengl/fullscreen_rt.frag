@@ -40,14 +40,16 @@ void main()
     c = pow(c, vec3(invGamma));
 
     // Screen-space outline composite (display-space overlay)
+    // The mask is always a native GL framebuffer (bottom-left origin), so sample
+    // it with the unflipped TexCoords regardless of u_flipV.
     if (u_enableOutline)
     {
         vec2 ts   = 1.0 / vec2(textureSize(u_outlineMask, 0));
-        float orig = texture(u_outlineMask, uv).r;
+        float orig = texture(u_outlineMask, TexCoords).r;
         float dil  = 0.0;
         for (int dx = -2; dx <= 2; dx++)
             for (int dy = -2; dy <= 2; dy++)
-                dil = max(dil, texture(u_outlineMask, uv + vec2(dx, dy) * ts).r);
+                dil = max(dil, texture(u_outlineMask, TexCoords + vec2(dx, dy) * ts).r);
         float ring = dil * (1.0 - orig);
         c = mix(c, vec3(1.0, 0.5, 0.0), ring);
     }

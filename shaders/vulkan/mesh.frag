@@ -31,6 +31,7 @@ layout(set = 0, binding = 0) uniform UBO {
     float shadowNormalBias; // world-space normal offset per shadow texel
     float _pad7b;
     float _pad7c;
+    mat4  model;
 };
 
 layout(set = 1, binding = 0) uniform sampler2D u_diffuseMap;

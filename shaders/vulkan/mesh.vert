@@ -31,6 +31,7 @@ layout(set = 0, binding = 0) uniform UBO {
     float _pad7a;
     float _pad7b;
     float _pad7c;
+    mat4  model;
 };
 
 layout(location = 0) out vec3 vWorldPos;
@@ -42,11 +43,12 @@ layout(location = 5) out vec4 vTangent;
 
 void main()
 {
-    vWorldPos = aPos;
-    vNormal = aNormal;
+    vec4 worldPos = model * vec4(aPos, 1.0);
+    vWorldPos = worldPos.xyz;
+    vNormal = mat3(transpose(inverse(model))) * aNormal;
     vColor = aColor;
     vEmissive = aEmissive;
     vUV = aUV;
-    vTangent = aTangent;
-    gl_Position = projection * view * vec4(aPos, 1.0);
+    vTangent = vec4(mat3(model) * aTangent.xyz, aTangent.w);
+    gl_Position = projection * view * worldPos;
 }

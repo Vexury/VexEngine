@@ -46,6 +46,9 @@ void main()
     c = pow(c, vec3(1.0 / pc.gamma));
 
     // Screen-space outline composite (display-space overlay)
+    // The mask is rendered by the same VK rasterizer pipeline as the HDR framebuffer,
+    // so it has the same Y orientation and must be sampled with the same (possibly
+    // flipped) uv — not the raw vUV.
     if (pc.enableOutline != 0u)
     {
         vec2  ts   = 1.0 / vec2(textureSize(u_outlineMask, 0));

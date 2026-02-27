@@ -20,6 +20,7 @@
 #include <vex/vulkan/vk_context.h>
 #include <vex/vulkan/vk_shader.h>
 #include <vex/vulkan/vk_framebuffer.h>
+#include <vex/vulkan/vk_texture.h>
 #endif
 
 #include <glm/glm.hpp>
@@ -331,6 +332,11 @@ void SceneRenderer::setRenderMode(RenderMode mode)
     m_prevAperture      = -1.0f;  // force DoF re-upload on next frame
     m_prevFocusDistance = -1.0f;
 
+    // When entering any path tracing mode, force a full geometry rebuild so that
+    // any model matrix changes made via gizmos during rasterization are applied.
+    if (mode == RenderMode::CPURaytrace || mode == RenderMode::GPURaytrace)
+        m_pendingGeomRebuild = true;
+
     if (mode == RenderMode::CPURaytrace && m_cpuRaytracer)
         m_cpuRaytracer->reset();
 
@@ -338,7 +344,7 @@ void SceneRenderer::setRenderMode(RenderMode mode)
     if (mode == RenderMode::GPURaytrace && m_gpuRaytracer)
     {
         m_gpuRaytracer->reset();
-        m_gpuGeometryDirty = true; // force re-upload
+        m_gpuGeometryDirty = true;
     }
 #endif
 #ifdef VEX_BACKEND_VULKAN
@@ -346,6 +352,7 @@ void SceneRenderer::setRenderMode(RenderMode mode)
     {
         m_vkRaytracer->reset();
         m_vkSampleCount = 0;
+        m_vkGeomDirty = true;
     }
 #endif
 }
@@ -832,15 +839,19 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene)
         return it != textureMap.end() ? it->second : -1;
     };
 
-    // Rebuild the cached scene AABB used for shadow frustum fitting.
-    m_sceneAABB = vex::AABB{};
-    for (const auto& group : scene.meshGroups)
-        for (const auto& sm : group.submeshes)
+    // Rebuild per-group local-space AABBs (no model matrix — raw mesh positions).
+    // The shadow pass transforms these corners by group.modelMatrix each frame.
+    m_groupLocalAABBs.clear();
+    m_groupLocalAABBs.resize(scene.meshGroups.size());
+    for (size_t gi = 0; gi < scene.meshGroups.size(); ++gi)
+        for (const auto& sm : scene.meshGroups[gi].submeshes)
             for (const auto& v : sm.meshData.vertices)
-                m_sceneAABB.grow(v.position);
+                m_groupLocalAABBs[gi].grow(v.position);
 
     for (const auto& group : scene.meshGroups)
     {
+        glm::mat3 normalMat = glm::mat3(glm::transpose(glm::inverse(group.modelMatrix)));
+
         for (const auto& sm : group.submeshes)
         {
             const auto& verts = sm.meshData.vertices;
@@ -858,18 +869,22 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene)
                 const auto& v1 = verts[indices[i + 1]];
                 const auto& v2 = verts[indices[i + 2]];
 
-                glm::vec3 edge1 = v1.position - v0.position;
-                glm::vec3 edge2 = v2.position - v0.position;
+                glm::vec3 p0 = glm::vec3(group.modelMatrix * glm::vec4(v0.position, 1.0f));
+                glm::vec3 p1 = glm::vec3(group.modelMatrix * glm::vec4(v1.position, 1.0f));
+                glm::vec3 p2 = glm::vec3(group.modelMatrix * glm::vec4(v2.position, 1.0f));
+
+                glm::vec3 edge1 = p1 - p0;
+                glm::vec3 edge2 = p2 - p0;
                 glm::vec3 cross = glm::cross(edge1, edge2);
                 float len = glm::length(cross);
 
                 vex::CPURaytracer::Triangle tri;
-                tri.v0 = v0.position;
-                tri.v1 = v1.position;
-                tri.v2 = v2.position;
-                tri.n0 = v0.normal;
-                tri.n1 = v1.normal;
-                tri.n2 = v2.normal;
+                tri.v0 = p0;
+                tri.v1 = p1;
+                tri.v2 = p2;
+                tri.n0 = glm::normalize(normalMat * v0.normal);
+                tri.n1 = glm::normalize(normalMat * v1.normal);
+                tri.n2 = glm::normalize(normalMat * v2.normal);
                 tri.uv0 = v0.uv;
                 tri.uv1 = v1.uv;
                 tri.uv2 = v2.uv;
@@ -1049,19 +1064,23 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene)
         m_vkTriShading.clear();
         m_vkInstanceOffsets.clear();
 
-        std::vector<uint32_t> vkLightIndices;
-        std::vector<float>    vkLightCDF;
+        std::vector<uint32_t>  vkLightIndices;
+        std::vector<float>     vkLightCDF;
+        std::vector<glm::mat4> blasTransforms;
         float vkTotalLightArea = 0.0f;
         uint32_t globalTriOffset = 0;
 
         for (const auto& group : scene.meshGroups)
         {
+            glm::mat3 vkNormalMat = glm::mat3(glm::transpose(glm::inverse(group.modelMatrix)));
+
             for (const auto& sm : group.submeshes)
             {
                 auto* vkMesh = static_cast<vex::VKMesh*>(sm.mesh.get());
                 m_vkRaytracer->addBlas(
                     vkMesh->getVertexBuffer(), vkMesh->getVertexCount(), sizeof(vex::Vertex),
                     vkMesh->getIndexBuffer(),  vkMesh->getIndexCount());
+                blasTransforms.push_back(group.modelMatrix);
 
                 m_vkInstanceOffsets.push_back(globalTriOffset);
 
@@ -1080,14 +1099,21 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene)
                     const auto& v1 = verts[indices[i + 1]];
                     const auto& v2 = verts[indices[i + 2]];
 
-                    glm::vec3 e1 = v1.position - v0.position;
-                    glm::vec3 e2 = v2.position - v0.position;
+                    glm::vec3 p0 = glm::vec3(group.modelMatrix * glm::vec4(v0.position, 1.0f));
+                    glm::vec3 p1 = glm::vec3(group.modelMatrix * glm::vec4(v1.position, 1.0f));
+                    glm::vec3 p2 = glm::vec3(group.modelMatrix * glm::vec4(v2.position, 1.0f));
+                    glm::vec3 n0 = glm::normalize(vkNormalMat * v0.normal);
+                    glm::vec3 n1 = glm::normalize(vkNormalMat * v1.normal);
+                    glm::vec3 n2 = glm::normalize(vkNormalMat * v2.normal);
+
+                    glm::vec3 e1 = p1 - p0;
+                    glm::vec3 e2 = p2 - p0;
                     glm::vec3 cr = glm::cross(e1, e2);
                     float len = glm::length(cr);
                     glm::vec3 geoN = (len > GEOMETRY_EPSILON) ? (cr / len) : glm::vec3(0, 1, 0);
                     float area = len * 0.5f;
 
-                    // Tangent from UV gradients
+                    // Tangent from UV gradients (using world-space edges)
                     glm::vec2 dUV1 = v1.uv - v0.uv;
                     glm::vec2 dUV2 = v2.uv - v0.uv;
                     float det = dUV1.x * dUV2.y - dUV2.x * dUV1.y;
@@ -1102,14 +1128,14 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene)
                     }
 
                     // [0] n0.xyz + roughnessTexIdx (as int bits)
-                    m_vkTriShading.push_back(v0.normal.x); m_vkTriShading.push_back(v0.normal.y);
-                    m_vkTriShading.push_back(v0.normal.z); m_vkTriShading.push_back(iBF(roughnessTexIdx));
+                    m_vkTriShading.push_back(n0.x); m_vkTriShading.push_back(n0.y);
+                    m_vkTriShading.push_back(n0.z); m_vkTriShading.push_back(iBF(roughnessTexIdx));
                     // [1] n1.xyz + metallicTexIdx (as int bits)
-                    m_vkTriShading.push_back(v1.normal.x); m_vkTriShading.push_back(v1.normal.y);
-                    m_vkTriShading.push_back(v1.normal.z); m_vkTriShading.push_back(iBF(metallicTexIdx));
+                    m_vkTriShading.push_back(n1.x); m_vkTriShading.push_back(n1.y);
+                    m_vkTriShading.push_back(n1.z); m_vkTriShading.push_back(iBF(metallicTexIdx));
                     // [2] n2.xyz + pad
-                    m_vkTriShading.push_back(v2.normal.x); m_vkTriShading.push_back(v2.normal.y);
-                    m_vkTriShading.push_back(v2.normal.z); m_vkTriShading.push_back(0.0f);
+                    m_vkTriShading.push_back(n2.x); m_vkTriShading.push_back(n2.y);
+                    m_vkTriShading.push_back(n2.z); m_vkTriShading.push_back(0.0f);
                     // [3] uv0.xy + uv1.zw
                     m_vkTriShading.push_back(v0.uv.x); m_vkTriShading.push_back(v0.uv.y);
                     m_vkTriShading.push_back(v1.uv.x); m_vkTriShading.push_back(v1.uv.y);
@@ -1133,15 +1159,15 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene)
                     // [9] tangent.xyz + bitangentSign
                     m_vkTriShading.push_back(tangent.x); m_vkTriShading.push_back(tangent.y);
                     m_vkTriShading.push_back(tangent.z); m_vkTriShading.push_back(bitangentSign);
-                    // [10] v0.xyz + pad
-                    m_vkTriShading.push_back(v0.position.x); m_vkTriShading.push_back(v0.position.y);
-                    m_vkTriShading.push_back(v0.position.z); m_vkTriShading.push_back(0.0f);
-                    // [11] v1.xyz + pad
-                    m_vkTriShading.push_back(v1.position.x); m_vkTriShading.push_back(v1.position.y);
-                    m_vkTriShading.push_back(v1.position.z); m_vkTriShading.push_back(0.0f);
-                    // [12] v2.xyz + pad
-                    m_vkTriShading.push_back(v2.position.x); m_vkTriShading.push_back(v2.position.y);
-                    m_vkTriShading.push_back(v2.position.z); m_vkTriShading.push_back(0.0f);
+                    // [10] v0.xyz + pad  (world space)
+                    m_vkTriShading.push_back(p0.x); m_vkTriShading.push_back(p0.y);
+                    m_vkTriShading.push_back(p0.z); m_vkTriShading.push_back(0.0f);
+                    // [11] v1.xyz + pad  (world space)
+                    m_vkTriShading.push_back(p1.x); m_vkTriShading.push_back(p1.y);
+                    m_vkTriShading.push_back(p1.z); m_vkTriShading.push_back(0.0f);
+                    // [12] v2.xyz + pad  (world space)
+                    m_vkTriShading.push_back(p2.x); m_vkTriShading.push_back(p2.y);
+                    m_vkTriShading.push_back(p2.z); m_vkTriShading.push_back(0.0f);
 
                     // Track emissive triangles for lights SSBO (per-submesh global index)
                     if (glm::length(v0.emissive) > 0.001f)
@@ -1197,7 +1223,7 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene)
         }
 
         m_vkRaytracer->commitBlasBuild(); // single GPU submission for all BLASes
-        m_vkRaytracer->buildTlas();
+        m_vkRaytracer->buildTlas(blasTransforms);
         m_vkGeomDirty = true;  // uploadSceneData + createOutputImage deferred to renderVKRaytrace
         m_vkSampleCount = 0;
 
@@ -1236,10 +1262,51 @@ void SceneRenderer::rebuildMaterials(Scene& scene)
         m_gpuRaytracer->reset();
     }
 #endif
+
+#ifdef VEX_BACKEND_VULKAN
+    // VK raytracer: patch material scalars directly in m_vkTriShading (per-submesh order,
+    // one entry per BLAS). BLAS/TLAS geometry doesn't change so no GPU rebuild needed —
+    // just re-upload the shading data and reset the accumulator.
+    if (m_vkRaytracer && !m_vkTriShading.empty())
+    {
+        static constexpr size_t FLOATS_PER_TRI = 52;
+        size_t blasIdx = 0;
+        for (const auto& group : scene.meshGroups)
+        {
+            for (const auto& sm : group.submeshes)
+            {
+                uint32_t triStart = m_vkInstanceOffsets[blasIdx];
+                size_t   triCount = sm.meshData.indices.size() / 3;
+                for (size_t t = 0; t < triCount; ++t)
+                {
+                    size_t base = (triStart + t) * FLOATS_PER_TRI;
+                    m_vkTriShading[base + 18] = sm.meshData.roughness;
+                    m_vkTriShading[base + 19] = sm.meshData.metallic;
+                    m_vkTriShading[base + 32] = sm.meshData.alphaClip ? 1.0f : 0.0f;
+                    m_vkTriShading[base + 33] = static_cast<float>(sm.meshData.materialType);
+                    m_vkTriShading[base + 34] = sm.meshData.ior;
+                }
+                ++blasIdx;
+            }
+        }
+        m_vkGeomDirty   = true;
+        m_vkSampleCount = 0;
+        m_vkRaytracer->reset();
+    }
+#endif
 }
 
-void SceneRenderer::renderScene(Scene& scene, int selectedGroup, int selectedSubmesh)
+void SceneRenderer::renderScene(Scene& scene, int selectedGroup, int selectedSubmesh,
+                                 const std::string& selectedObjectName)
 {
+    // If we just switched to a path tracing mode, force a geometry rebuild so that
+    // any gizmo model matrix changes from rasterization mode are applied.
+    if (m_pendingGeomRebuild)
+    {
+        scene.geometryDirty   = true;
+        m_pendingGeomRebuild  = false;
+    }
+
     // Full geometry rebuild (new mesh loaded, etc.)
     // VK: also trigger when switching to CPU RT with a stale BVH (GPU RT uses BLAS/TLAS, not the CPU BVH).
     // GL: trigger whenever BVH is dirty — GPU RT also needs m_rtTriangles/m_rtBVH.
@@ -1259,6 +1326,18 @@ void SceneRenderer::renderScene(Scene& scene, int selectedGroup, int selectedSub
         scene.materialDirty = false;
     }
 
+    // Outline mask pass — runs unconditionally for all render modes so path tracers
+    // can sample it in their display pass. Must happen before the mode dispatch.
+    {
+        m_outlineActive = (selectedGroup >= 0
+                        && selectedGroup < static_cast<int>(scene.meshGroups.size()));
+        const auto& spec = m_framebuffer->getSpec();
+        float aspect = static_cast<float>(spec.width) / static_cast<float>(spec.height);
+        glm::mat4 maskView = scene.camera.getViewMatrix();
+        glm::mat4 maskProj = scene.camera.getProjectionMatrix(aspect);
+        renderOutlineMask(scene, selectedGroup, selectedObjectName, maskView, maskProj);
+    }
+
     switch (m_renderMode)
     {
         case RenderMode::CPURaytrace:
@@ -1276,12 +1355,13 @@ void SceneRenderer::renderScene(Scene& scene, int selectedGroup, int selectedSub
             [[fallthrough]];
 #endif
         case RenderMode::Rasterize:
-            renderRasterize(scene, selectedGroup, selectedSubmesh);
+            renderRasterize(scene, selectedGroup, selectedSubmesh, selectedObjectName);
             break;
     }
 }
 
-void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unused]] int selectedSubmesh)
+void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unused]] int selectedSubmesh,
+                                     const std::string& selectedObjectName)
 {
     // Keep the intermediate HDR framebuffer in sync with the output framebuffer size
     bool hdrFBResized = false;
@@ -1306,12 +1386,26 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
                                                      : glm::vec3(1.0f, 0.0f, 0.0f);
 
         // Fit the shadow frustum to the world-space AABB of all scene geometry.
-        // Use the cached scene AABB (built once in rebuildRaytraceGeometry).
-        // Scale it 2% from its center so PCF taps near the frustum edge don't
-        // fall outside the shadow map and get clamped to the border color.
+        // Computed per-frame by transforming each group's cached local-space AABB
+        // corners through the current group.modelMatrix, so gizmo transforms are
+        // reflected immediately without a full geometry rebuild.
         // Fall back to a unit cube around the camera target if no geometry is loaded yet.
-        glm::vec3 aabbMin = m_sceneAABB.min;
-        glm::vec3 aabbMax = m_sceneAABB.max;
+        vex::AABB worldAABB;
+        for (size_t gi = 0; gi < scene.meshGroups.size() && gi < m_groupLocalAABBs.size(); ++gi)
+        {
+            const vex::AABB& local = m_groupLocalAABBs[gi];
+            const glm::mat4& M     = scene.meshGroups[gi].modelMatrix;
+            for (int c = 0; c < 8; ++c)
+            {
+                glm::vec3 corner(
+                    (c & 1) ? local.max.x : local.min.x,
+                    (c & 2) ? local.max.y : local.min.y,
+                    (c & 4) ? local.max.z : local.min.z);
+                worldAABB.grow(glm::vec3(M * glm::vec4(corner, 1.0f)));
+            }
+        }
+        glm::vec3 aabbMin = worldAABB.min;
+        glm::vec3 aabbMax = worldAABB.max;
         if (aabbMin.x > aabbMax.x)
         {
             aabbMin = scene.camera.getTarget() - glm::vec3(1.0f);
@@ -1393,8 +1487,11 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
 #endif
 
         for (auto& group : scene.meshGroups)
+        {
+            m_shadowShader->setMat4("u_model", group.modelMatrix);
             for (auto& sm : group.submeshes)
                 sm.mesh->draw();
+        }
 
 #ifdef VEX_BACKEND_OPENGL
         glDisable(GL_POLYGON_OFFSET_FILL);
@@ -1443,7 +1540,7 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
 
     // --- Main mesh pass ---
     m_meshShader->bind();
-    m_meshShader->setMat4("u_view", view);
+    m_meshShader->setMat4("u_view",       view);
     m_meshShader->setMat4("u_projection", proj);
     m_meshShader->setVec3("u_cameraPos", scene.camera.getPosition());
     m_meshShader->setVec3("u_lightPos", scene.lightPos);
@@ -1520,6 +1617,7 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
 
     for (int gi = 0; gi < static_cast<int>(scene.meshGroups.size()); ++gi)
     {
+        m_meshShader->setMat4("u_model", scene.meshGroups[gi].modelMatrix);
         for (int si = 0; si < static_cast<int>(scene.meshGroups[gi].submeshes.size()); ++si)
         {
             auto& sm = scene.meshGroups[gi].submeshes[si];
@@ -1584,46 +1682,6 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
 
     renderFB->unbind();
 
-    // --- Outline mask pass: render selected geometry as solid white into mask FB ---
-    // Always runs (clears mask each frame); only draws if something is selected.
-    // Running unconditionally ensures correct VK image layout when sampling later.
-    {
-        m_outlineMaskFB->bind();
-        m_outlineMaskFB->clear(0.0f, 0.0f, 0.0f, 1.0f);
-
-        if (hasSelection)
-        {
-#ifdef VEX_BACKEND_OPENGL
-            glDisable(GL_DEPTH_TEST);
-#endif
-#ifdef VEX_BACKEND_VULKAN
-            // VK: bind() flushes UBO to GPU, so uniforms must be written first.
-            m_outlineMaskShader->setMat4("u_view", view);
-            m_outlineMaskShader->setMat4("u_projection", proj);
-            m_outlineMaskShader->bind();
-#else
-            // GL: glUniform* requires the shader to be bound first.
-            m_outlineMaskShader->bind();
-            m_outlineMaskShader->setMat4("u_view", view);
-            m_outlineMaskShader->setMat4("u_projection", proj);
-#endif
-
-            auto& maskSubmeshes = scene.meshGroups[selectedGroup].submeshes;
-            if (selectedSubmesh >= 0 && selectedSubmesh < static_cast<int>(maskSubmeshes.size()))
-                maskSubmeshes[selectedSubmesh].mesh->draw();
-            else
-                for (auto& sm : maskSubmeshes)
-                    sm.mesh->draw();
-
-            m_outlineMaskShader->unbind();
-#ifdef VEX_BACKEND_OPENGL
-            glEnable(GL_DEPTH_TEST);
-#endif
-        }
-
-        m_outlineMaskFB->unbind();
-    }
-
 #ifdef VEX_BACKEND_OPENGL
     // --- Tone-map blit: HDR intermediate buffer → output framebuffer ---
     if (m_fullscreenRTShader)
@@ -1645,7 +1703,7 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
         m_fullscreenRTShader->setFloat("u_gamma", m_rasterGamma);
         m_fullscreenRTShader->setBool("u_enableACES", m_rasterEnableACES);
         m_fullscreenRTShader->setBool("u_flipV", false); // GL framebuffer: natural bottom-left origin, no flip needed
-        m_fullscreenRTShader->setBool("u_enableOutline", hasSelection);
+        m_fullscreenRTShader->setBool("u_enableOutline", m_outlineActive);
         m_fullscreenQuad->draw();
         m_fullscreenRTShader->unbind();
 
@@ -1683,7 +1741,7 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
             vkMaskFB->getColorSampler(),
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-        m_vkFullscreenRTShader->setBool("u_enableOutline", hasSelection);
+        m_vkFullscreenRTShader->setBool("u_enableOutline", m_outlineActive);
 
         m_fullscreenQuad->draw();
         m_vkFullscreenRTShader->unbind();
@@ -1691,6 +1749,49 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
         m_framebuffer->unbind();
     }
 #endif
+}
+
+void SceneRenderer::renderOutlineMask(Scene& scene, int selectedGroup,
+                                      const std::string& selectedObjectName,
+                                      const glm::mat4& view, const glm::mat4& proj)
+{
+    m_outlineMaskFB->bind();
+    m_outlineMaskFB->clear(0.0f, 0.0f, 0.0f, 1.0f);
+
+    if (m_outlineActive)
+    {
+#ifdef VEX_BACKEND_OPENGL
+        glDisable(GL_DEPTH_TEST);
+#endif
+#ifdef VEX_BACKEND_VULKAN
+        // VK: bind() flushes UBO to GPU, so uniforms must be written first.
+        m_outlineMaskShader->setMat4("u_view",        view);
+        m_outlineMaskShader->setMat4("u_projection",  proj);
+        m_outlineMaskShader->setMat4("u_model", scene.meshGroups[selectedGroup].modelMatrix);
+        m_outlineMaskShader->bind();
+#else
+        // GL: glUniform* requires the shader to be bound first.
+        m_outlineMaskShader->bind();
+        m_outlineMaskShader->setMat4("u_view",       view);
+        m_outlineMaskShader->setMat4("u_projection", proj);
+        m_outlineMaskShader->setMat4("u_model", scene.meshGroups[selectedGroup].modelMatrix);
+#endif
+
+        auto& maskSubmeshes = scene.meshGroups[selectedGroup].submeshes;
+        for (auto& sm : maskSubmeshes)
+        {
+            if (selectedObjectName.empty() ||
+                sm.meshData.objectName == selectedObjectName)
+                sm.mesh->draw();
+        }
+
+        m_outlineMaskShader->unbind();
+#ifdef VEX_BACKEND_OPENGL
+        glEnable(GL_DEPTH_TEST);
+#endif
+    }
+
+    m_outlineMaskFB->unbind();
 }
 
 void SceneRenderer::renderCPURaytrace(Scene& scene)
@@ -1877,22 +1978,63 @@ void SceneRenderer::renderCPURaytrace(Scene& scene)
     const auto& pixels = m_cpuRaytracer->getPixelBuffer();
     m_raytraceTexture->setData(pixels.data(), w, h, 4);
 
-    // Render fullscreen quad to framebuffer
+    // Render fullscreen quad to framebuffer (with optional outline overlay)
     m_framebuffer->bind();
     m_framebuffer->clear(0.0f, 0.0f, 0.0f, 1.0f);
 
 #ifdef VEX_BACKEND_OPENGL
     glDisable(GL_DEPTH_TEST);
+
+    // Use the RT fullscreen shader so we get the outline composite for free.
+    // CPU RT output is already display-ready (RGBA8), so we pass through with
+    // sampleCount=1, exposure=0, gamma=1, ACES=false (all identity operations).
+    m_fullscreenRTShader->bind();
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(m_raytraceTexture->getNativeHandle()));
+    m_fullscreenRTShader->setInt("u_accumMap", 0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(m_outlineMaskFB->getColorAttachmentHandle()));
+    m_fullscreenRTShader->setInt("u_outlineMask", 1);
+    m_fullscreenRTShader->setFloat("u_sampleCount", 1.0f);
+    m_fullscreenRTShader->setFloat("u_exposure", 0.0f);   // pow(2,0)=1 — no change
+    m_fullscreenRTShader->setFloat("u_gamma", 1.0f);      // pow(c,1)=c — no change
+    m_fullscreenRTShader->setBool("u_enableACES", false);  // clamp only — no change
+    m_fullscreenRTShader->setBool("u_flipV", true);
+    m_fullscreenRTShader->setBool("u_enableOutline", m_outlineActive);
+    m_fullscreenQuad->draw();
+    m_fullscreenRTShader->unbind();
+
+    glEnable(GL_DEPTH_TEST);
 #endif
 
-    m_fullscreenShader->bind();
-    m_fullscreenShader->setTexture(0, m_raytraceTexture.get());
-    m_fullscreenShader->setBool("u_flipV", true);  // CPU raytracer pixels are top-to-bottom
-    m_fullscreenQuad->draw();
-    m_fullscreenShader->unbind();
+#ifdef VEX_BACKEND_VULKAN
+    if (m_vkFullscreenRTShader)
+    {
+        auto* rtShaderVK = static_cast<vex::VKShader*>(m_vkFullscreenRTShader.get());
+        auto* vkTex      = static_cast<vex::VKTexture2D*>(m_raytraceTexture.get());
+        auto* vkMaskFB   = static_cast<vex::VKFramebuffer*>(m_outlineMaskFB.get());
 
-#ifdef VEX_BACKEND_OPENGL
-    glEnable(GL_DEPTH_TEST);
+        m_vkFullscreenRTShader->setFloat("u_sampleCount", 1.0f);
+        m_vkFullscreenRTShader->setFloat("u_exposure",    0.0f);
+        m_vkFullscreenRTShader->setFloat("u_gamma",       1.0f);
+        m_vkFullscreenRTShader->bind();
+        m_vkFullscreenRTShader->setBool("u_enableACES",    false);
+        m_vkFullscreenRTShader->setBool("u_flipV",         true);
+        m_vkFullscreenRTShader->setBool("u_enableOutline", m_outlineActive);
+
+        rtShaderVK->setExternalTextureVK(0,
+            vkTex->getImageView(),
+            vkTex->getSampler(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+        rtShaderVK->setExternalTextureVK(1,
+            vkMaskFB->getColorImageView(),
+            vkMaskFB->getColorSampler(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+        m_fullscreenQuad->draw();
+        m_vkFullscreenRTShader->unbind();
+    }
 #endif
 
     m_framebuffer->unbind();
@@ -2069,12 +2211,17 @@ void SceneRenderer::renderGPURaytrace(Scene& scene)
     glBindTexture(GL_TEXTURE_2D, m_gpuRaytracer->getAccumTexture());
     m_fullscreenRTShader->setInt("u_accumMap", 0);
 
+    // Bind outline mask
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(m_outlineMaskFB->getColorAttachmentHandle()));
+    m_fullscreenRTShader->setInt("u_outlineMask", 1);
+
     m_fullscreenRTShader->setFloat("u_sampleCount", static_cast<float>(m_gpuRaytracer->getSampleCount()));
     m_fullscreenRTShader->setFloat("u_exposure", m_gpuExposure);
     m_fullscreenRTShader->setFloat("u_gamma", m_gpuGamma);
     m_fullscreenRTShader->setBool("u_enableACES", m_gpuEnableACES);
     m_fullscreenRTShader->setBool("u_flipV", true);   // GPU raytracer accum texture: pixels stored top-to-bottom
-    m_fullscreenRTShader->setBool("u_enableOutline", false);
+    m_fullscreenRTShader->setBool("u_enableOutline", m_outlineActive);
 
     m_fullscreenQuad->draw();
     m_fullscreenRTShader->unbind();
@@ -2187,6 +2334,7 @@ std::pair<int,int> SceneRenderer::pick(Scene& scene, int pixelX, int pixelY)
     std::vector<std::pair<int,int>> drawToMesh;
     for (int gi = 0; gi < static_cast<int>(scene.meshGroups.size()); ++gi)
     {
+        m_pickShader->setMat4("u_model", scene.meshGroups[gi].modelMatrix);
         for (int si = 0; si < static_cast<int>(scene.meshGroups[gi].submeshes.size()); ++si)
         {
             auto& sm = scene.meshGroups[gi].submeshes[si];
@@ -2506,12 +2654,18 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
         // setBool pushes after bind, ensuring the final push contains all values
         m_vkFullscreenRTShader->setBool("u_enableACES",    m_vkEnableACES);
         m_vkFullscreenRTShader->setBool("u_flipV",         true);
-        m_vkFullscreenRTShader->setBool("u_enableOutline", false);
+        m_vkFullscreenRTShader->setBool("u_enableOutline", m_outlineActive);
 
         rtShaderVK->setExternalTextureVK(0,
             m_vkRaytracer->getOutputImageView(),
             m_vkRaytracer->getDisplaySampler(),
             VK_IMAGE_LAYOUT_GENERAL);
+
+        auto* vkMaskFB = static_cast<vex::VKFramebuffer*>(m_outlineMaskFB.get());
+        rtShaderVK->setExternalTextureVK(1,
+            vkMaskFB->getColorImageView(),
+            vkMaskFB->getColorSampler(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
         m_fullscreenQuad->draw();
         m_vkFullscreenRTShader->unbind();

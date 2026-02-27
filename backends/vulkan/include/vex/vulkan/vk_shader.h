@@ -40,7 +40,9 @@ struct MeshUBO
     glm::mat4 sunShadowVP;           // light view-projection for shadow mapping
     uint32_t  enableShadows     = 0;
     float     shadowNormalBias  = 0.0f; // world-space normal offset scale (texel-sized)
-    float     _pad7[2]          = {};
+    float     _pad7a            = 0;
+    float     _pad7b            = 0;
+    glm::mat4 model             = glm::mat4(1.0f); // per-group model matrix (offset 320)
 };
 
 class VKShader : public Shader

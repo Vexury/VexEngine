@@ -33,6 +33,7 @@ struct MeshGroup
     std::vector<SceneMesh> submeshes;
     glm::vec3 center { 0.0f };
     float     radius = 1.0f;
+    glm::mat4 modelMatrix = glm::mat4(1.0f);
 };
 
 struct Scene

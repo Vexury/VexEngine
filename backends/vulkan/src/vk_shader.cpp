@@ -104,6 +104,7 @@ void VKShader::buildUniformMap()
     m_uniformOffsets["u_shadowViewProj"]     = offsetof(MeshUBO, sunShadowVP);
     m_uniformOffsets["u_enableShadows"]      = offsetof(MeshUBO, enableShadows);
     m_uniformOffsets["u_shadowNormalBias"]   = offsetof(MeshUBO, shadowNormalBias);
+    m_uniformOffsets["u_model"]              = offsetof(MeshUBO, model);
 }
 
 bool VKShader::loadFromFiles(const std::string& vertexPath, const std::string& fragmentPath)

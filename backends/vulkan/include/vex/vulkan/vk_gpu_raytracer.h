@@ -112,7 +112,9 @@ public:
     void commitBlasBuild();
 
     // Build the TLAS over all BLASes. Call after commitBlasBuild().
-    void buildTlas();
+    // instanceTransforms: one mat4 per BLAS (same order as addBlas calls).
+    // Pass empty vector for identity transforms on all instances.
+    void buildTlas(const std::vector<glm::mat4>& instanceTransforms = {});
 
     // Destroy all acceleration structures (call before rebuilding geometry)
     void clearAccelerationStructures();

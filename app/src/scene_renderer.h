@@ -43,7 +43,8 @@ public:
     bool init(Scene& scene);
     void shutdown();
 
-    void renderScene(Scene& scene, int selectedGroup, int selectedSubmesh = -1);
+    void renderScene(Scene& scene, int selectedGroup, int selectedSubmesh = -1,
+                     const std::string& selectedObjectName = {});
     std::pair<int,int> pick(Scene& scene, int pixelX, int pixelY);
     void waitIdle(); // call before destroying GPU-referenced scene resources
 
@@ -174,8 +175,11 @@ public:
     bool reloadGPUShader();
 
 private:
-    void renderRasterize(Scene& scene, int selectedGroup, int selectedSubmesh);
+    void renderRasterize(Scene& scene, int selectedGroup, int selectedSubmesh,
+                         const std::string& selectedObjectName);
     void renderCPURaytrace(Scene& scene);
+    void renderOutlineMask(Scene& scene, int selectedGroup, const std::string& selectedObjectName,
+                           const glm::mat4& view, const glm::mat4& proj);
     void rebuildMaterials(Scene& scene);
 
     static constexpr uint32_t SHADOW_MAP_SIZE = 4096;
@@ -201,11 +205,16 @@ private:
 
     uint32_t  m_cpuMaxSamples = 0; // 0 = unlimited
     uint32_t  m_gpuMaxSamples = 0; // 0 = unlimited (shared by GL and VK GPU RT)
-    vex::AABB m_sceneAABB;             // rebuilt in rebuildRaytraceGeometry
+    // Local-space AABB per group (one entry per MeshGroup, rebuilt in rebuildRaytraceGeometry).
+    // The world-space scene AABB for shadow frustum fitting is computed each frame by
+    // transforming these 8 corners by the current group.modelMatrix, so gizmo transforms
+    // are always reflected without needing a full geometry rebuild.
+    std::vector<vex::AABB> m_groupLocalAABBs;
 
     // Screen-space outline (both backends)
     std::unique_ptr<vex::Framebuffer> m_outlineMaskFB;
     std::unique_ptr<vex::Shader>      m_outlineMaskShader;
+    bool m_outlineActive = false; // true when a selection was rendered into m_outlineMaskFB this frame
 
     // OpenGL-only: picking shader/framebuffer
     std::unique_ptr<vex::Shader>      m_pickShader;
@@ -219,7 +228,8 @@ private:
     bool m_enableNormalMapping = true;
 
     // CPU raytracing
-    bool m_cpuBVHDirty = false; // CPU BVH not yet built for current geometry
+    bool m_cpuBVHDirty        = false; // CPU BVH not yet built for current geometry
+    bool m_pendingGeomRebuild = false; // set when switching to any RT mode; forces rebuildRaytraceGeometry
     std::unique_ptr<vex::CPURaytracer> m_cpuRaytracer;
     std::unique_ptr<vex::Texture2D> m_raytraceTexture;
     std::unique_ptr<vex::Shader> m_fullscreenShader;

@@ -109,11 +109,15 @@ std::vector<MeshData> MeshData::loadOBJ(const std::string& path)
     Log::info("  Parsed " + std::to_string(shapes.size()) + " shape(s), "
               + std::to_string(materials.size()) + " material(s)");
 
-    // Group faces by material ID across all shapes
-    std::unordered_map<int, MeshData> matGroups;
+    // Group faces by material ID within each shape so that each named OBJ object
+    // (o / g tag) becomes its own submesh rather than being merged with other
+    // objects that happen to share the same material.
+    std::vector<MeshData> result;
 
-    for (const auto& shape : shapes)
+    for (size_t si = 0; si < shapes.size(); ++si)
     {
+        const auto& shape = shapes[si];
+        std::unordered_map<int, MeshData> matGroups;
         size_t indexOffset = 0;
 
         for (size_t f = 0; f < shape.mesh.num_face_vertices.size(); f++)
@@ -274,16 +278,26 @@ std::vector<MeshData> MeshData::loadOBJ(const std::string& path)
 
             indexOffset += fv;
         }
-    }
 
-    // autoSmoothNormals disabled — use OBJ normals as exported
+        // autoSmoothNormals disabled — use OBJ normals as exported
 
-    // Collect into vector
-    std::vector<MeshData> result;
-    result.reserve(matGroups.size());
-    for (auto& [id, group] : matGroups)
-    {
-        result.push_back(std::move(group));
+        // Assign names and collect: use the shape name as the submesh name.
+        // If a shape contains multiple material groups, append the material name
+        // to disambiguate (rare, but handles mixed-material objects cleanly).
+        std::string shapeName = shape.name.empty()
+            ? ("Shape " + std::to_string(si))
+            : shape.name;
+
+        for (auto& [matId, group] : matGroups)
+        {
+            // Keep name as the material name (set from MTL inside the face loop).
+            // Fall back to "default" only if no MTL material was referenced.
+            if (group.name.empty())
+                group.name = (matId >= 0 && matId < (int)materials.size())
+                    ? materials[matId].name : "default";
+            group.objectName = shapeName;
+            result.push_back(std::move(group));
+        }
     }
 
     size_t totalVerts = 0;

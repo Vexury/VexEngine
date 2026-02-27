@@ -8,6 +8,7 @@ layout(location = 5) in vec4 aTangent;
 
 uniform mat4 u_view;
 uniform mat4 u_projection;
+uniform mat4 u_model;
 
 out vec3 vWorldPos;
 out vec3 vNormal;
@@ -18,11 +19,12 @@ out vec4 vTangent;
 
 void main()
 {
-    vWorldPos = aPos;
-    vNormal = aNormal;
+    vec4 worldPos = u_model * vec4(aPos, 1.0);
+    vWorldPos = worldPos.xyz;
+    vNormal = mat3(transpose(inverse(u_model))) * aNormal;
     vColor = aColor;
     vEmissive = aEmissive;
     vUV = aUV;
-    vTangent = aTangent;
-    gl_Position = u_projection * u_view * vec4(aPos, 1.0);
+    vTangent = vec4(mat3(u_model) * aTangent.xyz, aTangent.w);
+    gl_Position = u_projection * u_view * worldPos;
 }

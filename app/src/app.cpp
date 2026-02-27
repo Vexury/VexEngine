@@ -180,6 +180,14 @@ void App::handleInput()
         m_renderer.reloadGPUShader();
     }
 
+    // W/E/R: gizmo mode shortcuts (Translate / Rotate / Scale)
+    if (m_ui.isViewportHovered())
+    {
+        if (ImGui::IsKeyPressed(ImGuiKey_W)) m_ui.setGizmoMode(0);
+        if (ImGui::IsKeyPressed(ImGuiKey_E)) m_ui.setGizmoMode(1);
+        if (ImGui::IsKeyPressed(ImGuiKey_R)) m_ui.setGizmoMode(2);
+    }
+
     // F key: focus camera on selected object
     if (ImGui::IsKeyPressed(ImGuiKey_F))
     {
@@ -215,7 +223,16 @@ void App::processPicking()
 
     auto [groupIdx, submeshIdx] = m_renderer.pick(m_scene, pickX, pickY);
     if (groupIdx >= 0)
-        m_ui.setSelection(Selection::Mesh, groupIdx, submeshIdx);
+    {
+        // Select at object level (not submesh level) so the hierarchy highlight
+        // and the inspector view match what you'd get by clicking in the hierarchy.
+        const auto& groups = m_scene.meshGroups;
+        std::string objName;
+        if (submeshIdx >= 0 && submeshIdx < (int)groups[groupIdx].submeshes.size())
+            objName = groups[groupIdx].submeshes[submeshIdx].meshData.objectName;
+        m_ui.setSelection(Selection::Mesh, groupIdx, -1);
+        m_ui.setSelectedObjectName(objName);
+    }
     else
         m_ui.clearSelection();
 }
@@ -228,8 +245,9 @@ void App::run()
         handleInput();
         m_renderer.setRenderMode(static_cast<RenderMode>(m_ui.getRenderModeIndex()));
         m_renderer.setDebugMode(static_cast<DebugMode>(m_ui.getDebugModeIndex()));
-        m_renderer.renderScene(m_scene, m_ui.getSelectedMeshGroup(), m_ui.getSelectedSubmesh());
-        m_ui.renderViewport(m_renderer);
+        m_renderer.renderScene(m_scene, m_ui.getSelectedMeshGroup(), m_ui.getSelectedSubmesh(),
+                               m_ui.getSelectedObjectName());
+        m_ui.renderViewport(m_renderer, m_scene);
         processPicking();
         m_ui.renderHierarchy(m_scene, m_renderer);
         m_ui.renderInspector(m_scene, m_renderer);

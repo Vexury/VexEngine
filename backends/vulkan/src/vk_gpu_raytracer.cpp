@@ -321,7 +321,7 @@ void VKGpuRaytracer::commitBlasBuild()
     m_pendingBlases.clear();
 }
 
-void VKGpuRaytracer::buildTlas()
+void VKGpuRaytracer::buildTlas(const std::vector<glm::mat4>& instanceTransforms)
 {
     // Note: we intentionally allow an empty TLAS (zero instances).
     // With no geometry every ray misses and the miss shader returns the
@@ -336,9 +336,22 @@ void VKGpuRaytracer::buildTlas()
     for (uint32_t i = 0; i < static_cast<uint32_t>(m_blases.size()); ++i)
     {
         VkAccelerationStructureInstanceKHR inst{};
-        inst.transform.matrix[0][0]                = 1.0f;
-        inst.transform.matrix[1][1]                = 1.0f;
-        inst.transform.matrix[2][2]                = 1.0f;
+
+        // Apply per-instance transform (glm column-major → VkTransformMatrixKHR row-major 3x4)
+        if (i < instanceTransforms.size())
+        {
+            const glm::mat4& m = instanceTransforms[i];
+            for (int row = 0; row < 3; ++row)
+                for (int col = 0; col < 4; ++col)
+                    inst.transform.matrix[row][col] = m[col][row];
+        }
+        else
+        {
+            inst.transform.matrix[0][0] = 1.0f;
+            inst.transform.matrix[1][1] = 1.0f;
+            inst.transform.matrix[2][2] = 1.0f;
+        }
+
         inst.instanceCustomIndex                    = i;         // maps to gl_InstanceCustomIndexEXT
         inst.mask                                   = 0xFF;
         inst.instanceShaderBindingTableRecordOffset = 0;
