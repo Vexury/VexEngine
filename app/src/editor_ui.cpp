@@ -921,6 +921,22 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
         if (ImGui::SliderFloat("Gamma##raster", &rGamma, 1.0f, 3.0f, "%.2f"))
             renderer.setRasterGamma(rGamma);
 
+        ImGui::Spacing();
+        bool bloomEnabled = renderer.getBloomEnabled();
+        if (ImGui::Checkbox("Bloom##raster", &bloomEnabled))
+            renderer.setBloomEnabled(bloomEnabled);
+        ImGui::BeginDisabled(!bloomEnabled);
+        float bloomThresh = renderer.getBloomThreshold();
+        if (ImGui::SliderFloat("Threshold##bloom", &bloomThresh, 0.0f, 2.0f, "%.2f"))
+            renderer.setBloomThreshold(bloomThresh);
+        float bloomIntensity = renderer.getBloomIntensity();
+        if (ImGui::SliderFloat("Intensity##bloom", &bloomIntensity, 0.0f, 1.0f, "%.3f"))
+            renderer.setBloomIntensity(bloomIntensity);
+        int bloomPasses = renderer.getBloomBlurPasses();
+        if (ImGui::SliderInt("Blur Passes##bloom", &bloomPasses, 1, 10))
+            renderer.setBloomBlurPasses(bloomPasses);
+        ImGui::EndDisabled();
+
     }
 
     if (m_renderModeIndex == 1)
@@ -1106,6 +1122,22 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
         float gamma = renderer.getGPUGamma();
         if (ImGui::SliderFloat("Gamma", &gamma, 1.0f, 3.0f, "%.2f"))
             renderer.setGPUGamma(gamma);
+
+        ImGui::Spacing();
+        bool bloomEnabled = renderer.getBloomEnabled();
+        if (ImGui::Checkbox("Bloom##gpu", &bloomEnabled))
+            renderer.setBloomEnabled(bloomEnabled);
+        ImGui::BeginDisabled(!bloomEnabled);
+        float bloomThresh = renderer.getBloomThreshold();
+        if (ImGui::SliderFloat("Threshold##bloomgpu", &bloomThresh, 0.0f, 2.0f, "%.2f"))
+            renderer.setBloomThreshold(bloomThresh);
+        float bloomIntensityGpu = renderer.getBloomIntensity();
+        if (ImGui::SliderFloat("Intensity##bloomgpu", &bloomIntensityGpu, 0.0f, 1.0f, "%.3f"))
+            renderer.setBloomIntensity(bloomIntensityGpu);
+        int bloomPassesGpu = renderer.getBloomBlurPasses();
+        if (ImGui::SliderInt("Blur Passes##bloomgpu", &bloomPassesGpu, 1, 10))
+            renderer.setBloomBlurPasses(bloomPassesGpu);
+        ImGui::EndDisabled();
     }
     ImGui::End();
 }

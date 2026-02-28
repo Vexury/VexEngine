@@ -4,16 +4,19 @@ layout(location = 0) in vec2 vUV;
 
 layout(set = 1, binding = 0) uniform sampler2D u_accumMap;
 layout(set = 2, binding = 0) uniform sampler2D u_outlineMask;
+layout(set = 3, binding = 0) uniform sampler2D u_bloomMap;
 
 // Push constant block — only the fields this shader uses.
 // Must match MeshPushConstant offsets in vk_shader.h.
 layout(push_constant) uniform PC {
-    layout(offset = 40) uint  flipV;         // offset 40
-    layout(offset = 44) float sampleCount;   // offset 44
-    layout(offset = 48) float exposure;      // offset 48
-    layout(offset = 52) float gamma;         // offset 52
-    layout(offset = 56) uint  enableACES;    // offset 56
-    layout(offset = 64) uint  enableOutline; // offset 64
+    layout(offset = 40) uint  flipV;          // offset 40
+    layout(offset = 44) float sampleCount;    // offset 44
+    layout(offset = 48) float exposure;       // offset 48
+    layout(offset = 52) float gamma;          // offset 52
+    layout(offset = 56) uint  enableACES;     // offset 56
+    layout(offset = 64) uint  enableOutline;  // offset 64
+    layout(offset = 68) uint  enableBloom;    // offset 68
+    layout(offset = 72) float bloomIntensity; // offset 72
 } pc;
 
 layout(location = 0) out vec4 FragColor;
@@ -29,6 +32,13 @@ void main()
 
     // Exposure (same convention as OpenGL version: pow(2, exposure))
     c *= pow(2.0, pc.exposure);
+
+    // Bloom composite (HDR linear space, before tone mapping)
+    // The bloom map is produced by sampling a source texture through the Y-flip viewport,
+    // which inverts its Y relative to geometry-rendered textures (accumMap, outlineMask).
+    // It must always be sampled with raw vUV — never with the flipV-corrected uv.
+    if (pc.enableBloom != 0u)
+        c += texture(u_bloomMap, vUV).rgb * pc.bloomIntensity;
 
     // Tone mapping
     if (pc.enableACES != 0u)
@@ -46,9 +56,9 @@ void main()
     c = pow(c, vec3(1.0 / pc.gamma));
 
     // Screen-space outline composite (display-space overlay)
-    // The mask is rendered by the same VK rasterizer pipeline as the HDR framebuffer,
-    // so it has the same Y orientation and must be sampled with the same (possibly
-    // flipped) uv — not the raw vUV.
+    // The outline mask is rendered by geometry (same pipeline as the HDR framebuffer),
+    // so row 0 = top of scene — standard Vulkan UV orientation, same as accumMap.
+    // Must be sampled with the flipV-corrected uv, not raw vUV.
     if (pc.enableOutline != 0u)
     {
         vec2  ts   = 1.0 / vec2(textureSize(u_outlineMask, 0));

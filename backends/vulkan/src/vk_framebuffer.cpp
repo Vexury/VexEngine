@@ -37,7 +37,7 @@ void VKFramebuffer::createRenderPass()
 {
     auto device = VKContext::get().getDevice();
 
-    VkFormat colorFormat = VK_FORMAT_R8G8B8A8_UNORM;
+    VkFormat colorFormat = m_spec.hdrColor ? VK_FORMAT_R16G16B16A16_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM;
     VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
 
     if (m_spec.depthOnly)
@@ -172,7 +172,7 @@ void VKFramebuffer::createImages()
     auto device = ctx.getDevice();
     auto allocator = ctx.getAllocator();
 
-    VkFormat colorFormat = VK_FORMAT_R8G8B8A8_UNORM;
+    VkFormat colorFormat = m_spec.hdrColor ? VK_FORMAT_R16G16B16A16_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM;
     VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
 
     if (m_spec.depthOnly)

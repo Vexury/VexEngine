@@ -10,6 +10,9 @@ uniform bool  u_enableACES;
 uniform bool  u_flipV;   // true when sampling an OpenGL framebuffer texture (row 0 = bottom)
 uniform sampler2D u_outlineMask;
 uniform bool  u_enableOutline;
+uniform sampler2D u_bloomMap;
+uniform bool      u_enableBloom;
+uniform float     u_bloomIntensity;
 
 void main()
 {
@@ -22,6 +25,10 @@ void main()
 
     // Exposure
     c *= pow(2.0, u_exposure);
+
+    // Bloom composite (HDR linear space, before tone mapping)
+    if (u_enableBloom)
+        c += texture(u_bloomMap, uv).rgb * u_bloomIntensity;
 
     // Tone mapping
     if (u_enableACES)

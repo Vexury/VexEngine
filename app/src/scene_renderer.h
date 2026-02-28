@@ -175,6 +175,16 @@ public:
 
     bool reloadGPUShader();
 
+    // Bloom (all render paths: GL/VK rasterizer and GPU RT)
+    void  setBloomEnabled(bool v)    { m_bloomEnabled = v; }
+    bool  getBloomEnabled() const    { return m_bloomEnabled; }
+    void  setBloomIntensity(float v) { m_bloomIntensity = v; }
+    float getBloomIntensity() const  { return m_bloomIntensity; }
+    void  setBloomThreshold(float v) { m_bloomThreshold = v; }
+    float getBloomThreshold() const  { return m_bloomThreshold; }
+    void  setBloomBlurPasses(int v)  { m_bloomBlurPasses = v < 1 ? 1 : v; }
+    int   getBloomBlurPasses() const { return m_bloomBlurPasses; }
+
     // Explicitly rebuild acceleration structures / BVH with optional progress callbacks.
     // Called from App::runImport between frames so the overlay can update at each stage.
     // Clears scene.geometryDirty so renderScene won't rebuild again on the next frame.
@@ -255,6 +265,24 @@ private:
     glm::vec3 m_rasterEnvColor { 0.5f };
     bool  m_rasterEnableEnvLighting  = true;
     float m_rasterEnvLightMultiplier = 0.3f;
+
+    // Bloom post-processing
+    bool  m_bloomEnabled    = false;
+    float m_bloomIntensity  = 0.05f;
+    float m_bloomThreshold  = 0.8f;
+    int   m_bloomBlurPasses = 5;
+#ifdef VEX_BACKEND_OPENGL
+    std::unique_ptr<vex::Framebuffer> m_bloomFB[2]; // ping-pong half-res RGBA32F buffers
+    std::unique_ptr<vex::Shader>      m_bloomThresholdShader;
+    std::unique_ptr<vex::Shader>      m_bloomBlurShader;
+    uint32_t m_bloomFBW = 0, m_bloomFBH = 0;
+#endif
+#ifdef VEX_BACKEND_VULKAN
+    std::unique_ptr<vex::Framebuffer> m_vkBloomFB[2]; // ping-pong half-res RGBA16F buffers
+    std::unique_ptr<vex::Shader>      m_vkBloomThresholdShader;
+    std::unique_ptr<vex::Shader>      m_vkBloomBlurShader;
+    uint32_t m_vkBloomFBW = 0, m_vkBloomFBH = 0;
+#endif
 
     // GPU raytracing (OpenGL only)
 #ifdef VEX_BACKEND_OPENGL

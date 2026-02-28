@@ -152,10 +152,31 @@ bool SceneRenderer::init([[maybe_unused]] Scene& scene)
     // Intermediate HDR framebuffer for rasterizer (geometry renders here, then tone-mapped to m_framebuffer)
     m_rasterHDRFB = vex::Framebuffer::create({ .width = 1280, .height = 720, .hasDepth = true });
 
+    // Bloom shaders (fullscreen.vert is shared)
+    m_bloomThresholdShader = vex::Shader::create();
+    if (!m_bloomThresholdShader->loadFromFiles(dir + "fullscreen.vert" + ext,
+                                               dir + "bloom_threshold.frag" + ext))
+    {
+        vex::Log::error("Failed to load bloom_threshold shader");
+        m_bloomThresholdShader.reset();
+    }
+    m_bloomBlurShader = vex::Shader::create();
+    if (!m_bloomBlurShader->loadFromFiles(dir + "fullscreen.vert" + ext,
+                                          dir + "bloom_blur.frag" + ext))
+    {
+        vex::Log::error("Failed to load bloom_blur shader");
+        m_bloomBlurShader.reset();
+    }
+    // Half-resolution ping-pong framebuffers for bloom (no depth needed)
+    m_bloomFB[0] = vex::Framebuffer::create({ .width = 640, .height = 360 });
+    m_bloomFB[1] = vex::Framebuffer::create({ .width = 640, .height = 360 });
+    m_bloomFBW = 640;
+    m_bloomFBH = 360;
+
 #endif
 
 #ifdef VEX_BACKEND_VULKAN
-    m_rasterHDRFB = vex::Framebuffer::create({ .width = 1280, .height = 720, .hasDepth = true });
+    m_rasterHDRFB = vex::Framebuffer::create({ .width = 1280, .height = 720, .hasDepth = true, .hdrColor = true });
 
     m_vkRaytracer = std::make_unique<vex::VKGpuRaytracer>();
     if (!m_vkRaytracer->init())
@@ -174,6 +195,38 @@ bool SceneRenderer::init([[maybe_unused]] Scene& scene)
     else
     {
         m_vkFullscreenRTShader->preparePipeline(*m_framebuffer);
+    }
+
+    // Bloom shaders for VK rasterizer path
+    m_vkBloomFB[0] = vex::Framebuffer::create({ .width = 640, .height = 360, .hdrColor = true });
+    m_vkBloomFB[1] = vex::Framebuffer::create({ .width = 640, .height = 360, .hdrColor = true });
+    m_vkBloomFBW = 640;
+    m_vkBloomFBH = 360;
+
+    m_vkBloomThresholdShader = vex::Shader::create();
+    static_cast<vex::VKShader*>(m_vkBloomThresholdShader.get())->setVertexAttrCount(5);
+    if (!m_vkBloomThresholdShader->loadFromFiles(dir + "fullscreen.vert" + ext,
+                                                 dir + "bloom_threshold.frag" + ext))
+    {
+        vex::Log::error("Failed to load Vulkan bloom_threshold shader");
+        m_vkBloomThresholdShader.reset();
+    }
+    else
+    {
+        m_vkBloomThresholdShader->preparePipeline(*m_vkBloomFB[0]);
+    }
+
+    m_vkBloomBlurShader = vex::Shader::create();
+    static_cast<vex::VKShader*>(m_vkBloomBlurShader.get())->setVertexAttrCount(5);
+    if (!m_vkBloomBlurShader->loadFromFiles(dir + "fullscreen.vert" + ext,
+                                            dir + "bloom_blur.frag" + ext))
+    {
+        vex::Log::error("Failed to load Vulkan bloom_blur shader");
+        m_vkBloomBlurShader.reset();
+    }
+    else
+    {
+        m_vkBloomBlurShader->preparePipeline(*m_vkBloomFB[0]);
     }
 #endif
 
@@ -195,11 +248,19 @@ void SceneRenderer::shutdown()
         m_gpuRaytracer->shutdown();
     m_gpuRaytracer.reset();
     m_fullscreenRTShader.reset();
+    m_bloomThresholdShader.reset();
+    m_bloomBlurShader.reset();
+    m_bloomFB[0].reset();
+    m_bloomFB[1].reset();
 #endif
 
 #ifdef VEX_BACKEND_VULKAN
     m_vkRasterEnvTex.reset();
     m_vkFullscreenRTShader.reset();
+    m_vkBloomThresholdShader.reset();
+    m_vkBloomBlurShader.reset();
+    m_vkBloomFB[0].reset();
+    m_vkBloomFB[1].reset();
     if (m_vkRaytracer)
         m_vkRaytracer->shutdown();
     m_vkRaytracer.reset();
@@ -1692,6 +1753,57 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
     renderFB->unbind();
 
 #ifdef VEX_BACKEND_OPENGL
+    // --- Bloom pass: threshold + separable Gaussian blur ---
+    uint32_t bloomTex = 0;
+    if (m_bloomEnabled && m_bloomThresholdShader && m_bloomBlurShader && m_bloomFB[0] && m_bloomFB[1])
+    {
+        const auto& outSpec = m_framebuffer->getSpec();
+        uint32_t bw = std::max(1u, outSpec.width / 2);
+        uint32_t bh = std::max(1u, outSpec.height / 2);
+        if (m_bloomFBW != bw || m_bloomFBH != bh)
+        {
+            m_bloomFB[0]->resize(bw, bh);
+            m_bloomFB[1]->resize(bw, bh);
+            m_bloomFBW = bw;
+            m_bloomFBH = bh;
+        }
+
+        glDisable(GL_DEPTH_TEST);
+
+        // Threshold pass: HDR → bloom[0]
+        m_bloomFB[0]->bind(); // sets viewport to bw×bh
+        m_bloomThresholdShader->bind();
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(m_rasterHDRFB->getColorAttachmentHandle()));
+        m_bloomThresholdShader->setInt("u_hdrMap", 0);
+        m_bloomThresholdShader->setFloat("u_threshold", m_bloomThreshold);
+        m_bloomThresholdShader->setFloat("u_sampleCount", 1.0f);
+        m_fullscreenQuad->draw();
+        m_bloomThresholdShader->unbind();
+        m_bloomFB[0]->unbind();
+
+        // Blur passes: pingpong bloom[0] ↔ bloom[1] (m_bloomBlurPasses×2 total draws)
+        bool horizontal = true;
+        for (int i = 0; i < m_bloomBlurPasses * 2; ++i)
+        {
+            int src = horizontal ? 0 : 1;
+            int dst = horizontal ? 1 : 0;
+            m_bloomFB[dst]->bind();
+            m_bloomBlurShader->bind();
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D,
+                static_cast<GLuint>(m_bloomFB[src]->getColorAttachmentHandle()));
+            m_bloomBlurShader->setInt("u_image", 0);
+            m_bloomBlurShader->setBool("u_horizontal", horizontal);
+            m_fullscreenQuad->draw();
+            m_bloomBlurShader->unbind();
+            m_bloomFB[dst]->unbind();
+            horizontal = !horizontal;
+        }
+        // After an even number of draws (m_bloomBlurPasses*2), result is in bloom[0]
+        bloomTex = static_cast<GLuint>(m_bloomFB[0]->getColorAttachmentHandle());
+    }
+
     // --- Tone-map blit: HDR intermediate buffer → output framebuffer ---
     if (m_fullscreenRTShader)
     {
@@ -1707,12 +1819,19 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(m_outlineMaskFB->getColorAttachmentHandle()));
         m_fullscreenRTShader->setInt("u_outlineMask", 1);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, bloomTex != 0
+            ? bloomTex
+            : static_cast<GLuint>(m_whiteTexture->getNativeHandle()));
+        m_fullscreenRTShader->setInt("u_bloomMap", 2);
         m_fullscreenRTShader->setFloat("u_sampleCount", 1.0f);
         m_fullscreenRTShader->setFloat("u_exposure", m_rasterExposure);
         m_fullscreenRTShader->setFloat("u_gamma", m_rasterGamma);
         m_fullscreenRTShader->setBool("u_enableACES", m_rasterEnableACES);
         m_fullscreenRTShader->setBool("u_flipV", false); // GL framebuffer: natural bottom-left origin, no flip needed
         m_fullscreenRTShader->setBool("u_enableOutline", m_outlineActive);
+        m_fullscreenRTShader->setBool("u_enableBloom", bloomTex != 0);
+        m_fullscreenRTShader->setFloat("u_bloomIntensity", m_bloomIntensity);
         m_fullscreenQuad->draw();
         m_fullscreenRTShader->unbind();
 
@@ -1723,6 +1842,72 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
 #endif
 
 #ifdef VEX_BACKEND_VULKAN
+    // --- Bloom pass (VK rasterizer): threshold + separable Gaussian blur ---
+    VkImageView vkBloomView = VK_NULL_HANDLE;
+    VkSampler   vkBloomSampler = VK_NULL_HANDLE;
+    bool vkBloomActive = m_bloomEnabled && m_vkBloomThresholdShader && m_vkBloomBlurShader
+                         && m_vkBloomFB[0] && m_vkBloomFB[1];
+    if (vkBloomActive)
+    {
+        const auto& outSpec = m_framebuffer->getSpec();
+        uint32_t bw = std::max(1u, outSpec.width / 2);
+        uint32_t bh = std::max(1u, outSpec.height / 2);
+        if (m_vkBloomFBW != bw || m_vkBloomFBH != bh)
+        {
+            m_vkBloomFB[0]->resize(bw, bh);
+            m_vkBloomFB[1]->resize(bw, bh);
+            m_vkBloomFBW = bw;
+            m_vkBloomFBH = bh;
+            m_vkBloomThresholdShader->preparePipeline(*m_vkBloomFB[0]);
+            m_vkBloomBlurShader->preparePipeline(*m_vkBloomFB[0]);
+            static_cast<vex::VKShader*>(m_vkBloomThresholdShader.get())->clearExternalTextureCache();
+            static_cast<vex::VKShader*>(m_vkBloomBlurShader.get())->clearExternalTextureCache();
+        }
+
+        auto* vkHDRFB2 = static_cast<vex::VKFramebuffer*>(m_rasterHDRFB.get());
+        auto* vkThreshVK = static_cast<vex::VKShader*>(m_vkBloomThresholdShader.get());
+
+        // Threshold pass: rasterHDRFB → bloom[0]
+        m_vkBloomFB[0]->bind();
+        m_vkBloomFB[0]->clear(0.0f, 0.0f, 0.0f, 1.0f);
+        m_vkBloomThresholdShader->setFloat("u_threshold", m_bloomThreshold);
+        m_vkBloomThresholdShader->setFloat("u_sampleCount", 1.0f);
+        m_vkBloomThresholdShader->bind();
+        vkThreshVK->setExternalTextureVK(0,
+            vkHDRFB2->getColorImageView(),
+            vkHDRFB2->getColorSampler(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        m_fullscreenQuad->draw();
+        m_vkBloomThresholdShader->unbind();
+        m_vkBloomFB[0]->unbind();
+
+        // Blur passes: pingpong bloom[0] ↔ bloom[1]
+        auto* vkBlurVK = static_cast<vex::VKShader*>(m_vkBloomBlurShader.get());
+        bool horizontal = true;
+        for (int i = 0; i < m_bloomBlurPasses * 2; ++i)
+        {
+            int src = horizontal ? 0 : 1;
+            int dst = horizontal ? 1 : 0;
+            auto* srcFBVK = static_cast<vex::VKFramebuffer*>(m_vkBloomFB[src].get());
+            m_vkBloomFB[dst]->bind();
+            m_vkBloomFB[dst]->clear(0.0f, 0.0f, 0.0f, 1.0f);
+            m_vkBloomBlurShader->bind();
+            vkBlurVK->setExternalTextureVK(0,
+                srcFBVK->getColorImageView(),
+                srcFBVK->getColorSampler(),
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            m_vkBloomBlurShader->setBool("u_horizontal", horizontal);
+            m_fullscreenQuad->draw();
+            m_vkBloomBlurShader->unbind();
+            m_vkBloomFB[dst]->unbind();
+            horizontal = !horizontal;
+        }
+        // After m_bloomBlurPasses*2 draws (even count), result is in bloom[0]
+        auto* vkBloom0 = static_cast<vex::VKFramebuffer*>(m_vkBloomFB[0].get());
+        vkBloomView   = vkBloom0->getColorImageView();
+        vkBloomSampler = vkBloom0->getColorSampler();
+    }
+
     // --- Tone-map blit: HDR intermediate buffer → output framebuffer ---
     if (m_vkFullscreenRTShader)
     {
@@ -1732,12 +1917,13 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
         m_framebuffer->bind();
         m_framebuffer->clear(0.0f, 0.0f, 0.0f, 1.0f);
 
-        m_vkFullscreenRTShader->setFloat("u_sampleCount", 1.0f);
-        m_vkFullscreenRTShader->setFloat("u_exposure",    m_rasterExposure);
-        m_vkFullscreenRTShader->setFloat("u_gamma",       m_rasterGamma);
+        m_vkFullscreenRTShader->setFloat("u_sampleCount",   1.0f);
+        m_vkFullscreenRTShader->setFloat("u_exposure",      m_rasterExposure);
+        m_vkFullscreenRTShader->setFloat("u_gamma",         m_rasterGamma);
+        m_vkFullscreenRTShader->setFloat("u_bloomIntensity",m_bloomIntensity);
         m_vkFullscreenRTShader->bind();
-        m_vkFullscreenRTShader->setBool("u_enableACES", m_rasterEnableACES);
-        m_vkFullscreenRTShader->setBool("u_flipV",      true);
+        m_vkFullscreenRTShader->setBool("u_enableACES",    m_rasterEnableACES);
+        m_vkFullscreenRTShader->setBool("u_flipV",         true);
 
         rtShaderVK->setExternalTextureVK(0,
             vkHDRFB->getColorImageView(),
@@ -1750,7 +1936,16 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
             vkMaskFB->getColorSampler(),
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
+        // Bind bloom map at slot 2 (set=3); fall back to outline mask (safe dummy) when inactive
+        if (vkBloomActive)
+            rtShaderVK->setExternalTextureVK(2, vkBloomView, vkBloomSampler,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        else
+            rtShaderVK->setExternalTextureVK(2, vkMaskFB->getColorImageView(),
+                vkMaskFB->getColorSampler(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
         m_vkFullscreenRTShader->setBool("u_enableOutline", m_outlineActive);
+        m_vkFullscreenRTShader->setBool("u_enableBloom",   vkBloomActive);
 
         m_fullscreenQuad->draw();
         m_vkFullscreenRTShader->unbind();
@@ -2004,12 +2199,17 @@ void SceneRenderer::renderCPURaytrace(Scene& scene)
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(m_outlineMaskFB->getColorAttachmentHandle()));
     m_fullscreenRTShader->setInt("u_outlineMask", 1);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(m_whiteTexture->getNativeHandle()));
+    m_fullscreenRTShader->setInt("u_bloomMap", 2);
     m_fullscreenRTShader->setFloat("u_sampleCount", 1.0f);
     m_fullscreenRTShader->setFloat("u_exposure", 0.0f);   // pow(2,0)=1 — no change
     m_fullscreenRTShader->setFloat("u_gamma", 1.0f);      // pow(c,1)=c — no change
     m_fullscreenRTShader->setBool("u_enableACES", false);  // clamp only — no change
     m_fullscreenRTShader->setBool("u_flipV", true);
     m_fullscreenRTShader->setBool("u_enableOutline", m_outlineActive);
+    m_fullscreenRTShader->setBool("u_enableBloom", false);
+    m_fullscreenRTShader->setFloat("u_bloomIntensity", 0.0f);
     m_fullscreenQuad->draw();
     m_fullscreenRTShader->unbind();
 
@@ -2023,13 +2223,15 @@ void SceneRenderer::renderCPURaytrace(Scene& scene)
         auto* vkTex      = static_cast<vex::VKTexture2D*>(m_raytraceTexture.get());
         auto* vkMaskFB   = static_cast<vex::VKFramebuffer*>(m_outlineMaskFB.get());
 
-        m_vkFullscreenRTShader->setFloat("u_sampleCount", 1.0f);
-        m_vkFullscreenRTShader->setFloat("u_exposure",    0.0f);
-        m_vkFullscreenRTShader->setFloat("u_gamma",       1.0f);
+        m_vkFullscreenRTShader->setFloat("u_sampleCount",    1.0f);
+        m_vkFullscreenRTShader->setFloat("u_exposure",       0.0f);
+        m_vkFullscreenRTShader->setFloat("u_gamma",          1.0f);
+        m_vkFullscreenRTShader->setFloat("u_bloomIntensity", 0.0f);
         m_vkFullscreenRTShader->bind();
         m_vkFullscreenRTShader->setBool("u_enableACES",    false);
         m_vkFullscreenRTShader->setBool("u_flipV",         true);
         m_vkFullscreenRTShader->setBool("u_enableOutline", m_outlineActive);
+        m_vkFullscreenRTShader->setBool("u_enableBloom",   false);
 
         rtShaderVK->setExternalTextureVK(0,
             vkTex->getImageView(),
@@ -2037,6 +2239,11 @@ void SceneRenderer::renderCPURaytrace(Scene& scene)
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
         rtShaderVK->setExternalTextureVK(1,
+            vkMaskFB->getColorImageView(),
+            vkMaskFB->getColorSampler(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        // Slot 2 (set=3) must be bound — use outline mask as a safe dummy
+        rtShaderVK->setExternalTextureVK(2,
             vkMaskFB->getColorImageView(),
             vkMaskFB->getColorSampler(),
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -2207,6 +2414,54 @@ void SceneRenderer::renderGPURaytrace(Scene& scene)
     if (m_gpuMaxSamples == 0 || m_gpuRaytracer->getSampleCount() < m_gpuMaxSamples)
         m_gpuRaytracer->traceSample();
 
+    // Bloom pass for GPU RT accumulation (normalize by sample count in threshold shader)
+    uint32_t bloomTex = 0;
+    if (m_bloomEnabled && m_bloomThresholdShader && m_bloomBlurShader && m_bloomFB[0] && m_bloomFB[1])
+    {
+        const auto& outSpec = m_framebuffer->getSpec();
+        uint32_t bw = std::max(1u, outSpec.width / 2);
+        uint32_t bh = std::max(1u, outSpec.height / 2);
+        if (m_bloomFBW != bw || m_bloomFBH != bh)
+        {
+            m_bloomFB[0]->resize(bw, bh);
+            m_bloomFB[1]->resize(bw, bh);
+            m_bloomFBW = bw;
+            m_bloomFBH = bh;
+        }
+
+        glDisable(GL_DEPTH_TEST);
+
+        m_bloomFB[0]->bind();
+        m_bloomThresholdShader->bind();
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, m_gpuRaytracer->getAccumTexture());
+        m_bloomThresholdShader->setInt("u_hdrMap", 0);
+        m_bloomThresholdShader->setFloat("u_threshold", m_bloomThreshold);
+        m_bloomThresholdShader->setFloat("u_sampleCount", static_cast<float>(m_gpuRaytracer->getSampleCount()));
+        m_fullscreenQuad->draw();
+        m_bloomThresholdShader->unbind();
+        m_bloomFB[0]->unbind();
+
+        bool horizontal = true;
+        for (int i = 0; i < m_bloomBlurPasses * 2; ++i)
+        {
+            int src = horizontal ? 0 : 1;
+            int dst = horizontal ? 1 : 0;
+            m_bloomFB[dst]->bind();
+            m_bloomBlurShader->bind();
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D,
+                static_cast<GLuint>(m_bloomFB[src]->getColorAttachmentHandle()));
+            m_bloomBlurShader->setInt("u_image", 0);
+            m_bloomBlurShader->setBool("u_horizontal", horizontal);
+            m_fullscreenQuad->draw();
+            m_bloomBlurShader->unbind();
+            m_bloomFB[dst]->unbind();
+            horizontal = !horizontal;
+        }
+        bloomTex = static_cast<GLuint>(m_bloomFB[0]->getColorAttachmentHandle());
+    }
+
     // Display result with tone mapping
     m_framebuffer->bind();
     m_framebuffer->clear(0.0f, 0.0f, 0.0f, 1.0f);
@@ -2224,6 +2479,11 @@ void SceneRenderer::renderGPURaytrace(Scene& scene)
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(m_outlineMaskFB->getColorAttachmentHandle()));
     m_fullscreenRTShader->setInt("u_outlineMask", 1);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, bloomTex != 0
+        ? bloomTex
+        : static_cast<GLuint>(m_whiteTexture->getNativeHandle()));
+    m_fullscreenRTShader->setInt("u_bloomMap", 2);
 
     m_fullscreenRTShader->setFloat("u_sampleCount", static_cast<float>(m_gpuRaytracer->getSampleCount()));
     m_fullscreenRTShader->setFloat("u_exposure", m_gpuExposure);
@@ -2231,6 +2491,8 @@ void SceneRenderer::renderGPURaytrace(Scene& scene)
     m_fullscreenRTShader->setBool("u_enableACES", m_gpuEnableACES);
     m_fullscreenRTShader->setBool("u_flipV", true);   // GPU raytracer accum texture: pixels stored top-to-bottom
     m_fullscreenRTShader->setBool("u_enableOutline", m_outlineActive);
+    m_fullscreenRTShader->setBool("u_enableBloom", bloomTex != 0);
+    m_fullscreenRTShader->setFloat("u_bloomIntensity", m_bloomIntensity);
 
     m_fullscreenQuad->draw();
     m_fullscreenRTShader->unbind();
@@ -2647,6 +2909,69 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
         m_vkRaytracer->postTraceBarrier(cmd);
     }
 
+    // ── Bloom pass for VK GPU RT (before tone-map blit, outside render pass) ──
+    VkImageView vkRTBloomView   = VK_NULL_HANDLE;
+    VkSampler   vkRTBloomSampler = VK_NULL_HANDLE;
+    bool vkRTBloomActive = m_bloomEnabled && hasTlas
+                           && m_vkBloomThresholdShader && m_vkBloomBlurShader
+                           && m_vkBloomFB[0] && m_vkBloomFB[1];
+    if (vkRTBloomActive)
+    {
+        const auto& outSpec = m_framebuffer->getSpec();
+        uint32_t bw = std::max(1u, outSpec.width / 2);
+        uint32_t bh = std::max(1u, outSpec.height / 2);
+        if (m_vkBloomFBW != bw || m_vkBloomFBH != bh)
+        {
+            m_vkBloomFB[0]->resize(bw, bh);
+            m_vkBloomFB[1]->resize(bw, bh);
+            m_vkBloomFBW = bw;
+            m_vkBloomFBH = bh;
+            m_vkBloomThresholdShader->preparePipeline(*m_vkBloomFB[0]);
+            m_vkBloomBlurShader->preparePipeline(*m_vkBloomFB[0]);
+            static_cast<vex::VKShader*>(m_vkBloomThresholdShader.get())->clearExternalTextureCache();
+            static_cast<vex::VKShader*>(m_vkBloomBlurShader.get())->clearExternalTextureCache();
+        }
+
+        auto* vkThreshVK = static_cast<vex::VKShader*>(m_vkBloomThresholdShader.get());
+
+        m_vkBloomFB[0]->bind();
+        m_vkBloomFB[0]->clear(0.0f, 0.0f, 0.0f, 1.0f);
+        m_vkBloomThresholdShader->setFloat("u_threshold", m_bloomThreshold);
+        m_vkBloomThresholdShader->setFloat("u_sampleCount", static_cast<float>(m_vkSampleCount));
+        m_vkBloomThresholdShader->bind();
+        vkThreshVK->setExternalTextureVK(0,
+            m_vkRaytracer->getOutputImageView(),
+            m_vkRaytracer->getDisplaySampler(),
+            VK_IMAGE_LAYOUT_GENERAL);
+        m_fullscreenQuad->draw();
+        m_vkBloomThresholdShader->unbind();
+        m_vkBloomFB[0]->unbind();
+
+        auto* vkBlurVK = static_cast<vex::VKShader*>(m_vkBloomBlurShader.get());
+        bool horizontal = true;
+        for (int i = 0; i < m_bloomBlurPasses * 2; ++i)
+        {
+            int src = horizontal ? 0 : 1;
+            int dst = horizontal ? 1 : 0;
+            auto* srcFBVK = static_cast<vex::VKFramebuffer*>(m_vkBloomFB[src].get());
+            m_vkBloomFB[dst]->bind();
+            m_vkBloomFB[dst]->clear(0.0f, 0.0f, 0.0f, 1.0f);
+            m_vkBloomBlurShader->bind();
+            vkBlurVK->setExternalTextureVK(0,
+                srcFBVK->getColorImageView(),
+                srcFBVK->getColorSampler(),
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            m_vkBloomBlurShader->setBool("u_horizontal", horizontal);
+            m_fullscreenQuad->draw();
+            m_vkBloomBlurShader->unbind();
+            m_vkBloomFB[dst]->unbind();
+            horizontal = !horizontal;
+        }
+        auto* vkBloom0 = static_cast<vex::VKFramebuffer*>(m_vkBloomFB[0].get());
+        vkRTBloomView   = vkBloom0->getColorImageView();
+        vkRTBloomSampler = vkBloom0->getColorSampler();
+    }
+
     // ── GPU-side display: sample accumulation image directly ──────────────────
     m_framebuffer->bind();
     m_framebuffer->clear(0.0f, 0.0f, 0.0f, 1.0f);
@@ -2656,14 +2981,16 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
         auto* rtShaderVK = static_cast<vex::VKShader*>(m_vkFullscreenRTShader.get());
 
         // Update push-constant floats before bind() pushes them
-        m_vkFullscreenRTShader->setFloat("u_sampleCount", static_cast<float>(m_vkSampleCount));
-        m_vkFullscreenRTShader->setFloat("u_exposure",    m_vkExposure);
-        m_vkFullscreenRTShader->setFloat("u_gamma",       m_vkGamma);
+        m_vkFullscreenRTShader->setFloat("u_sampleCount",    static_cast<float>(m_vkSampleCount));
+        m_vkFullscreenRTShader->setFloat("u_exposure",       m_vkExposure);
+        m_vkFullscreenRTShader->setFloat("u_gamma",          m_vkGamma);
+        m_vkFullscreenRTShader->setFloat("u_bloomIntensity", m_bloomIntensity);
         m_vkFullscreenRTShader->bind();
         // setBool pushes after bind, ensuring the final push contains all values
         m_vkFullscreenRTShader->setBool("u_enableACES",    m_vkEnableACES);
         m_vkFullscreenRTShader->setBool("u_flipV",         true);
         m_vkFullscreenRTShader->setBool("u_enableOutline", m_outlineActive);
+        m_vkFullscreenRTShader->setBool("u_enableBloom",   vkRTBloomActive);
 
         rtShaderVK->setExternalTextureVK(0,
             m_vkRaytracer->getOutputImageView(),
@@ -2674,6 +3001,11 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
         rtShaderVK->setExternalTextureVK(1,
             vkMaskFB->getColorImageView(),
             vkMaskFB->getColorSampler(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        // Slot 2 (set=3): bloom map or dummy
+        rtShaderVK->setExternalTextureVK(2,
+            vkRTBloomActive ? vkRTBloomView   : vkMaskFB->getColorImageView(),
+            vkRTBloomActive ? vkRTBloomSampler : vkMaskFB->getColorSampler(),
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
         m_fullscreenQuad->draw();

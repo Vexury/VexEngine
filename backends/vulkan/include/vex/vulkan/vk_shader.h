@@ -123,24 +123,28 @@ private:
     size_t m_uboSize = sizeof(MeshUBO);
 
     struct MeshPushConstant {
-        uint32_t alphaClip      = 0;   // offset  0
-        int32_t  debugMode      = 0;   // offset  4
-        float    nearPlane      = 0.01f; // offset 8
-        float    farPlane       = 1000.0f; // offset 12
-        int32_t  materialType   = 0;   // offset 16
-        float    roughness      = 0.5f; // offset 20
-        float    metallic       = 0.0f; // offset 24
-        uint32_t hasNormalMap   = 0;   // offset 28
-        uint32_t hasRoughnessMap = 0;  // offset 32
-        uint32_t hasMetallicMap = 0;   // offset 36
-        uint32_t flipV          = 0;   // offset 40
-        float    sampleCount    = 1.0f; // offset 44
-        float    exposure       = 0.0f; // offset 48
-        float    gamma          = 2.2f; // offset 52
-        uint32_t enableACES     = 1u;  // offset 56
-        uint32_t hasEmissiveMap = 0;   // offset 60
-        uint32_t enableOutline  = 0;   // offset 64
-    };                                 // total: 68 bytes
+        uint32_t alphaClip       = 0;      // offset  0
+        int32_t  debugMode       = 0;      // offset  4
+        float    nearPlane       = 0.01f;  // offset  8
+        float    farPlane        = 1000.0f;// offset 12
+        int32_t  materialType    = 0;      // offset 16
+        float    roughness       = 0.5f;   // offset 20
+        float    metallic        = 0.0f;   // offset 24
+        uint32_t hasNormalMap    = 0;      // offset 28
+        uint32_t hasRoughnessMap = 0;      // offset 32
+        uint32_t hasMetallicMap  = 0;      // offset 36
+        uint32_t flipV           = 0;      // offset 40
+        float    sampleCount     = 1.0f;   // offset 44
+        float    exposure        = 0.0f;   // offset 48
+        float    gamma           = 2.2f;   // offset 52
+        uint32_t enableACES      = 1u;     // offset 56
+        uint32_t hasEmissiveMap  = 0;      // offset 60
+        uint32_t enableOutline   = 0;      // offset 64
+        uint32_t enableBloom     = 0;      // offset 68
+        float    bloomIntensity  = 0.05f;  // offset 72
+        float    bloomThreshold  = 0.8f;   // offset 76
+        uint32_t bloomHorizontal = 0;      // offset 80
+    };                                     // total: 84 bytes
     MeshPushConstant m_pushData{};
 
     // Wireframe pipeline

@@ -13,6 +13,7 @@ struct FramebufferSpec
     uint32_t height = 720;
     bool hasDepth = false;
     bool depthOnly = false; // depth-only framebuffer (for shadow maps)
+    bool hdrColor = false;  // use float (RGBA16F) color attachment instead of RGBA8
 };
 
 class Framebuffer
