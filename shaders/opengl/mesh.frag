@@ -153,7 +153,7 @@ void main()
         FragColor = vec4(em, 1.0);
         return;
     }
-    if (u_debugMode == 7) // Material ID
+    if (u_debugMode == 7) // Material Type
     {
         vec3 matColor;
         if (u_materialType == 1)

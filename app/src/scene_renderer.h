@@ -35,7 +35,7 @@ enum class DebugMode : int {
     UVs        = 4,  // UV coordinates as RG
     Albedo     = 5,  // Unlit base color (vertex color * texture)
     Emission   = 6,  // Emissive channel only
-    MaterialID = 7,  // Material type as distinct flat colors
+    MaterialType = 7,  // Material type as distinct flat colors (Microfacet/Mirror/Dielectric)
 };
 
 class SceneRenderer

@@ -890,7 +890,7 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
     if (m_renderModeIndex == 0)
     {
         const char* debugModes[] = { "None", "Wireframe", "Depth", "Normals",
-                                      "UVs", "Albedo", "Emission", "Material ID" };
+                                      "UVs", "Albedo", "Emission", "Material Type" };
         ImGui::Combo("Debug Mode", &m_debugModeIndex, debugModes, static_cast<int>(std::size(debugModes)));
 
         bool normalMap = renderer.getEnableNormalMapping();
