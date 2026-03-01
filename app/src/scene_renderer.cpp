@@ -1445,6 +1445,7 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
         }
     }
     vex::Framebuffer* renderFB = m_rasterHDRFB.get();
+    const bool isDebugView = m_debugMode != DebugMode::None;
 
     // --- Compute light view-projection for shadow mapping ---
     glm::mat4 lightVP         = glm::mat4(1.0f);
@@ -1754,8 +1755,9 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
 
 #ifdef VEX_BACKEND_OPENGL
     // --- Bloom pass: threshold + separable Gaussian blur ---
+    // Skipped in debug views — output is display-ready and must not be post-processed.
     uint32_t bloomTex = 0;
-    if (m_bloomEnabled && m_bloomThresholdShader && m_bloomBlurShader && m_bloomFB[0] && m_bloomFB[1])
+    if (!isDebugView && m_bloomEnabled && m_bloomThresholdShader && m_bloomBlurShader && m_bloomFB[0] && m_bloomFB[1])
     {
         const auto& outSpec = m_framebuffer->getSpec();
         uint32_t bw = std::max(1u, outSpec.width / 2);
@@ -1824,13 +1826,15 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
             ? bloomTex
             : static_cast<GLuint>(m_whiteTexture->getNativeHandle()));
         m_fullscreenRTShader->setInt("u_bloomMap", 2);
+        // In debug views the mesh shader outputs display-ready values — bypass all
+        // post-processing so exposure, ACES and gamma never touch the debug output.
         m_fullscreenRTShader->setFloat("u_sampleCount", 1.0f);
-        m_fullscreenRTShader->setFloat("u_exposure", m_rasterExposure);
-        m_fullscreenRTShader->setFloat("u_gamma", m_rasterGamma);
-        m_fullscreenRTShader->setBool("u_enableACES", m_rasterEnableACES);
+        m_fullscreenRTShader->setFloat("u_exposure",    isDebugView ? 0.0f : m_rasterExposure);
+        m_fullscreenRTShader->setFloat("u_gamma",       isDebugView ? 1.0f : m_rasterGamma);
+        m_fullscreenRTShader->setBool("u_enableACES",   !isDebugView && m_rasterEnableACES);
         m_fullscreenRTShader->setBool("u_flipV", false); // GL framebuffer: natural bottom-left origin, no flip needed
         m_fullscreenRTShader->setBool("u_enableOutline", m_outlineActive);
-        m_fullscreenRTShader->setBool("u_enableBloom", bloomTex != 0);
+        m_fullscreenRTShader->setBool("u_enableBloom",  !isDebugView && bloomTex != 0);
         m_fullscreenRTShader->setFloat("u_bloomIntensity", m_bloomIntensity);
         m_fullscreenQuad->draw();
         m_fullscreenRTShader->unbind();
@@ -1845,7 +1849,7 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
     // --- Bloom pass (VK rasterizer): threshold + separable Gaussian blur ---
     VkImageView vkBloomView = VK_NULL_HANDLE;
     VkSampler   vkBloomSampler = VK_NULL_HANDLE;
-    bool vkBloomActive = m_bloomEnabled && m_vkBloomThresholdShader && m_vkBloomBlurShader
+    bool vkBloomActive = !isDebugView && m_bloomEnabled && m_vkBloomThresholdShader && m_vkBloomBlurShader
                          && m_vkBloomFB[0] && m_vkBloomFB[1];
     if (vkBloomActive)
     {
@@ -1918,11 +1922,11 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
         m_framebuffer->clear(0.0f, 0.0f, 0.0f, 1.0f);
 
         m_vkFullscreenRTShader->setFloat("u_sampleCount",   1.0f);
-        m_vkFullscreenRTShader->setFloat("u_exposure",      m_rasterExposure);
-        m_vkFullscreenRTShader->setFloat("u_gamma",         m_rasterGamma);
+        m_vkFullscreenRTShader->setFloat("u_exposure",      isDebugView ? 0.0f : m_rasterExposure);
+        m_vkFullscreenRTShader->setFloat("u_gamma",         isDebugView ? 1.0f : m_rasterGamma);
         m_vkFullscreenRTShader->setFloat("u_bloomIntensity",m_bloomIntensity);
         m_vkFullscreenRTShader->bind();
-        m_vkFullscreenRTShader->setBool("u_enableACES",    m_rasterEnableACES);
+        m_vkFullscreenRTShader->setBool("u_enableACES",    !isDebugView && m_rasterEnableACES);
         m_vkFullscreenRTShader->setBool("u_flipV",         true);
 
         rtShaderVK->setExternalTextureVK(0,
