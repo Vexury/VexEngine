@@ -77,7 +77,7 @@ layout(set = 0, binding = 2) uniform Uniforms {
     float totalLightArea;
     uint  lightCount;        // offset 272
     uint  bilinearFiltering; // offset 276
-    uint  _pad2b;            // offset 280
+    uint  samplerType;       // offset 280 — 0=PCG  1=Halton  2=BlueNoise(IGN)
     uint  _pad2c;            // offset 284
 } u_uniforms;
 
@@ -124,6 +124,28 @@ float rngNext() {
     uint w = ((g_rngState >> ((g_rngState >> 28u) + 4u)) ^ g_rngState) * 277803737u;
     w = (w >> 22u) ^ w;
     return float(w) / 4294967296.0;
+}
+
+// ── Halton low-discrepancy sequence ──────────────────────────────────────
+// Converges faster than PCG. Apply Cranley-Patterson rotation (per-pixel
+// random offset mod 1) to decorrelate adjacent pixels.
+float halton(uint index, uint base) {
+    float result = 0.0;
+    float f = 1.0;
+    while (index > 0u) {
+        f      /= float(base);
+        result += f * float(index % base);
+        index  /= base;
+    }
+    return result;
+}
+
+// ── Interleaved Gradient Noise (IGN) ─────────────────────────────────────
+// Analytical blue-noise-like spatial distribution (Jimenez 2014).
+// Animated with the golden ratio conjugate for good temporal coverage.
+// No precomputed texture needed.
+float ign(vec2 p) {
+    return fract(52.9829189f * fract(dot(p, vec2(0.06711056f, 0.00583715f))));
 }
 
 // ── Triangle shading accessors (13 vec4s per tri) ────────────────────────

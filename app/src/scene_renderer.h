@@ -160,6 +160,8 @@ public:
     bool getGPUEnableEmissive() const;
     void setGPUBilinearFiltering(bool v);
     bool getGPUBilinearFiltering() const;
+    void setVKSamplerType(int v);
+    int  getVKSamplerType() const;
     void setGPUExposure(float v);
     float getGPUExposure() const;
     void setGPUGamma(float v);
@@ -332,6 +334,7 @@ private:
     bool  m_vkEnableNormalMapping   = true;
     bool  m_vkEnableEmissive        = true;
     bool  m_vkBilinearFiltering     = true;
+    int   m_vkSamplerType           = 1; // 0=PCG  1=Halton  2=BlueNoise(IGN)
     float m_vkRayEps                = 1e-4f;
     bool  m_vkEnableRR              = true;
 

@@ -391,9 +391,32 @@ void main() {
     g_rngState = rngHash(uint(pixel.x) + uint(pixel.y) * u_uniforms.width)
                ^ rngHash(u_uniforms.sampleCount);
 
-    // Anti-aliasing jitter
-    float jx = u_uniforms.enableAA != 0u ? rngNext() : 0.5;
-    float jy = u_uniforms.enableAA != 0u ? rngNext() : 0.5;
+    // Anti-aliasing jitter — three modes controlled by u_uniforms.samplerType:
+    //   0 = PCG   — plain pseudo-random (original behaviour)
+    //   1 = Halton — base-2/3 with per-pixel Cranley-Patterson rotation
+    //   2 = IGN   — Interleaved Gradient Noise animated by golden ratio
+    float jx, jy;
+    if (u_uniforms.enableAA != 0u) {
+        if (u_uniforms.samplerType == 1u) {
+            // Halton + Cranley-Patterson
+            float cpX = float(rngHash(uint(pixel.x) * 1973u + uint(pixel.y) * 9277u)) / 4294967296.0;
+            float cpY = float(rngHash(uint(pixel.x) * 2699u + uint(pixel.y) * 4513u)) / 4294967296.0;
+            jx = fract(halton(u_uniforms.sampleCount, 2u) + cpX);
+            jy = fract(halton(u_uniforms.sampleCount, 3u) + cpY);
+        } else if (u_uniforms.samplerType == 2u) {
+            // IGN animated by golden ratio conjugate each sample
+            const float PHI = 0.6180339887f;
+            jx = fract(ign(vec2(pixel))                               + PHI * float(u_uniforms.sampleCount));
+            jy = fract(ign(vec2(pixel) + vec2(0.75488f, 0.56984f)) + PHI * float(u_uniforms.sampleCount));
+        } else {
+            // PCG
+            jx = rngNext();
+            jy = rngNext();
+        }
+    } else {
+        jx = 0.5;
+        jy = 0.5;
+    }
 
     // Generate and trace primary ray
     vec3 origin, direction;

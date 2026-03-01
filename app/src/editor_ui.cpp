@@ -1098,6 +1098,15 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
         if (ImGui::Checkbox("Bilinear Filtering", &bilinear))
             renderer.setGPUBilinearFiltering(bilinear);
 
+        {
+            const char* samplerItems[] = { "PCG (Default)", "Halton", "Blue Noise (IGN)" };
+            int samplerType = renderer.getVKSamplerType();
+            if (ImGui::Combo("Sampler", &samplerType, samplerItems, 3))
+                renderer.setVKSamplerType(samplerType);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("PCG: pseudo-random\nHalton: low-discrepancy, faster convergence\nBlue Noise: spatially decorrelated, pleasant noise pattern");
+        }
+
         ImGui::SeparatorText("Diagnostics");
 
         {

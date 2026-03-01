@@ -55,7 +55,7 @@ struct RTUniforms
     float    totalLightArea;          //        offset 268
     uint32_t lightCount;              //        offset 272
     uint32_t bilinearFiltering;       //        offset 276
-    uint32_t _pad2b;                  //        offset 280
+    uint32_t samplerType;             //        offset 280 — 0=PCG  1=Halton  2=BlueNoise(IGN)
     uint32_t _pad2c;                  //        offset 284
                                       // total: 288
 };
