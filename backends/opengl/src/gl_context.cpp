@@ -66,6 +66,12 @@ void GLContext::endFrame()
     m_window->pollEvents();
 }
 
+void GLContext::setVSync(bool v)
+{
+    m_vsync = v;
+    glfwSwapInterval(v ? 1 : 0);
+}
+
 void GLContext::shutdown()
 {
     m_window = nullptr;

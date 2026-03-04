@@ -19,9 +19,12 @@ public:
     void imguiShutdown() override;
     void imguiNewFrame() override;
     void imguiRenderDrawData() override;
+    void setVSync(bool v) override;
+    bool getVSync() const override { return m_vsync; }
 
 private:
     Window* m_window = nullptr;
+    bool    m_vsync  = true;
 };
 
 } // namespace vex

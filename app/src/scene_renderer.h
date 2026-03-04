@@ -17,6 +17,7 @@
 
 #include <glm/glm.hpp>
 
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <string>
@@ -160,8 +161,9 @@ public:
     bool getGPUEnableEmissive() const;
     void setGPUBilinearFiltering(bool v);
     bool getGPUBilinearFiltering() const;
-    void setVKSamplerType(int v);
-    int  getVKSamplerType() const;
+    void  setVKSamplerType(int v);
+    int   getVKSamplerType() const;
+    float getVKSamplesPerSec() const { return m_vkSamplesPerSec; }
     void setGPUExposure(float v);
     float getGPUExposure() const;
     void setGPUGamma(float v);
@@ -335,6 +337,10 @@ private:
     bool  m_vkEnableEmissive        = true;
     bool  m_vkBilinearFiltering     = true;
     int   m_vkSamplerType           = 1; // 0=PCG  1=Halton  2=BlueNoise(IGN)
+
+    // Samples-per-second tracking (EMA)
+    float                                        m_vkSamplesPerSec    = 0.0f;
+    std::chrono::steady_clock::time_point        m_vkLastSampleTime   = {};
     float m_vkRayEps                = 1e-4f;
     bool  m_vkEnableRR              = true;
 

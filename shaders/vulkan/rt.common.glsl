@@ -7,29 +7,15 @@
 #extension GL_GOOGLE_include_directive         : require
 
 // ── Payload struct ──────────────────────────────────────────────────────────
+// Thin payload: only the minimum needed to identify the hit. All shading data
+// is re-fetched from triShading[] SSBO in rgen, eliminating the large
+// continuation-stack save/restore that previously stalled rgen and rchit.
 struct HitPayload {
-    vec3  position;           // world-space hit point
-    float t;                  // hit distance
-    vec3  normal;             // interpolated shading normal
-    float roughness;
-    vec3  geometricNormal;    // flat geometric normal
-    float metallic;
-    vec3  tangent;
-    float bitangentSign;
-    vec3  color;              // base color (unmodulated)
-    float ior;
-    vec3  emissive;
-    float area;               // triangle surface area
-    vec2  uv;                 // interpolated UV
-    uint  triangleIndex;      // global flat tri index (for NEE)
-    uint  hit;                // 0 = miss, 1 = hit
-    int   textureIndex;
-    int   emissiveTextureIndex;
-    int   normalMapTextureIndex;
-    int   roughnessTextureIndex;
-    int   metallicTextureIndex;
-    int   materialType;       // 0=opaque, 1=mirror, 2=dielectric
-    float _pad[2];
+    uint  hit;      // 0 = miss, 1 = hit
+    float t;        // hit distance
+    uint  triIdx;   // global flat triangle index
+    float bary_u;   // barycentric u
+    float bary_v;   // barycentric v
 };
 
 // ── Descriptor set 0 ────────────────────────────────────────────────────────

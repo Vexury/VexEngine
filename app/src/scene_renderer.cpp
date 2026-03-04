@@ -2926,6 +2926,24 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
     if (hasTlas && (m_gpuMaxSamples == 0 || m_vkSampleCount < m_gpuMaxSamples))
     {
         m_vkRaytracer->trace(cmd);
+
+        // Samples-per-second: EMA over consecutive trace calls.
+        // Reset on first sample (count == 0) so stale timing from a previous
+        // render session doesn't pollute the display after a scene/camera change.
+        auto now = std::chrono::steady_clock::now();
+        if (m_vkSampleCount == 0) {
+            m_vkSamplesPerSec = 0.0f;
+        } else {
+            float dt = std::chrono::duration<float>(now - m_vkLastSampleTime).count();
+            if (dt > 1e-6f) {
+                float instant = 1.0f / dt;
+                m_vkSamplesPerSec = m_vkSamplesPerSec < 1e-6f
+                    ? instant
+                    : m_vkSamplesPerSec * 0.9f + instant * 0.1f;
+            }
+        }
+        m_vkLastSampleTime = now;
+
         ++m_vkSampleCount;
         m_vkRaytracer->postTraceBarrier(cmd);
     }

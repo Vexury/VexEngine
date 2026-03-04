@@ -107,26 +107,33 @@ vec3 pathTrace(vec3 rayOrigin, vec3 rayDirection) {
             break;
         }
 
-        // ── Hit — unpack payload ──────────────────────────────────────────
-        vec3  hitPos      = g_payload.position;
-        float hitT        = g_payload.t;
-        vec3  shadingN    = g_payload.normal;
-        vec3  geoN        = g_payload.geometricNormal;
-        vec3  hitColor    = g_payload.color;
-        vec3  hitEmissive = g_payload.emissive;
-        vec2  hitUV       = g_payload.uv;
-        uint  triIdx      = g_payload.triangleIndex;
-        int   matType     = g_payload.materialType;
-        float ior         = g_payload.ior;
-        float roughness   = g_payload.roughness;
-        float metallic    = g_payload.metallic;
-        vec3  tangent     = g_payload.tangent;
-        float btSign      = g_payload.bitangentSign;
-        int   texIdx      = g_payload.textureIndex;
-        int   emissTexIdx = g_payload.emissiveTextureIndex;
-        int   normTexIdx  = g_payload.normalMapTextureIndex;
-        int   roughTexIdx = g_payload.roughnessTextureIndex;
-        int   metalTexIdx = g_payload.metallicTextureIndex;
+        // ── Hit — unpack thin payload, refetch shading data from SSBO ────
+        uint  triIdx  = g_payload.triIdx;
+        float bary_u  = g_payload.bary_u;
+        float bary_v  = g_payload.bary_v;
+        float bary_w  = 1.0 - bary_u - bary_v;
+        float hitT    = g_payload.t;
+        vec3  hitPos  = origin + direction * hitT;
+
+        vec3 geoN     = triGeoNormal(triIdx);
+        vec3 shadingN = (u_uniforms.flatShading != 0u)
+            ? geoN
+            : normalize(bary_w * triN0(triIdx) + bary_u * triN1(triIdx) + bary_v * triN2(triIdx));
+        vec2 hitUV    = bary_w * triUV0(triIdx) + bary_u * triUV1(triIdx) + bary_v * triUV2(triIdx);
+
+        vec3  hitColor    = triColor(triIdx);
+        vec3  hitEmissive = triEmissive(triIdx);
+        int   matType     = triMaterialType(triIdx);
+        float ior         = triIOR(triIdx);
+        float roughness   = triRoughness(triIdx);
+        float metallic    = triMetallic(triIdx);
+        vec3  tangent     = triTangent(triIdx);
+        float btSign      = triBitangentSign(triIdx);
+        int   texIdx      = triTexIdx(triIdx);
+        int   emissTexIdx = triEmissiveTexIdx(triIdx);
+        int   normTexIdx  = triNormalMapTexIdx(triIdx);
+        int   roughTexIdx = triRoughnessTexIdx(triIdx);
+        int   metalTexIdx = triMetallicTexIdx(triIdx);
 
         // ── Front / back face ─────────────────────────────────────────────
         bool frontFace = dot(geoN, -direction) > 0.0;

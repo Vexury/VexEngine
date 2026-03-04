@@ -33,6 +33,8 @@ public:
     std::function<void()> getWindowHints() const override;
     MemoryStats getMemoryStats() const override;
     void waitIdle() override;
+    void setVSync(bool v) override;
+    bool getVSync() const override { return m_vsync; }
 
     void imguiInit(GLFWwindow* window) override;
     void imguiShutdown() override;
@@ -83,6 +85,7 @@ private:
     void destroyRenderFinishedSemaphores();
 
     Window* m_window = nullptr;
+    bool    m_vsync  = true;
 
     // Core Vulkan objects
     vkb::Instance   m_vkbInstance{};

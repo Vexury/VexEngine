@@ -269,7 +269,8 @@ void VKContext::createSwapchain()
     vkb::SwapchainBuilder swapBuilder(m_vkbDevice);
     auto swapRet = swapBuilder
         .set_desired_format({ VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR })
-        .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+        .set_desired_present_mode(m_vsync ? VK_PRESENT_MODE_FIFO_KHR : VK_PRESENT_MODE_IMMEDIATE_KHR)
+        .add_fallback_present_mode(VK_PRESENT_MODE_FIFO_KHR)
         .set_old_swapchain(m_swapchain)
         .build();
 
@@ -305,6 +306,13 @@ void VKContext::destroySwapchain()
 
     vkb::destroy_swapchain(m_vkbSwapchain);
     m_swapchain = VK_NULL_HANDLE;
+}
+
+void VKContext::setVSync(bool v)
+{
+    if (v == m_vsync) return;
+    m_vsync = v;
+    recreateSwapchain();
 }
 
 void VKContext::recreateSwapchain()

@@ -1043,6 +1043,7 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
                 ImGui::Text("Samples: %u / %u", samples, maxSamp);
             else
                 ImGui::Text("Samples: %u", samples);
+
         }
         {
             int v = static_cast<int>(renderer.getGPUMaxSamples());
@@ -1214,6 +1215,13 @@ void EditorUI::renderStats(SceneRenderer& renderer, Scene& scene, vex::GraphicsC
     ImGui::Text("FPS:        %.1f", io.Framerate);
     ImGui::Text("Frame time: %.2f ms", 1000.0f / io.Framerate);
     ImGui::Text("Draw calls: %d", renderer.getDrawCalls());
+    float sps = renderer.getVKSamplesPerSec();
+    if (sps > 0.0f)
+        ImGui::Text("Samples/sec: %.1f", sps);
+
+    bool vsync = ctx.getVSync();
+    if (ImGui::Checkbox("VSync", &vsync))
+        ctx.setVSync(vsync);
 
     // --- Scene ---
     ImGui::SeparatorText("Scene");
