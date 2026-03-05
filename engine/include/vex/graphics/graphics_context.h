@@ -33,7 +33,7 @@ public:
     virtual std::function<void()> getWindowHints() const = 0;
     virtual MemoryStats getMemoryStats() const { return {}; }
     virtual void waitIdle() {}
-    virtual void setVSync(bool v) {}
+    virtual void setVSync(bool) {}
     virtual bool getVSync() const { return true; }
 
     // ImGui backend integration — implemented by each backend

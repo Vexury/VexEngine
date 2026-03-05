@@ -256,10 +256,6 @@ bool VKContext::init(Window& window)
     vkGetPhysicalDeviceProperties2(m_physicalDevice, &props2);
 
     Log::info(std::string("Vulkan Device: ") + props2.properties.deviceName);
-    Log::info("RT shaderGroupHandleSize:    " + std::to_string(m_rtProperties.shaderGroupHandleSize));
-    Log::info("RT shaderGroupBaseAlignment: " + std::to_string(m_rtProperties.shaderGroupBaseAlignment));
-    Log::info("RT maxRayRecursionDepth:     " + std::to_string(m_rtProperties.maxRayRecursionDepth));
-    Log::info("Vulkan context initialized");
 
     return true;
 }

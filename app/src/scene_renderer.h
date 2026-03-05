@@ -196,8 +196,7 @@ public:
     void buildGeometry(Scene& scene, ProgressFn progress = nullptr);
 
 private:
-    void renderRasterize(Scene& scene, int selectedGroup, int selectedSubmesh,
-                         const std::string& selectedObjectName);
+    void renderRasterize(Scene& scene, int selectedGroup, int selectedSubmesh);
     void renderCPURaytrace(Scene& scene);
     void renderOutlineMask(Scene& scene, int selectedGroup, const std::string& selectedObjectName,
                            const glm::mat4& view, const glm::mat4& proj);

@@ -51,12 +51,15 @@ void CPURaytracer::setGeometry(std::vector<Triangle> triangles, std::vector<Text
 
 void CPURaytracer::updateMaterials(const std::vector<Triangle>& triangles)
 {
-    for (size_t i = 0; i < triangles.size() && i < m_triData.size(); ++i)
+    const auto& indices = m_bvh.indices();
+    for (size_t i = 0; i < m_triData.size(); ++i)
     {
-        m_triData[i].materialType = triangles[i].materialType;
-        m_triData[i].ior          = triangles[i].ior;
-        m_triData[i].roughness    = triangles[i].roughness;
-        m_triData[i].metallic     = triangles[i].metallic;
+        uint32_t origIdx = indices[i];
+        if (origIdx >= triangles.size()) continue;
+        m_triData[i].materialType = triangles[origIdx].materialType;
+        m_triData[i].ior          = triangles[origIdx].ior;
+        m_triData[i].roughness    = triangles[origIdx].roughness;
+        m_triData[i].metallic     = triangles[origIdx].metallic;
     }
     reset();
 }
@@ -106,7 +109,11 @@ void CPURaytracer::resize(uint32_t width, uint32_t height)
     m_accumBuffer.assign(width * height, glm::vec3(0.0f));
     m_pixelBuffer.assign(width * height * 4, 0);
     m_sampleCount = 0;
-    buildThreadPool();
+
+    if (m_workers.empty())
+        buildThreadPool();
+    else
+        rebuildWorkerRanges();
 }
 
 void CPURaytracer::reset()
@@ -353,7 +360,7 @@ glm::vec3 CPURaytracer::sampleEnvMap(RNG& rng, glm::vec3& outDir, float& outPdf)
     }
 
     outPdf = (lum * static_cast<float>(W) * static_cast<float>(H))
-           / (2.0f * PI * PI * sinTheta * m_envTotalIntegral);
+           / (2.0f * PI * PI * m_envTotalIntegral);
 
     return radiance;
 }
@@ -381,7 +388,7 @@ float CPURaytracer::envMapPdf(const glm::vec3& dir) const
         return 0.0f;
 
     return (lum * static_cast<float>(W) * static_cast<float>(H))
-         / (2.0f * PI * PI * sinTheta * m_envTotalIntegral);
+         / (2.0f * PI * PI * m_envTotalIntegral);
 }
 
 glm::vec3 CPURaytracer::sampleEnvironment(const glm::vec3& direction) const
@@ -1080,13 +1087,9 @@ void CPURaytracer::workerLoop(uint32_t id)
     }
 }
 
-void CPURaytracer::buildThreadPool()
+void CPURaytracer::rebuildWorkerRanges()
 {
-    shutdownPool();
-
-    uint32_t threadCount = std::max(1u, std::thread::hardware_concurrency());
-    m_workerRanges.resize(threadCount);
-
+    uint32_t threadCount  = static_cast<uint32_t>(m_workerRanges.size());
     uint32_t rowsPerThread = m_height / threadCount;
     uint32_t remainder     = m_height % threadCount;
     uint32_t startRow = 0;
@@ -1096,6 +1099,15 @@ void CPURaytracer::buildThreadPool()
         m_workerRanges[i] = { startRow, endRow };
         startRow = endRow;
     }
+}
+
+void CPURaytracer::buildThreadPool()
+{
+    shutdownPool();
+
+    uint32_t threadCount = std::max(1u, std::thread::hardware_concurrency());
+    m_workerRanges.resize(threadCount);
+    rebuildWorkerRanges();
 
     m_workers.reserve(threadCount);
     for (uint32_t i = 0; i < threadCount; ++i)

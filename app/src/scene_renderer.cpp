@@ -374,6 +374,11 @@ void SceneRenderer::setRenderMode(RenderMode mode)
 
     m_renderMode = mode;
 
+    const char* modeName = (mode == RenderMode::Rasterize)   ? "Rasterize"
+                         : (mode == RenderMode::CPURaytrace) ? "CPU Raytrace"
+                                                             : "GPU Raytrace";
+    vex::Log::info("Render mode: " + std::string(modeName));
+
     // Invalidate all change-detection state so the new mode fully
     // re-initialises its camera, lights, environment, etc.
     m_prevCameraPos        = glm::vec3(std::numeric_limits<float>::quiet_NaN());
@@ -841,6 +846,7 @@ bool SceneRenderer::reloadGPUShader()
 
 void SceneRenderer::buildGeometry(Scene& scene, ProgressFn progress)
 {
+    vex::Log::info("Building scene geometry (scene load)");
     rebuildRaytraceGeometry(scene, std::move(progress));
     scene.geometryDirty = false;
     scene.materialDirty = false;
@@ -848,7 +854,6 @@ void SceneRenderer::buildGeometry(Scene& scene, ProgressFn progress)
 
 void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
 {
-    vex::Log::info("Building raytrace geometry...");
 
     std::vector<vex::CPURaytracer::Triangle> triangles;
     std::vector<vex::CPURaytracer::TextureData> textures;
@@ -1123,16 +1128,15 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
 
         char sahBuf[32];
         std::snprintf(sahBuf, sizeof(sahBuf), "%.1f", m_cpuRaytracer->getBVHSAHCost());
-        vex::Log::info("  BVH built: " + std::to_string(m_cpuRaytracer->getBVHNodeCount()) + " nodes, "
-                      + std::to_string(m_rtTriangles.size()) + " triangles, SAH cost " + sahBuf);
-        if (!m_rtLightIndices.empty())
-            vex::Log::info("  " + std::to_string(m_rtLightIndices.size()) + " emissive triangle(s)");
+        std::string emissiveStr = m_rtLightIndices.empty() ? ""
+            : ", " + std::to_string(m_rtLightIndices.size()) + " emissive";
+        vex::Log::info("  CPU BVH: " + std::to_string(m_cpuRaytracer->getBVHNodeCount()) + " nodes, "
+                      + std::to_string(m_rtTriangles.size()) + " triangles, SAH " + sahBuf + emissiveStr);
 
         m_cpuBVHDirty = false;
     }
     else
     {
-        vex::Log::info("  Skipping CPU BVH (not in CPU RT mode)");
         m_cpuBVHDirty = true;
     }
 
@@ -1313,10 +1317,9 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
         m_vkGeomDirty = true;  // uploadSceneData + createOutputImage deferred to renderVKRaytrace
         m_vkSampleCount = 0;
 
-        vex::Log::info("  VK RT geometry built: "
-                      + std::to_string(m_vkInstanceOffsets.size()) + " BLASes, "
+        vex::Log::info("  VK GPU: " + std::to_string(m_vkInstanceOffsets.size()) + " BLASes + TLAS, "
                       + std::to_string(m_vkTriShading.size() / 52) + " triangles, "
-                      + std::to_string(lightCount) + " emissive triangle(s)");
+                      + std::to_string(lightCount) + " emissive (SSBO upload queued)");
     }
 #endif
 
@@ -1402,7 +1405,9 @@ void SceneRenderer::renderScene(Scene& scene, int selectedGroup, int selectedSub
     if (scene.geometryDirty || m_cpuBVHDirty)
 #endif
     {
-        rebuildRaytraceGeometry(scene);
+        const char* reason = scene.geometryDirty ? "geometry changed" : "CPU BVH stale";
+        vex::Log::info("Building scene geometry (" + std::string(reason) + ")");
+        rebuildRaytraceGeometry(scene, nullptr);
         scene.geometryDirty = false;
         scene.materialDirty = false; // geometry rebuild includes material bake
     }
@@ -1426,28 +1431,23 @@ void SceneRenderer::renderScene(Scene& scene, int selectedGroup, int selectedSub
 
     switch (m_renderMode)
     {
-        case RenderMode::CPURaytrace:
-            renderCPURaytrace(scene);
-            break;
-        case RenderMode::GPURaytrace:
+    case RenderMode::CPURaytrace:
+        renderCPURaytrace(scene);
+        break;
+    case RenderMode::GPURaytrace:
 #ifdef VEX_BACKEND_OPENGL
-            renderGPURaytrace(scene);
-            break;
-#elif defined(VEX_BACKEND_VULKAN)
-            renderVKRaytrace(scene);
-            break;
+        renderGPURaytrace(scene);
 #else
-            // Fall through to rasterize — no backend supports GPU raytracing
-            [[fallthrough]];
+        renderVKRaytrace(scene);
 #endif
-        case RenderMode::Rasterize:
-            renderRasterize(scene, selectedGroup, selectedSubmesh, selectedObjectName);
-            break;
+        break;
+    case RenderMode::Rasterize:
+        renderRasterize(scene, selectedGroup, selectedSubmesh);
+        break;
     }
 }
 
-void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unused]] int selectedSubmesh,
-                                     const std::string& selectedObjectName)
+void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unused]] int selectedSubmesh)
 {
     // Keep the intermediate HDR framebuffer in sync with the output framebuffer size
     bool hdrFBResized = false;
@@ -2036,6 +2036,10 @@ void SceneRenderer::renderCPURaytrace(Scene& scene)
         m_raytraceTexture = vex::Texture2D::create(w, h, 4);
         m_raytraceTexW = w;
         m_raytraceTexH = h;
+#ifdef VEX_BACKEND_VULKAN
+        if (m_vkFullscreenRTShader)
+            static_cast<vex::VKShader*>(m_vkFullscreenRTShader.get())->clearExternalTextureCache();
+#endif
     }
 
     // Update environment
@@ -2778,6 +2782,9 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
 
     if (needUpload)
     {
+        if (m_vkGeomDirty)
+            vex::Log::info("  VK SSBO: uploading " + std::to_string(m_vkTriShading.size() / 52)
+                          + " triangles to GPU");
         m_vkRaytracer->uploadSceneData(
             m_vkTriShading, m_vkLights, m_vkTexData,
             m_vkEnvMapData, m_vkEnvCdfData, m_vkInstanceOffsets);

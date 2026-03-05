@@ -149,6 +149,7 @@ private:
     struct WorkRange { uint32_t startRow, endRow; };
     void buildThreadPool();
     void shutdownPool();
+    void rebuildWorkerRanges();
     void workerLoop(uint32_t id);
     void traceRowRange(uint32_t startRow, uint32_t endRow);
 

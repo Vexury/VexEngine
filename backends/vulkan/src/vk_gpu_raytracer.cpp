@@ -453,7 +453,6 @@ void VKGpuRaytracer::buildTlas(const std::vector<glm::mat4>& instanceTransforms)
     vmaDestroyBuffer(ctx.getAllocator(), scratchBuffer, scratchAlloc);
     vmaDestroyBuffer(ctx.getAllocator(), instanceBuffer, instanceAlloc);
 
-    Log::info("TLAS built: " + std::to_string(m_blases.size()) + " instance(s)");
 }
 
 // ---------------------------------------------------------------------------
@@ -600,7 +599,7 @@ bool VKGpuRaytracer::createPipeline()
 
     buildSBT();
 
-    Log::info("RT pipeline created");
+    Log::info("RT pipeline ready");
     return true;
 }
 
@@ -705,7 +704,7 @@ void VKGpuRaytracer::uploadSceneData(
     upload(envCdfData.data(),       envCdfData.size()       * sizeof(float),    m_envCdfBuffer,          m_envCdfAlloc);
     upload(instanceOffsets.data(),  instanceOffsets.size()  * sizeof(uint32_t), m_instanceOffsetsBuffer, m_instanceOffsetsAlloc);
 
-    Log::info("RT scene data uploaded: " + std::to_string(triShading.size() / 52) + " triangles");
+    Log::info("  RT scene data: " + std::to_string(triShading.size() / 52) + " triangles");
 }
 
 // ---------------------------------------------------------------------------
