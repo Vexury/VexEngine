@@ -2830,8 +2830,61 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
         envChanged = true;
     }
 
-    // ── Upload scene data if needed ───────────────────────────────────────────
+    // ── Volume packing + change detection ────────────────────────────────────
+    // Pack volumes SSBO: [count:uint as float-bits, pad, pad, pad][3 vec4s per vol]
+    //   vec4[0]: center.xyz, sigmaT
+    //   vec4[1]: halfSize.xyz, g
+    //   vec4[2]: sigmaS.rgb (= albedo * density per channel), infinite(0/1)
     bool firstRender = (m_vkRTTexW == 0 && m_vkRTTexH == 0);
+    {
+        const auto& vols = scene.volumes;
+        uint32_t activeCount = 0;
+        for (const auto& v : vols) if (v.enabled) ++activeCount;
+
+        std::vector<float> packed;
+        packed.reserve(4 + activeCount * 12);
+        // header: count as uint bits, then 3 padding floats
+        float countBits; std::memcpy(&countBits, &activeCount, sizeof(countBits));
+        packed.push_back(countBits);
+        packed.push_back(0.0f); packed.push_back(0.0f); packed.push_back(0.0f);
+
+        for (const auto& v : vols)
+        {
+            if (!v.enabled) continue;
+            // vec4[0]: center.xyz, sigmaT
+            packed.push_back(v.center.x); packed.push_back(v.center.y); packed.push_back(v.center.z);
+            packed.push_back(v.density);
+            // vec4[1]: halfSize.xyz, g
+            packed.push_back(v.halfSize.x); packed.push_back(v.halfSize.y); packed.push_back(v.halfSize.z);
+            packed.push_back(v.aniso);
+            // vec4[2]: sigmaS.rgb (albedo * density per channel), infinite
+            packed.push_back(v.albedo.r * v.density);
+            packed.push_back(v.albedo.g * v.density);
+            packed.push_back(v.albedo.b * v.density);
+            packed.push_back(v.infinite ? 1.0f : 0.0f);
+        }
+
+        if (packed != m_prevVolumesData)
+        {
+            m_vkVolumesData   = packed;
+            m_prevVolumesData = packed;
+            if (!firstRender)
+            {
+                m_vkRaytracer->reset();
+                m_vkSampleCount      = 0;
+                m_showDenoisedResult = false;
+                if (!m_vkGeomDirty)
+                {
+                    // Volume-only change: upload just binding 9, skip full 76k-tri re-upload
+                    m_vkRaytracer->uploadVolumes(m_vkVolumesData);
+                }
+                // else: m_vkGeomDirty is already set — uploadSceneData below includes volumes
+            }
+            // On firstRender: needUpload fires via firstRender flag, volumes included there
+        }
+    }
+
+    // ── Upload scene data if needed ───────────────────────────────────────────
     bool needUpload  = m_vkGeomDirty || envDataChanged || firstRender;
     bool needImage   = needUpload || (w != m_vkRTTexW || h != m_vkRTTexH);
 
@@ -2842,7 +2895,8 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
                           + " triangles to GPU");
         m_vkRaytracer->uploadSceneData(
             m_vkTriShading, m_vkLights, m_vkTexData,
-            m_vkEnvMapData, m_vkEnvCdfData, m_vkInstanceOffsets);
+            m_vkEnvMapData, m_vkEnvCdfData, m_vkInstanceOffsets,
+            m_vkVolumesData);
         m_vkGeomDirty = false;
     }
 

@@ -454,6 +454,28 @@ void EditorUI::renderHierarchy(Scene& scene, SceneRenderer& renderer)
             m_selectionType = Selection::Skybox;
     }
 
+    // Volumes
+    for (int vi = 0; vi < static_cast<int>(scene.volumes.size()); ++vi)
+    {
+        ImGui::PushID(vi);
+        const auto& vol = scene.volumes[vi];
+        bool selected = (m_selectionType == Selection::Volume && m_selectionIndex == vi);
+        std::string label = vol.name + (vol.enabled ? "" : " (disabled)");
+        if (ImGui::Selectable(label.c_str(), selected))
+        {
+            m_selectionType  = Selection::Volume;
+            m_selectionIndex = vi;
+        }
+        ImGui::PopID();
+    }
+
+    if (ImGui::Button("Add Volume"))
+    {
+        scene.volumes.push_back({});
+        m_selectionType  = Selection::Volume;
+        m_selectionIndex = static_cast<int>(scene.volumes.size()) - 1;
+    }
+
     // Mesh groups
     for (int gi = 0; gi < static_cast<int>(scene.meshGroups.size()); ++gi)
     {
@@ -869,6 +891,48 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
             ImGui::TextUnformatted("Depth of Field (Path Trace only)");
             ImGui::SliderFloat("Aperture",      &scene.camera.aperture,      0.0f, 0.1f, "%.4f");
             ImGui::DragFloat ("Focus Distance", &scene.camera.focusDistance, 0.1f, 0.1f, 1000.0f, "%.2f");
+            break;
+
+        case Selection::Volume:
+            if (m_selectionIndex >= 0 && m_selectionIndex < static_cast<int>(scene.volumes.size()))
+            {
+                auto& vol = scene.volumes[m_selectionIndex];
+
+                // Name field
+                char nameBuf[256];
+                std::snprintf(nameBuf, sizeof(nameBuf), "%s", vol.name.c_str());
+                if (ImGui::InputText("Name", nameBuf, sizeof(nameBuf)))
+                    vol.name = nameBuf;
+
+                ImGui::Separator();
+                ImGui::Checkbox("Enabled", &vol.enabled);
+                ImGui::Checkbox("Infinite (global fog)", &vol.infinite);
+                ImGui::Separator();
+
+                if (!vol.infinite)
+                {
+                    ImGui::DragFloat3("Center",   &vol.center.x,   0.05f);
+                    ImGui::DragFloat3("Half Size", &vol.halfSize.x, 0.05f, 0.01f, 1000.0f);
+                    ImGui::Separator();
+                }
+
+                ImGui::SliderFloat("Density (σt)",  &vol.density, 0.001f, 10.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
+                ImGui::ColorEdit3("Scatter Color",  &vol.albedo.x);
+                ImGui::SliderFloat("Anisotropy (g)", &vol.aniso,  -1.0f,  1.0f,  "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(
+                        "Henyey-Greenstein phase function:\n"
+                        "  0 = isotropic (fog, uniform scatter)\n"
+                        " +1 = forward (haze, glowing halos)\n"
+                        " -1 = backward (some dust types)");
+
+                ImGui::Separator();
+                if (ImGui::Button("Remove Volume"))
+                {
+                    scene.volumes.erase(scene.volumes.begin() + m_selectionIndex);
+                    m_selectionType = Selection::None;
+                }
+            }
             break;
 
         case Selection::None:

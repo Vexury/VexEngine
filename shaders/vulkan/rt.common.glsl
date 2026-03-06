@@ -91,6 +91,12 @@ layout(std430, set = 0, binding = 7) readonly buffer EnvCDF      { float envCdfD
 // InstanceOffsets: first global triangle index per BLAS (indexed by gl_InstanceCustomIndexEXT)
 layout(std430, set = 0, binding = 8) readonly buffer InstanceOff { uint  instanceOffsets[]; };
 
+// Volumes: [count as uint bits, pad, pad, pad][3 vec4s per volume]
+//   vec4[0]: center.xyz, sigmaT
+//   vec4[1]: halfSize.xyz, g
+//   vec4[2]: sigmaS.rgb (albedo * sigmaT per channel), infinite(0/1)
+layout(std430, set = 0, binding = 9) readonly buffer Volumes { vec4 volumeData[]; };
+
 // ── Constants ────────────────────────────────────────────────────────────────
 const float PI      = 3.14159265358979323846;
 const float FLT_MAX = 3.402823466e+38;
@@ -392,4 +398,46 @@ vec3 sampleLightPoint(out uint outTriIndex) {
     float su0 = sqrt(rngNext());
     float u2  = rngNext();
     return v0 * (1.0 - su0) + v1 * (su0 * (1.0 - u2)) + v2 * (su0 * u2);
+}
+
+// ── Participating media helpers ───────────────────────────────────────────
+
+uint v_volumeCount() {
+    return floatBitsToUint(volumeData[0].x);
+}
+
+// Henyey-Greenstein phase function (also its own PDF for importance sampling)
+float phaseHG(float cosTheta, float g) {
+    float g2  = g * g;
+    float denom = 1.0 + g2 - 2.0 * g * cosTheta;
+    return (1.0 - g2) / (4.0 * PI * denom * sqrt(denom));
+}
+
+// Importance-sample a Henyey-Greenstein direction given incident direction wi
+// (pointing toward the surface, i.e. the negative ray direction).
+vec3 sampleHG(vec3 wi, float g, float u1, float u2) {
+    float cosTheta;
+    if (abs(g) < 1e-4) {
+        cosTheta = 1.0 - 2.0 * u1;
+    } else {
+        float sqr = (1.0 - g * g) / (1.0 - g + 2.0 * g * u1);
+        cosTheta  = (1.0 + g * g - sqr * sqr) / (2.0 * g);
+    }
+    float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+    float phi      = 2.0 * PI * u2;
+    vec3 t, b;
+    buildONB(wi, t, b);
+    return sinTheta * cos(phi) * t + sinTheta * sin(phi) * b + cosTheta * wi;
+}
+
+// Ray-AABB slab test. Returns true if ray intersects [bmin, bmax].
+bool rayAABB(vec3 o, vec3 d, vec3 bmin, vec3 bmax, out float tEnter, out float tExit) {
+    vec3 invD = 1.0 / d;
+    vec3 t0   = (bmin - o) * invD;
+    vec3 t1   = (bmax - o) * invD;
+    vec3 tNear = min(t0, t1);
+    vec3 tFar  = max(t0, t1);
+    tEnter = max(tNear.x, max(tNear.y, tNear.z));
+    tExit  = min(tFar.x,  min(tFar.y,  tFar.z));
+    return tExit > tEnter;
 }

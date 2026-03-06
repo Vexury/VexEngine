@@ -70,6 +70,110 @@ vec3 pathTrace(vec3 rayOrigin, vec3 rayDirection) {
         traceRayEXT(u_tlas, gl_RayFlagsNoneEXT, 0xFF, 0, 0, 0,
                     origin, u_uniforms.rayEps, direction, FLT_MAX, 0);
 
+        // ── Volume march ──────────────────────────────────────────────────
+        // Process analytical AABB volumes before the surface hit.
+        // For each intersected volume, either scatter (change direction + NEE)
+        // or apply Beer-Lambert transmittance through the slab.
+        {
+            uint  nVol    = v_volumeCount();
+            float surfaceT = (g_payload.hit != 0u) ? g_payload.t : FLT_MAX;
+            bool  scattered = false;
+
+            for (uint vi = 0u; vi < nVol && !scattered; ++vi)
+            {
+                // Unpack 3 vec4s for this volume (header is 1 vec4 at index 0)
+                uint base = 1u + vi * 3u;
+                vec3  center   = volumeData[base + 0u].xyz;
+                float sigmaT   = volumeData[base + 0u].w;
+                vec3  halfSize = volumeData[base + 1u].xyz;
+                float g        = volumeData[base + 1u].w;
+                vec3  sigmaS   = volumeData[base + 2u].xyz;  // albedo * sigmaT per channel
+                bool  infinite = volumeData[base + 2u].w > 0.5;
+
+                float tEnter, tExit;
+                if (!infinite)
+                {
+                    if (!rayAABB(origin, direction,
+                                 center - halfSize, center + halfSize,
+                                 tEnter, tExit)) continue;
+                    tEnter = max(tEnter, 0.0);
+                    tExit  = min(tExit,  surfaceT);
+                }
+                else
+                {
+                    tEnter = 0.0;
+                    tExit  = surfaceT;
+                }
+                if (tEnter >= tExit) continue;
+
+                // Free-flight distance (exponential importance sampling)
+                float tVol = tEnter - log(max(1e-7, 1.0 - rngNext())) / sigmaT;
+
+                if (tVol < tExit)
+                {
+                    // ── Scatter event ──────────────────────────────────────
+                    vec3 scatterPos = origin + direction * tVol;
+                    // sigmaS is already per-channel (albedo * sigmaT), so albedo = sigmaS / sigmaT
+                    throughput *= sigmaS / sigmaT;
+
+                    // NEE: sun
+                    if (u_uniforms.enableNEE != 0u && u_uniforms.sunEnabled != 0u)
+                    {
+                        float sunCosAngle   = cos(u_uniforms.sunAngularRadius);
+                        float sunSolidAngle = 2.0 * PI * (1.0 - sunCosAngle);
+                        float su1 = rngNext(), su2 = rngNext();
+                        float cosTheta = 1.0 - su1 * (1.0 - sunCosAngle);
+                        float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+                        float phi = 2.0 * PI * su2;
+                        vec3 toSun = -u_uniforms.sunDir;
+                        vec3 st, sb;
+                        buildONB(toSun, st, sb);
+                        vec3 lightDir = normalize(st*(cos(phi)*sinTheta) + sb*(sin(phi)*sinTheta) + toSun*cosTheta);
+
+                        bool sunOcc = traceShadowRay(scatterPos, lightDir, FLT_MAX);
+                        if (!sunOcc)
+                        {
+                            float lightPdf = 1.0 / sunSolidAngle;
+                            float phasePdf = phaseHG(dot(-direction, lightDir), g);
+                            float misWeight = lightPdf / (lightPdf + phasePdf);
+                            radiance += throughput * u_uniforms.sunColor * phasePdf * misWeight;
+                        }
+                    }
+
+                    // NEE: point light
+                    if (u_uniforms.enableNEE != 0u && u_uniforms.pointLightEnabled != 0u)
+                    {
+                        vec3  toLight  = u_uniforms.pointLightPos - scatterPos;
+                        float dist     = length(toLight);
+                        vec3  lightDir = toLight / dist;
+
+                        bool occ = traceShadowRay(scatterPos, lightDir, dist - 2.0 * u_uniforms.rayEps);
+                        if (!occ)
+                        {
+                            float phasePdf = phaseHG(dot(-direction, lightDir), g);
+                            radiance += throughput * u_uniforms.pointLightColor
+                                      * phasePdf / (dist * dist);
+                        }
+                    }
+
+                    // Sample new direction via HG phase function
+                    vec3 prevDir = direction;
+                    direction    = sampleHG(-direction, g, rngNext(), rngNext());
+                    origin       = scatterPos;
+                    prevWasDelta = false;
+                    prevBsdfPdf  = phaseHG(dot(-prevDir, direction), g);
+                    scattered    = true;
+                }
+                else
+                {
+                    // ── Transmittance (Beer-Lambert) ───────────────────────
+                    throughput *= exp(-sigmaT * (tExit - tEnter));
+                }
+            }
+
+            if (scattered) continue; // skip surface hit this bounce
+        }
+
         // ── Miss ──────────────────────────────────────────────────────────
         if (g_payload.hit == 0u) {
             // Sun disk

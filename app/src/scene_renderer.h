@@ -316,6 +316,7 @@ private:
     std::vector<uint32_t> m_vkTexData;         // texCount header + packed RGBA8 pixels
     std::vector<uint32_t> m_vkLights;          // lightCount/area header + indices + CDF
     std::vector<uint32_t> m_vkInstanceOffsets; // first global tri index per BLAS
+    std::vector<float>    m_vkVolumesData;     // volumes SSBO: header + 3 vec4s per volume
 
     // VK rasterizer env map texture (RGBA8, created from float env data on env change)
     std::unique_ptr<vex::Texture2D> m_vkRasterEnvTex;
@@ -381,6 +382,9 @@ private:
 
     // Custom env map path change detection
     std::string m_prevCustomEnvmapPath;
+
+    // Volume change detection (compare by serialised data each frame)
+    std::vector<float> m_prevVolumesData;
 
     // Denoising
     std::unique_ptr<vex::Denoiser> m_denoiser;

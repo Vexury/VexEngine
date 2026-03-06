@@ -121,6 +121,10 @@ public:
 
     // ── Scene data ───────────────────────────────────────────────────────────
 
+    // Upload only the volumes SSBO (binding 9). Does NOT touch triangle/light/tex data.
+    // Call this when only volume parameters changed — avoids re-uploading all geometry.
+    void uploadVolumes(const std::vector<float>& volumesData);
+
     // Upload all scene SSBOs. Must be called before createOutputImage().
     // triShading: 13 vec4s (52 floats) per triangle, in per-submesh order
     // lightsData: [lightCount u32][totalLightArea f32][pad pad][indices...][CDF as float-bits...]
@@ -128,13 +132,15 @@ public:
     // envMapData: flat float RGB triples (3 floats per pixel)
     // envCdfData: [marginalCDF: H floats][condCDF: W*H floats][totalIntegral: 1 float]
     // instanceOffsets: first global tri index per BLAS (size == blas count)
+    // volumesData: [count:uint,pad,pad,pad as floats][3 vec4s per volume]
     void uploadSceneData(
         const std::vector<float>&    triShading,
         const std::vector<uint32_t>& lightsData,
         const std::vector<uint32_t>& texData,
         const std::vector<float>&    envMapData,
         const std::vector<float>&    envCdfData,
-        const std::vector<uint32_t>& instanceOffsets);
+        const std::vector<uint32_t>& instanceOffsets,
+        const std::vector<float>&    volumesData);
 
     // ── Rendering ────────────────────────────────────────────────────────────
 
@@ -226,7 +232,7 @@ private:
     VmaAllocation m_uboAlloc  = VK_NULL_HANDLE;
     RTUniforms*   m_uboMapped = nullptr;
 
-    // ── Scene SSBOs (bindings 3–8) ───────────────────────────────────────────
+    // ── Scene SSBOs (bindings 3–9) ───────────────────────────────────────────
     VkBuffer      m_triShadingBuffer      = VK_NULL_HANDLE;
     VmaAllocation m_triShadingAlloc       = VK_NULL_HANDLE;
     VkBuffer      m_lightsBuffer          = VK_NULL_HANDLE;
@@ -239,6 +245,8 @@ private:
     VmaAllocation m_envCdfAlloc           = VK_NULL_HANDLE;
     VkBuffer      m_instanceOffsetsBuffer = VK_NULL_HANDLE;
     VmaAllocation m_instanceOffsetsAlloc  = VK_NULL_HANDLE;
+    VkBuffer      m_volumesBuffer         = VK_NULL_HANDLE;
+    VmaAllocation m_volumesAlloc          = VK_NULL_HANDLE;
 
     // ── Output storage image (rgba32f, GENERAL layout) ───────────────────────
     VkImage       m_outputImage     = VK_NULL_HANDLE;

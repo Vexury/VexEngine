@@ -37,10 +37,23 @@ struct MeshGroup
     glm::mat4 modelMatrix = glm::mat4(1.0f);
 };
 
+struct SceneVolume
+{
+    std::string name     = "Volume";
+    glm::vec3   center   = { 0.0f, 0.0f, 0.0f };
+    glm::vec3   halfSize = { 1.0f, 1.0f, 1.0f };
+    float       density  = 0.5f;               // sigma_t (extinction coefficient)
+    glm::vec3   albedo   = {0.8f, 0.8f, 0.8f}; // per-channel scattering albedo (sigma_s = albedo * density)
+    float       aniso    = 0.0f;               // Henyey-Greenstein g [-1=back, 0=iso, 1=forward]
+    bool        infinite = false;  // true = global fog (no AABB clip)
+    bool        enabled  = true;
+};
+
 struct Scene
 {
     vex::Camera camera;
     std::vector<MeshGroup> meshGroups;
+    std::vector<SceneVolume> volumes;
     std::unique_ptr<vex::Skybox> skybox;
 
     glm::vec3 lightPos       { 0.0f, 1.95f, 0.0f };

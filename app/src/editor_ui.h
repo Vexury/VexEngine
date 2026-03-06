@@ -10,7 +10,7 @@ struct Scene;
 class SceneRenderer;
 
 enum class RenderMode;
-enum class Selection { None, Mesh, Skybox, Light, Sun, Camera };
+enum class Selection { None, Mesh, Skybox, Light, Sun, Camera, Volume };
 
 class EditorUI
 {

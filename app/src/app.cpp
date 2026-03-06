@@ -146,6 +146,17 @@ void App::handleInput()
                 m_ui.clearSelection();
                 break;
             }
+            case Selection::Volume:
+            {
+                int idx = m_ui.getSelectionIndex();
+                if (idx >= 0 && idx < static_cast<int>(m_scene.volumes.size()))
+                {
+                    vex::Log::info("Deleted volume: " + m_scene.volumes[idx].name);
+                    m_scene.volumes.erase(m_scene.volumes.begin() + idx);
+                }
+                m_ui.clearSelection();
+                break;
+            }
             default:
                 break;
         }

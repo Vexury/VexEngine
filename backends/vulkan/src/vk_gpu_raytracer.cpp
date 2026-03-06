@@ -188,6 +188,7 @@ void VKGpuRaytracer::shutdown()
     if (m_outputImage)     { vmaDestroyImage(allocator, m_outputImage, m_outputAlloc); m_outputImage = VK_NULL_HANDLE; }
 
     // Scene SSBOs
+    destroyBuffer(m_volumesBuffer,         m_volumesAlloc);
     destroyBuffer(m_instanceOffsetsBuffer, m_instanceOffsetsAlloc);
     destroyBuffer(m_envCdfBuffer,          m_envCdfAlloc);
     destroyBuffer(m_envMapBuffer,          m_envMapAlloc);
@@ -510,14 +511,14 @@ bool VKGpuRaytracer::createPipeline()
     groups[3].closestHitShader = 3;
     groups[3].anyHitShader     = 4;
 
-    // ── Descriptor set layout (9 bindings) ───────────────────────────────────
+    // ── Descriptor set layout (10 bindings) ──────────────────────────────────
     constexpr VkShaderStageFlags kAllRT =
         VK_SHADER_STAGE_RAYGEN_BIT_KHR |
         VK_SHADER_STAGE_MISS_BIT_KHR   |
         VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
         VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
 
-    VkDescriptorSetLayoutBinding bindings[9]{};
+    VkDescriptorSetLayoutBinding bindings[10]{};
     bindings[0] = { 0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_RAYGEN_BIT_KHR, nullptr };
     bindings[1] = { 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,              1, VK_SHADER_STAGE_RAYGEN_BIT_KHR, nullptr };
     bindings[2] = { 2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,             1, kAllRT,                         nullptr };
@@ -527,10 +528,11 @@ bool VKGpuRaytracer::createPipeline()
     bindings[6] = { 6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             1, kAllRT,                         nullptr };
     bindings[7] = { 7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             1, kAllRT,                         nullptr };
     bindings[8] = { 8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             1, kAllRT,                         nullptr };
+    bindings[9] = { 9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             1, kAllRT,                         nullptr };
 
     VkDescriptorSetLayoutCreateInfo setLayoutInfo{};
     setLayoutInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    setLayoutInfo.bindingCount = 9;
+    setLayoutInfo.bindingCount = 10;
     setLayoutInfo.pBindings    = bindings;
     vkCreateDescriptorSetLayout(device, &setLayoutInfo, nullptr, &m_descSetLayout);
 
@@ -571,7 +573,7 @@ bool VKGpuRaytracer::createPipeline()
     poolSizes[0] = { VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 };
     poolSizes[1] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,              1 };
     poolSizes[2] = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,             1 };
-    poolSizes[3] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             6 };
+    poolSizes[3] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             7 };
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -668,7 +670,8 @@ void VKGpuRaytracer::uploadSceneData(
     const std::vector<uint32_t>& texData,
     const std::vector<float>&    envMapData,
     const std::vector<float>&    envCdfData,
-    const std::vector<uint32_t>& instanceOffsets)
+    const std::vector<uint32_t>& instanceOffsets,
+    const std::vector<float>&    volumesData)
 {
     // Ensure the previous frame's RT dispatch has finished before destroying
     // the SSBOs it was reading. The BLAS/TLAS rebuild already called
@@ -682,6 +685,7 @@ void VKGpuRaytracer::uploadSceneData(
     destroyBuffer(m_envMapBuffer,          m_envMapAlloc);
     destroyBuffer(m_envCdfBuffer,          m_envCdfAlloc);
     destroyBuffer(m_instanceOffsetsBuffer, m_instanceOffsetsAlloc);
+    destroyBuffer(m_volumesBuffer,         m_volumesAlloc);
 
     // Helper: upload or create a 1-element dummy if empty
     auto upload = [&](const void* data, size_t bytes, VkBuffer& buf, VmaAllocation& alloc)
@@ -703,8 +707,46 @@ void VKGpuRaytracer::uploadSceneData(
     upload(envMapData.data(),       envMapData.size()       * sizeof(float),    m_envMapBuffer,          m_envMapAlloc);
     upload(envCdfData.data(),       envCdfData.size()       * sizeof(float),    m_envCdfBuffer,          m_envCdfAlloc);
     upload(instanceOffsets.data(),  instanceOffsets.size()  * sizeof(uint32_t), m_instanceOffsetsBuffer, m_instanceOffsetsAlloc);
+    upload(volumesData.data(),      volumesData.size()      * sizeof(float),    m_volumesBuffer,         m_volumesAlloc);
 
     Log::info("  RT scene data: " + std::to_string(triShading.size() / 52) + " triangles");
+}
+
+void VKGpuRaytracer::uploadVolumes(const std::vector<float>& volumesData)
+{
+    vkDeviceWaitIdle(VKContext::get().getDevice());
+
+    destroyBuffer(m_volumesBuffer, m_volumesAlloc);
+
+    if (volumesData.empty())
+    {
+        static const uint32_t kDummy = 0;
+        createAndUploadBuffer(&kDummy, sizeof(kDummy), 0, m_volumesBuffer, m_volumesAlloc);
+    }
+    else
+    {
+        createAndUploadBuffer(volumesData.data(),
+                              volumesData.size() * sizeof(float),
+                              0, m_volumesBuffer, m_volumesAlloc);
+    }
+
+    // Update only binding 9 in the existing descriptor set
+    if (m_descSet && m_volumesBuffer)
+    {
+        VkDescriptorBufferInfo bufInfo{};
+        bufInfo.buffer = m_volumesBuffer;
+        bufInfo.offset = 0;
+        bufInfo.range  = VK_WHOLE_SIZE;
+
+        VkWriteDescriptorSet w{};
+        w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet          = m_descSet;
+        w.dstBinding      = 9;
+        w.descriptorCount = 1;
+        w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        w.pBufferInfo     = &bufInfo;
+        vkUpdateDescriptorSets(VKContext::get().getDevice(), 1, &w, 0, nullptr);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -734,20 +776,21 @@ void VKGpuRaytracer::writeDescriptors()
     uboInfo.offset = 0;
     uboInfo.range  = sizeof(RTUniforms);
 
-    // Bindings 3-8: SSBOs
-    VkDescriptorBufferInfo ssboInfos[6]{};
-    VkBuffer ssboBuffers[6] = {
+    // Bindings 3-9: SSBOs
+    VkDescriptorBufferInfo ssboInfos[7]{};
+    VkBuffer ssboBuffers[7] = {
         m_triShadingBuffer, m_lightsBuffer, m_texDataBuffer,
-        m_envMapBuffer,     m_envCdfBuffer, m_instanceOffsetsBuffer
+        m_envMapBuffer,     m_envCdfBuffer, m_instanceOffsetsBuffer,
+        m_volumesBuffer
     };
-    for (int i = 0; i < 6; ++i)
+    for (int i = 0; i < 7; ++i)
     {
         ssboInfos[i].buffer = ssboBuffers[i];
         ssboInfos[i].offset = 0;
         ssboInfos[i].range  = VK_WHOLE_SIZE;
     }
 
-    VkWriteDescriptorSet writes[9]{};
+    VkWriteDescriptorSet writes[10]{};
     for (auto& w : writes) w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 
     writes[0].pNext           = &tlasWrite;
@@ -768,7 +811,7 @@ void VKGpuRaytracer::writeDescriptors()
     writes[2].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     writes[2].pBufferInfo     = &uboInfo;
 
-    for (int i = 0; i < 6; ++i)
+    for (int i = 0; i < 7; ++i)
     {
         writes[3 + i].dstSet          = m_descSet;
         writes[3 + i].dstBinding      = static_cast<uint32_t>(3 + i);
@@ -779,7 +822,7 @@ void VKGpuRaytracer::writeDescriptors()
 
     // Only write non-null bindings
     uint32_t writeCount = 0;
-    VkWriteDescriptorSet validWrites[9]{};
+    VkWriteDescriptorSet validWrites[10]{};
 
     if (m_tlas.handle)          validWrites[writeCount++] = writes[0];
     if (m_outputImageView)      validWrites[writeCount++] = writes[1];
@@ -790,6 +833,7 @@ void VKGpuRaytracer::writeDescriptors()
     if (m_envMapBuffer)         validWrites[writeCount++] = writes[6];
     if (m_envCdfBuffer)         validWrites[writeCount++] = writes[7];
     if (m_instanceOffsetsBuffer)validWrites[writeCount++] = writes[8];
+    if (m_volumesBuffer)        validWrites[writeCount++] = writes[9];
 
     if (writeCount > 0)
         vkUpdateDescriptorSets(device, writeCount, validWrites, 0, nullptr);
