@@ -48,6 +48,15 @@ add_subdirectory(cmake/modules/stb)
 # tinyexr
 add_subdirectory(cmake/modules/tinyexr)
 
+# OIDN (optional, CPU-side denoising)
+set(OpenImageDenoise_DIR "${CMAKE_SOURCE_DIR}/external/oidn-2.4.1.x64.windows/lib/cmake/OpenImageDenoise-2.4.1")
+find_package(OpenImageDenoise QUIET)
+if(OpenImageDenoise_FOUND)
+    message(STATUS "  OIDN: ${OpenImageDenoise_VERSION}")
+else()
+    message(STATUS "  OIDN: not found (denoising disabled)")
+endif()
+
 # Vulkan-only dependencies
 if(VEX_BACKEND STREQUAL "Vulkan")
     set(VOLK_STATIC_DEFINES "" CACHE STRING "" FORCE)

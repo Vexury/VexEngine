@@ -1003,4 +1003,58 @@ void VKGpuRaytracer::readbackRGBA8(std::vector<uint8_t>& out)
     vmaUnmapMemory(VKContext::get().getAllocator(), m_readbackAlloc);
 }
 
+void VKGpuRaytracer::readbackLinearHDR(std::vector<float>& outRGB)
+{
+    if (!m_outputImage || !m_readbackBuffer) return;
+
+    VKContext::get().immediateSubmit([&](VkCommandBuffer cmd)
+    {
+        // GENERAL -> TRANSFER_SRC
+        VkImageMemoryBarrier barrier{};
+        barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.oldLayout           = VK_IMAGE_LAYOUT_GENERAL;
+        barrier.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image               = m_outputImage;
+        barrier.subresourceRange    = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+        barrier.srcAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.dstAccessMask       = VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+        VkBufferImageCopy copy{};
+        copy.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        copy.imageExtent      = { m_width, m_height, 1 };
+        vkCmdCopyImageToBuffer(cmd, m_outputImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               m_readbackBuffer, 1, &copy);
+
+        // TRANSFER_SRC -> GENERAL
+        barrier.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+            0, 0, nullptr, 0, nullptr, 1, &barrier);
+    });
+
+    float* pixels = nullptr;
+    vmaMapMemory(VKContext::get().getAllocator(), m_readbackAlloc,
+                 reinterpret_cast<void**>(&pixels));
+    outRGB.resize(m_width * m_height * 3);
+    for (uint32_t i = 0; i < m_width * m_height; ++i)
+    {
+        float s   = pixels[i * 4 + 3];
+        float inv = (s > 0.0f) ? 1.0f / s : 0.0f;
+        outRGB[i * 3 + 0] = pixels[i * 4 + 0] * inv;
+        outRGB[i * 3 + 1] = pixels[i * 4 + 1] * inv;
+        outRGB[i * 3 + 2] = pixels[i * 4 + 2] * inv;
+    }
+    vmaUnmapMemory(VKContext::get().getAllocator(), m_readbackAlloc);
+}
+
 } // namespace vex

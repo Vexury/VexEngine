@@ -5,6 +5,7 @@ add_executable(vex_app
     src/scene_renderer.cpp
     src/editor_ui.cpp
     src/file_dialog.cpp
+    src/denoiser.cpp
 )
 
 if(VEX_BACKEND STREQUAL "OpenGL")
@@ -14,6 +15,20 @@ elseif(VEX_BACKEND STREQUAL "Vulkan")
 endif()
 
 target_link_libraries(vex_app PRIVATE tinyexr)
+
+if(OpenImageDenoise_FOUND)
+    target_link_libraries(vex_app PRIVATE OpenImageDenoise)
+    target_compile_definitions(vex_app PRIVATE VEX_HAS_OIDN)
+    add_custom_command(TARGET vex_app POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/external/oidn-2.4.1.x64.windows/bin/OpenImageDenoise.dll"
+            "${CMAKE_SOURCE_DIR}/external/oidn-2.4.1.x64.windows/bin/OpenImageDenoise_core.dll"
+            "${CMAKE_SOURCE_DIR}/external/oidn-2.4.1.x64.windows/bin/OpenImageDenoise_device_cpu.dll"
+            "${CMAKE_SOURCE_DIR}/external/oidn-2.4.1.x64.windows/bin/tbb12.dll"
+            $<TARGET_FILE_DIR:vex_app>
+        COMMENT "Copying OIDN runtime DLLs"
+    )
+endif()
 
 # Compile Vulkan shaders to SPIR-V
 if(VEX_BACKEND STREQUAL "Vulkan")

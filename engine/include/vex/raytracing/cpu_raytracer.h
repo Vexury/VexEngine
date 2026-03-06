@@ -60,6 +60,9 @@ public:
 
     const std::vector<uint8_t>& getPixelBuffer() const { return m_pixelBuffer; }
 
+    // Returns averaged linear HDR float RGB (3 floats per pixel, no tone-mapping)
+    void getLinearHDR(std::vector<float>& outRGB) const;
+
     uint32_t getSampleCount() const { return m_sampleCount; }
     uint32_t getWidth()  const { return m_width; }
     uint32_t getHeight() const { return m_height; }

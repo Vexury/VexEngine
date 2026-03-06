@@ -155,6 +155,9 @@ public:
     // Readback the accumulation image, tone-map (Reinhard + gamma), return RGBA8.
     void readbackRGBA8(std::vector<uint8_t>& out);
 
+    // Readback the accumulation image as linear HDR float RGB (3 floats per pixel, no tone-mapping).
+    void readbackLinearHDR(std::vector<float>& outRGB);
+
     // ── Accessors ────────────────────────────────────────────────────────────
 
     VkImage     getOutputImage()     const { return m_outputImage; }

@@ -7,6 +7,8 @@
 #include <vex/raytracing/cpu_raytracer.h>
 #include <vex/raytracing/bvh.h>
 
+#include "denoiser.h"
+
 #ifdef VEX_BACKEND_OPENGL
 #include <vex/opengl/gl_gpu_raytracer.h>
 #endif
@@ -178,6 +180,11 @@ public:
     bool getGPUEnableRR() const;
 
     bool reloadGPUShader();
+
+    // Denoising
+    void triggerDenoise();
+    bool isDenoiserReady() const { return m_denoiser && m_denoiser->isReady(); }
+    bool getShowDenoisedResult() const { return m_showDenoisedResult; }
 
     // Bloom (all render paths: GL/VK rasterizer and GPU RT)
     void  setBloomEnabled(bool v)    { m_bloomEnabled = v; }
@@ -374,6 +381,12 @@ private:
 
     // Custom env map path change detection
     std::string m_prevCustomEnvmapPath;
+
+    // Denoising
+    std::unique_ptr<vex::Denoiser> m_denoiser;
+    std::vector<float>   m_denoiseLinearHDR; // scratch buffer for HDR readback
+    std::vector<uint8_t> m_denoisedRGBA8;    // tone-mapped denoised result
+    bool m_showDenoisedResult = false;
 
     // Shared geometry data (for GPU upload after CPU raytracer reorders)
     std::vector<vex::CPURaytracer::Triangle> m_rtTriangles;

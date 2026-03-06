@@ -921,7 +921,7 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
         if (ImGui::SliderFloat("Gamma##raster", &rGamma, 1.0f, 3.0f, "%.2f"))
             renderer.setRasterGamma(rGamma);
 
-        ImGui::Spacing();
+        ImGui::SeparatorText("Bloom");
         bool bloomEnabled = renderer.getBloomEnabled();
         if (ImGui::Checkbox("Bloom##raster", &bloomEnabled))
             renderer.setBloomEnabled(bloomEnabled);
@@ -941,6 +941,7 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
 
     if (m_renderModeIndex == 1)
     {
+        // ── Accumulation ─────────────────────────────────────────────────────
         {
             uint32_t samples = renderer.getRaytraceSampleCount();
             uint32_t maxSamp = renderer.getCPUMaxSamples();
@@ -962,49 +963,89 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("0 = unlimited");
         }
+        {
+            uint32_t sampleCount = renderer.getRaytraceSampleCount();
+            bool canDenoise = renderer.isDenoiserReady() && (sampleCount > 0);
+            if (!canDenoise) ImGui::BeginDisabled();
+            if (ImGui::Button("Denoise##cpu")) renderer.triggerDenoise();
+            if (!canDenoise) ImGui::EndDisabled();
+            if (renderer.getShowDenoisedResult())
+            {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(showing denoised)");
+            }
+        }
 
-        int maxDepth = renderer.getMaxDepth();
-        if (ImGui::SliderInt("Max Depth", &maxDepth, 1, 16))
-            renderer.setMaxDepth(maxDepth);
+        // ── Path Tracing ──────────────────────────────────────────────────────
+        if (ImGui::CollapsingHeader("Path Tracing##cpu", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            int maxDepth = renderer.getMaxDepth();
+            if (ImGui::SliderInt("Max Depth", &maxDepth, 1, 16))
+                renderer.setMaxDepth(maxDepth);
 
-        bool nee = renderer.getEnableNEE();
-        if (ImGui::Checkbox("Next Event Estimation", &nee))
-            renderer.setEnableNEE(nee);
+            bool nee = renderer.getEnableNEE();
+            if (ImGui::Checkbox("Next Event Estimation", &nee))
+                renderer.setEnableNEE(nee);
 
-        bool rr = renderer.getEnableRR();
-        if (ImGui::Checkbox("Russian Roulette", &rr))
-            renderer.setEnableRR(rr);
+            bool rr = renderer.getEnableRR();
+            if (ImGui::Checkbox("Russian Roulette", &rr))
+                renderer.setEnableRR(rr);
 
-        bool aa = renderer.getEnableAA();
-        if (ImGui::Checkbox("Anti-Aliasing", &aa))
-            renderer.setEnableAA(aa);
+            bool aa = renderer.getEnableAA();
+            if (ImGui::Checkbox("Anti-Aliasing", &aa))
+                renderer.setEnableAA(aa);
 
-        bool firefly = renderer.getEnableFireflyClamping();
-        if (ImGui::Checkbox("Firefly Clamping", &firefly))
-            renderer.setEnableFireflyClamping(firefly);
+            bool firefly = renderer.getEnableFireflyClamping();
+            if (ImGui::Checkbox("Firefly Clamping", &firefly))
+                renderer.setEnableFireflyClamping(firefly);
+        }
 
-        bool env = renderer.getEnableEnvironment();
-        if (ImGui::Checkbox("Environment Lighting", &env))
-            renderer.setEnableEnvironment(env);
+        // ── Lighting ──────────────────────────────────────────────────────────
+        if (ImGui::CollapsingHeader("Lighting##cpu", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            bool env = renderer.getEnableEnvironment();
+            if (ImGui::Checkbox("Environment Lighting", &env))
+                renderer.setEnableEnvironment(env);
 
-        float envMult = renderer.getEnvLightMultiplier();
-        if (ImGui::SliderFloat("Env Multiplier", &envMult, 0.0f, 2.0f, "%.2f"))
-            renderer.setEnvLightMultiplier(envMult);
+            float envMult = renderer.getEnvLightMultiplier();
+            if (ImGui::SliderFloat("Env Multiplier", &envMult, 0.0f, 2.0f, "%.2f"))
+                renderer.setEnvLightMultiplier(envMult);
+        }
 
-        bool flatShade = renderer.getFlatShading();
-        if (ImGui::Checkbox("Flat Shading", &flatShade))
-            renderer.setFlatShading(flatShade);
+        // ── Shading ───────────────────────────────────────────────────────────
+        if (ImGui::CollapsingHeader("Shading##cpu"))
+        {
+            bool flatShade = renderer.getFlatShading();
+            if (ImGui::Checkbox("Flat Shading", &flatShade))
+                renderer.setFlatShading(flatShade);
 
-        bool normalMap = renderer.getEnableNormalMapping();
-        if (ImGui::Checkbox("Normal Mapping", &normalMap))
-            renderer.setEnableNormalMapping(normalMap);
+            bool normalMap = renderer.getEnableNormalMapping();
+            if (ImGui::Checkbox("Normal Mapping", &normalMap))
+                renderer.setEnableNormalMapping(normalMap);
 
-        bool emissive = renderer.getEnableEmissive();
-        if (ImGui::Checkbox("Emissive Materials", &emissive))
-            renderer.setEnableEmissive(emissive);
+            bool emissive = renderer.getEnableEmissive();
+            if (ImGui::Checkbox("Emissive Materials", &emissive))
+                renderer.setEnableEmissive(emissive);
+        }
 
-        ImGui::SeparatorText("Diagnostics");
+        // ── Post Processing ───────────────────────────────────────────────────
+        if (ImGui::CollapsingHeader("Post Processing##cpu", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            float exposure = renderer.getExposure();
+            if (ImGui::SliderFloat("Exposure", &exposure, -5.0f, 5.0f, "%.1f"))
+                renderer.setExposure(exposure);
 
+            bool aces = renderer.getEnableACES();
+            if (ImGui::Checkbox("ACES Tonemapping", &aces))
+                renderer.setEnableACES(aces);
+
+            float gamma = renderer.getGamma();
+            if (ImGui::SliderFloat("Gamma", &gamma, 1.0f, 3.0f, "%.2f"))
+                renderer.setGamma(gamma);
+        }
+
+        // ── Diagnostics ───────────────────────────────────────────────────────
+        if (ImGui::CollapsingHeader("Diagnostics##cpu"))
         {
             int expVal = static_cast<int>(std::round(std::log10(renderer.getRayEps())));
             expVal = std::clamp(expVal, -5, -1);
@@ -1013,20 +1054,6 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
             ImGui::SameLine();
             ImGui::TextDisabled("= %.0e", renderer.getRayEps());
         }
-
-        ImGui::SeparatorText("Post Processing");
-
-        float exposure = renderer.getExposure();
-        if (ImGui::SliderFloat("Exposure", &exposure, -5.0f, 5.0f, "%.1f"))
-            renderer.setExposure(exposure);
-
-        bool aces = renderer.getEnableACES();
-        if (ImGui::Checkbox("ACES Tonemapping", &aces))
-            renderer.setEnableACES(aces);
-
-        float gamma = renderer.getGamma();
-        if (ImGui::SliderFloat("Gamma", &gamma, 1.0f, 3.0f, "%.2f"))
-            renderer.setGamma(gamma);
     }
     else if (m_renderModeIndex == 2)
     {
@@ -1052,54 +1079,43 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("0 = unlimited");
         }
-        if (ImGui::SmallButton("Reload Shader (F5)"))
-            renderer.reloadGPUShader();
-
-        int maxDepth = renderer.getGPUMaxDepth();
-        if (ImGui::SliderInt("Max Depth", &maxDepth, 1, 16))
-            renderer.setGPUMaxDepth(maxDepth);
-
-        bool nee = renderer.getGPUEnableNEE();
-        if (ImGui::Checkbox("Next Event Estimation", &nee))
-            renderer.setGPUEnableNEE(nee);
-
-        bool rr = renderer.getGPUEnableRR();
-        if (ImGui::Checkbox("Russian Roulette", &rr))
-            renderer.setGPUEnableRR(rr);
-
-        bool aa = renderer.getGPUEnableAA();
-        if (ImGui::Checkbox("Anti-Aliasing", &aa))
-            renderer.setGPUEnableAA(aa);
-
-        bool firefly = renderer.getGPUEnableFireflyClamping();
-        if (ImGui::Checkbox("Firefly Clamping", &firefly))
-            renderer.setGPUEnableFireflyClamping(firefly);
-
-        bool env = renderer.getGPUEnableEnvironment();
-        if (ImGui::Checkbox("Environment Lighting", &env))
-            renderer.setGPUEnableEnvironment(env);
-
-        float envMult = renderer.getGPUEnvLightMultiplier();
-        if (ImGui::SliderFloat("Env Multiplier", &envMult, 0.0f, 2.0f, "%.2f"))
-            renderer.setGPUEnvLightMultiplier(envMult);
-
-        bool flatShade = renderer.getGPUFlatShading();
-        if (ImGui::Checkbox("Flat Shading", &flatShade))
-            renderer.setGPUFlatShading(flatShade);
-
-        bool normalMap = renderer.getGPUEnableNormalMapping();
-        if (ImGui::Checkbox("Normal Mapping", &normalMap))
-            renderer.setGPUEnableNormalMapping(normalMap);
-
-        bool emissive = renderer.getGPUEnableEmissive();
-        if (ImGui::Checkbox("Emissive Materials", &emissive))
-            renderer.setGPUEnableEmissive(emissive);
-
-        bool bilinear = renderer.getGPUBilinearFiltering();
-        if (ImGui::Checkbox("Bilinear Filtering", &bilinear))
-            renderer.setGPUBilinearFiltering(bilinear);
 
         {
+            uint32_t sampleCount = renderer.getRaytraceSampleCount();
+            bool canDenoise = renderer.isDenoiserReady() && (sampleCount > 0);
+            if (!canDenoise) ImGui::BeginDisabled();
+            if (ImGui::Button("Denoise##gpu")) renderer.triggerDenoise();
+            if (!canDenoise) ImGui::EndDisabled();
+            if (renderer.getShowDenoisedResult())
+            {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(showing denoised)");
+            }
+        }
+
+        // ── Path Tracing ──────────────────────────────────────────────────────
+        if (ImGui::CollapsingHeader("Path Tracing##gpu", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            int maxDepth = renderer.getGPUMaxDepth();
+            if (ImGui::SliderInt("Max Depth", &maxDepth, 1, 16))
+                renderer.setGPUMaxDepth(maxDepth);
+
+            bool nee = renderer.getGPUEnableNEE();
+            if (ImGui::Checkbox("Next Event Estimation", &nee))
+                renderer.setGPUEnableNEE(nee);
+
+            bool rr = renderer.getGPUEnableRR();
+            if (ImGui::Checkbox("Russian Roulette", &rr))
+                renderer.setGPUEnableRR(rr);
+
+            bool aa = renderer.getGPUEnableAA();
+            if (ImGui::Checkbox("Anti-Aliasing", &aa))
+                renderer.setGPUEnableAA(aa);
+
+            bool firefly = renderer.getGPUEnableFireflyClamping();
+            if (ImGui::Checkbox("Firefly Clamping", &firefly))
+                renderer.setGPUEnableFireflyClamping(firefly);
+
             const char* samplerItems[] = { "PCG (Default)", "Halton", "Blue Noise (IGN)" };
             int samplerType = renderer.getVKSamplerType();
             if (ImGui::Combo("Sampler", &samplerType, samplerItems, 3))
@@ -1108,9 +1124,76 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
                 ImGui::SetTooltip("PCG: pseudo-random\nHalton: low-discrepancy, faster convergence\nBlue Noise: spatially decorrelated, pleasant noise pattern");
         }
 
-        ImGui::SeparatorText("Diagnostics");
-
+        // ── Lighting ──────────────────────────────────────────────────────────
+        if (ImGui::CollapsingHeader("Lighting##gpu", ImGuiTreeNodeFlags_DefaultOpen))
         {
+            bool env = renderer.getGPUEnableEnvironment();
+            if (ImGui::Checkbox("Environment Lighting", &env))
+                renderer.setGPUEnableEnvironment(env);
+
+            float envMult = renderer.getGPUEnvLightMultiplier();
+            if (ImGui::SliderFloat("Env Multiplier", &envMult, 0.0f, 2.0f, "%.2f"))
+                renderer.setGPUEnvLightMultiplier(envMult);
+        }
+
+        // ── Shading ───────────────────────────────────────────────────────────
+        if (ImGui::CollapsingHeader("Shading##gpu"))
+        {
+            bool flatShade = renderer.getGPUFlatShading();
+            if (ImGui::Checkbox("Flat Shading", &flatShade))
+                renderer.setGPUFlatShading(flatShade);
+
+            bool normalMap = renderer.getGPUEnableNormalMapping();
+            if (ImGui::Checkbox("Normal Mapping", &normalMap))
+                renderer.setGPUEnableNormalMapping(normalMap);
+
+            bool emissive = renderer.getGPUEnableEmissive();
+            if (ImGui::Checkbox("Emissive Materials", &emissive))
+                renderer.setGPUEnableEmissive(emissive);
+
+            bool bilinear = renderer.getGPUBilinearFiltering();
+            if (ImGui::Checkbox("Bilinear Filtering", &bilinear))
+                renderer.setGPUBilinearFiltering(bilinear);
+        }
+
+        // ── Post Processing ───────────────────────────────────────────────────
+        if (ImGui::CollapsingHeader("Post Processing##gpu", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            float exposure = renderer.getGPUExposure();
+            if (ImGui::SliderFloat("Exposure", &exposure, -5.0f, 5.0f, "%.1f"))
+                renderer.setGPUExposure(exposure);
+
+            bool aces = renderer.getGPUEnableACES();
+            if (ImGui::Checkbox("ACES Tonemapping", &aces))
+                renderer.setGPUEnableACES(aces);
+
+            float gamma = renderer.getGPUGamma();
+            if (ImGui::SliderFloat("Gamma", &gamma, 1.0f, 3.0f, "%.2f"))
+                renderer.setGPUGamma(gamma);
+
+            ImGui::SeparatorText("Bloom");
+            bool bloomEnabled = renderer.getBloomEnabled();
+            if (ImGui::Checkbox("Bloom##gpu", &bloomEnabled))
+                renderer.setBloomEnabled(bloomEnabled);
+            ImGui::BeginDisabled(!bloomEnabled);
+            float bloomThresh = renderer.getBloomThreshold();
+            if (ImGui::SliderFloat("Threshold##bloomgpu", &bloomThresh, 0.0f, 2.0f, "%.2f"))
+                renderer.setBloomThreshold(bloomThresh);
+            float bloomIntensityGpu = renderer.getBloomIntensity();
+            if (ImGui::SliderFloat("Intensity##bloomgpu", &bloomIntensityGpu, 0.0f, 1.0f, "%.3f"))
+                renderer.setBloomIntensity(bloomIntensityGpu);
+            int bloomPassesGpu = renderer.getBloomBlurPasses();
+            if (ImGui::SliderInt("Blur Passes##bloomgpu", &bloomPassesGpu, 1, 10))
+                renderer.setBloomBlurPasses(bloomPassesGpu);
+            ImGui::EndDisabled();
+        }
+
+        // ── Diagnostics ───────────────────────────────────────────────────────
+        if (ImGui::CollapsingHeader("Diagnostics##gpu"))
+        {
+            if (ImGui::SmallButton("Reload Shader (F5)"))
+                renderer.reloadGPUShader();
+
             int expVal = static_cast<int>(std::round(std::log10(renderer.getGPURayEps())));
             expVal = std::clamp(expVal, -5, -1);
             if (ImGui::SliderInt("Ray EPS (10^n)", &expVal, -5, -1))
@@ -1118,36 +1201,6 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
             ImGui::SameLine();
             ImGui::TextDisabled("= %.0e", renderer.getGPURayEps());
         }
-
-        ImGui::SeparatorText("Post Processing");
-
-        float exposure = renderer.getGPUExposure();
-        if (ImGui::SliderFloat("Exposure", &exposure, -5.0f, 5.0f, "%.1f"))
-            renderer.setGPUExposure(exposure);
-
-        bool aces = renderer.getGPUEnableACES();
-        if (ImGui::Checkbox("ACES Tonemapping", &aces))
-            renderer.setGPUEnableACES(aces);
-
-        float gamma = renderer.getGPUGamma();
-        if (ImGui::SliderFloat("Gamma", &gamma, 1.0f, 3.0f, "%.2f"))
-            renderer.setGPUGamma(gamma);
-
-        ImGui::Spacing();
-        bool bloomEnabled = renderer.getBloomEnabled();
-        if (ImGui::Checkbox("Bloom##gpu", &bloomEnabled))
-            renderer.setBloomEnabled(bloomEnabled);
-        ImGui::BeginDisabled(!bloomEnabled);
-        float bloomThresh = renderer.getBloomThreshold();
-        if (ImGui::SliderFloat("Threshold##bloomgpu", &bloomThresh, 0.0f, 2.0f, "%.2f"))
-            renderer.setBloomThreshold(bloomThresh);
-        float bloomIntensityGpu = renderer.getBloomIntensity();
-        if (ImGui::SliderFloat("Intensity##bloomgpu", &bloomIntensityGpu, 0.0f, 1.0f, "%.3f"))
-            renderer.setBloomIntensity(bloomIntensityGpu);
-        int bloomPassesGpu = renderer.getBloomBlurPasses();
-        if (ImGui::SliderInt("Blur Passes##bloomgpu", &bloomPassesGpu, 1, 10))
-            renderer.setBloomBlurPasses(bloomPassesGpu);
-        ImGui::EndDisabled();
     }
     ImGui::End();
 }

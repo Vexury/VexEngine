@@ -34,6 +34,42 @@
 
 static constexpr float GEOMETRY_EPSILON = 1e-8f;
 
+static void toneMapToRGBA8(const float* rgb, uint8_t* out, uint32_t count,
+                            float exposure, float gamma, bool aces)
+{
+    float expMul   = std::pow(2.0f, exposure);
+    float invGamma = 1.0f / gamma;
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        float r = rgb[i * 3 + 0] * expMul;
+        float g = rgb[i * 3 + 1] * expMul;
+        float b = rgb[i * 3 + 2] * expMul;
+        if (aces)
+        {
+            const float a = 2.51f, bv = 0.03f, c = 2.43f, d = 0.59f, e = 0.14f;
+            auto acesMap = [&](float x) -> float {
+                return (x * (a * x + bv)) / (x * (c * x + d) + e);
+            };
+            r = std::max(0.0f, std::min(1.0f, acesMap(r)));
+            g = std::max(0.0f, std::min(1.0f, acesMap(g)));
+            b = std::max(0.0f, std::min(1.0f, acesMap(b)));
+        }
+        else
+        {
+            r = std::max(0.0f, std::min(1.0f, r));
+            g = std::max(0.0f, std::min(1.0f, g));
+            b = std::max(0.0f, std::min(1.0f, b));
+        }
+        r = std::pow(r, invGamma);
+        g = std::pow(g, invGamma);
+        b = std::pow(b, invGamma);
+        out[i * 4 + 0] = static_cast<uint8_t>(r * 255.0f + 0.5f);
+        out[i * 4 + 1] = static_cast<uint8_t>(g * 255.0f + 0.5f);
+        out[i * 4 + 2] = static_cast<uint8_t>(b * 255.0f + 0.5f);
+        out[i * 4 + 3] = 255;
+    }
+}
+
 static vex::MeshData buildFullscreenQuadData()
 {
     vex::MeshData data;
@@ -131,6 +167,10 @@ bool SceneRenderer::init([[maybe_unused]] Scene& scene)
 
     // Initialize CPU raytracer
     m_cpuRaytracer = std::make_unique<vex::CPURaytracer>();
+
+    // Initialize denoiser (no-op if OIDN not compiled in)
+    m_denoiser = std::make_unique<vex::Denoiser>();
+    m_denoiser->init();
 
 #ifdef VEX_BACKEND_OPENGL
     // Initialize GPU raytracer
@@ -397,6 +437,8 @@ void SceneRenderer::setRenderMode(RenderMode mode)
     m_prevCustomEnvmapPath.clear();
     m_prevAperture      = -1.0f;  // force DoF re-upload on next frame
     m_prevFocusDistance = -1.0f;
+
+    m_showDenoisedResult = false;
 
     // When entering any path tracing mode, force a full geometry rebuild so that
     // any model matrix changes made via gizmos during rasterization are applied.
@@ -2136,7 +2178,10 @@ void SceneRenderer::renderCPURaytrace(Scene& scene)
     }
 
     if (envChanged)
+    {
         m_cpuRaytracer->reset();
+        m_showDenoisedResult = false;
+    }
 
     // Update point light and detect changes
     bool lightChanged = (scene.showLight    != m_prevShowLight
@@ -2147,6 +2192,7 @@ void SceneRenderer::renderCPURaytrace(Scene& scene)
     {
         m_cpuRaytracer->setPointLight(scene.lightPos, scene.lightColor * scene.lightIntensity, scene.showLight);
         m_cpuRaytracer->reset();
+        m_showDenoisedResult = false;
         m_prevShowLight      = scene.showLight;
         m_prevLightPos       = scene.lightPos;
         m_prevLightColor     = scene.lightColor;
@@ -2168,6 +2214,7 @@ void SceneRenderer::renderCPURaytrace(Scene& scene)
             scene.sunAngularRadius,
             scene.showSun);
         m_cpuRaytracer->reset();
+        m_showDenoisedResult = false;
         m_prevShowSun          = scene.showSun;
         m_prevSunDirection     = sunDir;
         m_prevSunColor         = scene.sunColor;
@@ -2184,6 +2231,7 @@ void SceneRenderer::renderCPURaytrace(Scene& scene)
     if (camPos != m_prevCameraPos || view != m_prevViewMatrix)
     {
         m_cpuRaytracer->reset();
+        m_showDenoisedResult = false;
         m_prevCameraPos = camPos;
         m_prevViewMatrix = view;
     }
@@ -2198,13 +2246,20 @@ void SceneRenderer::renderCPURaytrace(Scene& scene)
         m_cpuRaytracer->setDoF(scene.camera.aperture, scene.camera.focusDistance, right, up);
     }
 
-    // Trace one sample (skip if sample limit reached)
-    if (m_cpuMaxSamples == 0 || m_cpuRaytracer->getSampleCount() < m_cpuMaxSamples)
-        m_cpuRaytracer->traceSample();
+    if (m_showDenoisedResult)
+    {
+        // Denoised result already uploaded to m_raytraceTexture — skip tracing
+    }
+    else
+    {
+        // Trace one sample (skip if sample limit reached)
+        if (m_cpuMaxSamples == 0 || m_cpuRaytracer->getSampleCount() < m_cpuMaxSamples)
+            m_cpuRaytracer->traceSample();
 
-    // Upload result to texture
-    const auto& pixels = m_cpuRaytracer->getPixelBuffer();
-    m_raytraceTexture->setData(pixels.data(), w, h, 4);
+        // Upload result to texture
+        const auto& pixels = m_cpuRaytracer->getPixelBuffer();
+        m_raytraceTexture->setData(pixels.data(), w, h, 4);
+    }
 
     // Render fullscreen quad to framebuffer (with optional outline overlay)
     m_framebuffer->bind();
@@ -2798,6 +2853,7 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
         m_vkRTTexH = h;
         m_vkRaytracer->reset();
         m_vkSampleCount = 0;
+        m_showDenoisedResult = false;
         // The RT output image view handle may be recycled by the driver after
         // destroy+create, so the cached descriptor set would silently point to
         // the old (freed) GPU allocation. Force re-creation of the descriptor.
@@ -2808,6 +2864,7 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
     {
         m_vkRaytracer->reset();
         m_vkSampleCount = 0;
+        m_showDenoisedResult = false;
     }
 
     // ── Point light change detection ──────────────────────────────────────────
@@ -2819,6 +2876,7 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
     {
         m_vkRaytracer->reset();
         m_vkSampleCount = 0;
+        m_showDenoisedResult = false;
         m_prevShowLight      = scene.showLight;
         m_prevLightPos       = scene.lightPos;
         m_prevLightColor     = scene.lightColor;
@@ -2836,6 +2894,7 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
     {
         m_vkRaytracer->reset();
         m_vkSampleCount = 0;
+        m_showDenoisedResult = false;
         m_prevShowSun          = scene.showSun;
         m_prevSunDirection     = sunDir;
         m_prevSunColor         = scene.sunColor;
@@ -2853,6 +2912,7 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
     {
         m_vkRaytracer->reset();
         m_vkSampleCount = 0;
+        m_showDenoisedResult = false;
         m_prevCameraPos  = camPos;
         m_prevViewMatrix = view;
     }
@@ -2861,6 +2921,7 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
     {
         m_vkRaytracer->reset();
         m_vkSampleCount = 0;
+        m_showDenoisedResult = false;
         m_prevAperture      = scene.camera.aperture;
         m_prevFocusDistance = scene.camera.focusDistance;
     }
@@ -2930,7 +2991,7 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
     const bool hasTlas = (m_vkRaytracer->getTlas().handle != VK_NULL_HANDLE);
 
     auto cmd = vex::VKContext::get().getCurrentCommandBuffer();
-    if (hasTlas && (m_gpuMaxSamples == 0 || m_vkSampleCount < m_gpuMaxSamples))
+    if (!m_showDenoisedResult && hasTlas && (m_gpuMaxSamples == 0 || m_vkSampleCount < m_gpuMaxSamples))
     {
         m_vkRaytracer->trace(cmd);
 
@@ -3018,11 +3079,44 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
         vkRTBloomSampler = vkBloom0->getColorSampler();
     }
 
-    // ── GPU-side display: sample accumulation image directly ──────────────────
+    // ── Display ───────────────────────────────────────────────────────────────
     m_framebuffer->bind();
     m_framebuffer->clear(0.0f, 0.0f, 0.0f, 1.0f);
 
-    if (m_vkFullscreenRTShader && hasTlas)
+    if (m_showDenoisedResult && m_vkFullscreenRTShader && m_raytraceTexture)
+    {
+        // Display CPU-side denoised result (already tone-mapped, uploaded to m_raytraceTexture)
+        auto* rtShaderVK = static_cast<vex::VKShader*>(m_vkFullscreenRTShader.get());
+        auto* vkTex      = static_cast<vex::VKTexture2D*>(m_raytraceTexture.get());
+        auto* vkMaskFB   = static_cast<vex::VKFramebuffer*>(m_outlineMaskFB.get());
+
+        m_vkFullscreenRTShader->setFloat("u_sampleCount",    1.0f);
+        m_vkFullscreenRTShader->setFloat("u_exposure",       0.0f);
+        m_vkFullscreenRTShader->setFloat("u_gamma",          1.0f);
+        m_vkFullscreenRTShader->setFloat("u_bloomIntensity", 0.0f);
+        m_vkFullscreenRTShader->bind();
+        m_vkFullscreenRTShader->setBool("u_enableACES",    false);
+        m_vkFullscreenRTShader->setBool("u_flipV",         true);
+        m_vkFullscreenRTShader->setBool("u_enableOutline", m_outlineActive);
+        m_vkFullscreenRTShader->setBool("u_enableBloom",   false);
+
+        rtShaderVK->setExternalTextureVK(0,
+            vkTex->getImageView(),
+            vkTex->getSampler(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        rtShaderVK->setExternalTextureVK(1,
+            vkMaskFB->getColorImageView(),
+            vkMaskFB->getColorSampler(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        rtShaderVK->setExternalTextureVK(2,
+            vkMaskFB->getColorImageView(),
+            vkMaskFB->getColorSampler(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+        m_fullscreenQuad->draw();
+        m_vkFullscreenRTShader->unbind();
+    }
+    else if (m_vkFullscreenRTShader && hasTlas)
     {
         auto* rtShaderVK = static_cast<vex::VKShader*>(m_vkFullscreenRTShader.get());
 
@@ -3062,6 +3156,81 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
     m_drawCalls = 1;
 }
 #endif // VEX_BACKEND_VULKAN
+
+// ---------------------------------------------------------------------------
+// Denoising
+// ---------------------------------------------------------------------------
+
+void SceneRenderer::triggerDenoise()
+{
+    if (!m_denoiser || !m_denoiser->isReady()) return;
+
+    const auto& spec = m_framebuffer->getSpec();
+    uint32_t w = spec.width;
+    uint32_t h = spec.height;
+
+    float exposure = 0.0f;
+    float gamma    = 2.2f;
+    bool  aces     = true;
+
+#ifdef VEX_BACKEND_VULKAN
+    if (m_renderMode == RenderMode::GPURaytrace && m_vkRaytracer)
+    {
+        m_vkRaytracer->readbackLinearHDR(m_denoiseLinearHDR);
+        exposure = m_vkExposure;
+        gamma    = m_vkGamma;
+        aces     = m_vkEnableACES;
+
+        // Ensure m_raytraceTexture exists at the right size for CPU-side display
+        if (!m_raytraceTexture || w != m_raytraceTexW || h != m_raytraceTexH)
+        {
+            m_raytraceTexture = vex::Texture2D::create(w, h, 4);
+            m_raytraceTexW = w;
+            m_raytraceTexH = h;
+            if (m_vkFullscreenRTShader)
+                static_cast<vex::VKShader*>(m_vkFullscreenRTShader.get())->clearExternalTextureCache();
+        }
+    }
+    else
+#endif
+    if (m_renderMode == RenderMode::CPURaytrace && m_cpuRaytracer)
+    {
+        m_cpuRaytracer->getLinearHDR(m_denoiseLinearHDR);
+        exposure = m_cpuRaytracer->getExposure();
+        gamma    = m_cpuRaytracer->getGamma();
+        aces     = m_cpuRaytracer->getEnableACES();
+    }
+    else
+    {
+        return;
+    }
+
+    if (m_denoiseLinearHDR.empty()) return;
+
+    uint32_t sampleCount = 0;
+#ifdef VEX_BACKEND_VULKAN
+    if (m_renderMode == RenderMode::GPURaytrace)
+        sampleCount = m_vkSampleCount;
+    else
+#endif
+    if (m_cpuRaytracer)
+        sampleCount = m_cpuRaytracer->getSampleCount();
+
+    auto t0 = std::chrono::steady_clock::now();
+    m_denoiser->denoise(m_denoiseLinearHDR.data(), w, h);
+    float ms = std::chrono::duration<float, std::milli>(
+                   std::chrono::steady_clock::now() - t0).count();
+
+    m_denoisedRGBA8.resize(w * h * 4);
+    toneMapToRGBA8(m_denoiseLinearHDR.data(), m_denoisedRGBA8.data(), w * h, exposure, gamma, aces);
+
+    m_raytraceTexture->setData(m_denoisedRGBA8.data(), w, h, 4);
+    m_showDenoisedResult = true;
+
+    char buf[128];
+    std::snprintf(buf, sizeof(buf), "Denoiser: %ux%u on %u samples took %.0f ms", w, h, sampleCount, ms);
+    vex::Log::info(buf);
+}
 
 // ---------------------------------------------------------------------------
 // Shadow map debug display

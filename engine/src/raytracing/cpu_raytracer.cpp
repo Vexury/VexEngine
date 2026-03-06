@@ -1191,4 +1191,16 @@ void CPURaytracer::traceSample()
     }
 }
 
+void CPURaytracer::getLinearHDR(std::vector<float>& outRGB) const
+{
+    outRGB.resize(m_width * m_height * 3);
+    float inv = (m_sampleCount > 0) ? 1.0f / static_cast<float>(m_sampleCount) : 0.0f;
+    for (uint32_t i = 0; i < m_width * m_height; ++i)
+    {
+        outRGB[i * 3 + 0] = m_accumBuffer[i].r * inv;
+        outRGB[i * 3 + 1] = m_accumBuffer[i].g * inv;
+        outRGB[i * 3 + 2] = m_accumBuffer[i].b * inv;
+    }
+}
+
 } // namespace vex
