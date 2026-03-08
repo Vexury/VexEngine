@@ -166,7 +166,7 @@ bool VKShader::loadFromFiles(const std::string& vertexPath, const std::string& f
 
     // Two push constant ranges:
     //   [0..64)   — vertex stage: mat4 model
-    //   [64..148) — fragment stage: MeshPushConstant (84 bytes)
+    //   [64..164) — fragment stage: MeshPushConstant (100 bytes)
     VkPushConstantRange pushRanges[2]{};
     pushRanges[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pushRanges[0].offset     = 0;
@@ -524,6 +524,8 @@ void VKShader::setFloat(const std::string& name, float value)
         m_pushData.bloomIntensity = value;
     else if (name == "u_threshold")
         m_pushData.bloomThreshold = value;
+    else if (name == "u_emissiveStrength")
+        m_pushData.emissiveStrength = value;
     else
     {
         auto it = m_uniformOffsets.find(name);
@@ -617,10 +619,17 @@ void VKShader::setBool(const std::string& name, bool value)
 
 void VKShader::setVec3(const std::string& name, const glm::vec3& value)
 {
-    auto it = m_uniformOffsets.find(name);
-    if (it != m_uniformOffsets.end())
+    if (name == "u_baseColor")
     {
-        std::memcpy(reinterpret_cast<char*>(&m_uboData) + it->second, &value, sizeof(glm::vec3));
+        m_pushData.baseColorR = value.r;
+        m_pushData.baseColorG = value.g;
+        m_pushData.baseColorB = value.b;
+    }
+    else
+    {
+        auto it = m_uniformOffsets.find(name);
+        if (it != m_uniformOffsets.end())
+            std::memcpy(reinterpret_cast<char*>(&m_uboData) + it->second, &value, sizeof(glm::vec3));
     }
 }
 

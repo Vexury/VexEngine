@@ -246,6 +246,9 @@ void VKTexture2D::setData(const void* data, uint32_t width, uint32_t height, uin
     });
 
     vmaDestroyBuffer(allocator, stagingBuffer, stagingAlloc);
+
+    // Register with ImGui so getNativeHandle() returns a valid descriptor set
+    createImGuiDescriptorSet();
 }
 
 void VKTexture2D::bind(uint32_t /*slot*/)

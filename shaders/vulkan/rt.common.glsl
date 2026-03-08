@@ -143,7 +143,7 @@ float ign(vec2 p) {
 // ── Triangle shading accessors (13 vec4s per tri) ────────────────────────
 // [0]  n0.xyz + roughnessTexIdx
 // [1]  n1.xyz + metallicTexIdx
-// [2]  n2.xyz + pad
+// [2]  n2.xyz + emissiveStrength
 // [3]  uv0.xy + uv1.zw
 // [4]  uv2.xy + roughness + metallic
 // [5]  color.xyz + texIdx
@@ -159,6 +159,7 @@ int   triRoughnessTexIdx(uint i) { return floatBitsToInt(triShading[i * 13u + 0u
 vec3  triN1(uint i)              { return triShading[i * 13u + 1u].xyz; }
 int   triMetallicTexIdx(uint i)  { return floatBitsToInt(triShading[i * 13u + 1u].w); }
 vec3  triN2(uint i)              { return triShading[i * 13u + 2u].xyz; }
+float triEmissiveStrength(uint i){ return triShading[i * 13u + 2u].w; }
 vec2  triUV0(uint i)             { return triShading[i * 13u + 3u].xy; }
 vec2  triUV1(uint i)             { return triShading[i * 13u + 3u].zw; }
 vec2  triUV2(uint i)             { return triShading[i * 13u + 4u].xy; }

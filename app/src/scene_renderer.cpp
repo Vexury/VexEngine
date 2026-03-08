@@ -1020,8 +1020,9 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
                 tri.uv0 = v0.uv;
                 tri.uv1 = v1.uv;
                 tri.uv2 = v2.uv;
-                tri.color = v0.color;
-                tri.emissive = v0.emissive;
+                tri.color             = v0.color * sm.meshData.baseColor;
+                tri.emissive          = v0.emissive * sm.meshData.emissiveStrength;
+                tri.emissiveStrength  = sm.meshData.emissiveStrength;
                 tri.geometricNormal = (len > GEOMETRY_EPSILON) ? (cross / len) : glm::vec3(0, 1, 0);
                 tri.area = len * 0.5f;
                 tri.textureIndex = texIdx;
@@ -1071,6 +1072,7 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
         {
             std::vector<vex::CPURaytracer::Triangle> gpuTriangles;
             std::vector<std::pair<int,int>> gpuTriangleSrc;
+            std::vector<int> gpuTriangleSrcIdx; // triangle index within submesh
             for (int gi = 0; gi < static_cast<int>(scene.meshGroups.size()); ++gi)
             {
                 for (int si = 0; si < static_cast<int>(scene.meshGroups[gi].submeshes.size()); ++si)
@@ -1090,6 +1092,7 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
 
                     for (size_t i = 0; i + 2 < idx.size(); i += 3)
                     {
+                        int triWithinSubmesh = static_cast<int>(i / 3);
                         const auto& v0 = verts[idx[i + 0]];
                         const auto& v1 = verts[idx[i + 1]];
                         const auto& v2 = verts[idx[i + 2]];
@@ -1109,8 +1112,9 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
                         tri.n1 = glm::normalize(normalMat2 * v1.normal);
                         tri.n2 = glm::normalize(normalMat2 * v2.normal);
                         tri.uv0 = v0.uv;      tri.uv1 = v1.uv;      tri.uv2 = v2.uv;
-                        tri.color = v0.color;
-                        tri.emissive = v0.emissive;
+                        tri.color            = v0.color * sm.meshData.baseColor;
+                        tri.emissive         = v0.emissive * sm.meshData.emissiveStrength;
+                        tri.emissiveStrength = sm.meshData.emissiveStrength;
                         tri.geometricNormal = (len > GEOMETRY_EPSILON) ? (cr / len) : glm::vec3(0, 1, 0);
                         tri.area = len * 0.5f;
                         tri.textureIndex = texIdx;
@@ -1137,6 +1141,7 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
 
                         gpuTriangles.push_back(tri);
                         gpuTriangleSrc.push_back({gi, si});
+                        gpuTriangleSrcIdx.push_back(triWithinSubmesh);
                     }
                 }
             }
@@ -1154,13 +1159,16 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
             const auto& bvhIndices = m_rtBVH.indices();
             std::vector<vex::CPURaytracer::Triangle> reordered(count);
             std::vector<std::pair<int,int>> reorderedSrc(count);
+            std::vector<int> reorderedSrcIdx(count);
             for (uint32_t i = 0; i < count; ++i)
             {
-                reordered[i]    = gpuTriangles[bvhIndices[i]];
-                reorderedSrc[i] = gpuTriangleSrc[bvhIndices[i]];
+                reordered[i]       = gpuTriangles[bvhIndices[i]];
+                reorderedSrc[i]    = gpuTriangleSrc[bvhIndices[i]];
+                reorderedSrcIdx[i] = gpuTriangleSrcIdx[bvhIndices[i]];
             }
-            m_rtTriangles          = std::move(reordered);
-            m_rtTriangleSrcSubmesh = std::move(reorderedSrc);
+            m_rtTriangles           = std::move(reordered);
+            m_rtTriangleSrcSubmesh  = std::move(reorderedSrc);
+            m_rtTriangleSrcTriIdx   = std::move(reorderedSrcIdx);
 
             m_rtLightIndices.clear();
             m_rtLightCDF.clear();
@@ -1274,21 +1282,25 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
                     // [1] n1.xyz + metallicTexIdx (as int bits)
                     m_vkTriShading.push_back(n1.x); m_vkTriShading.push_back(n1.y);
                     m_vkTriShading.push_back(n1.z); m_vkTriShading.push_back(iBF(metallicTexIdx));
-                    // [2] n2.xyz + pad
+                    // [2] n2.xyz + emissiveStrength
                     m_vkTriShading.push_back(n2.x); m_vkTriShading.push_back(n2.y);
-                    m_vkTriShading.push_back(n2.z); m_vkTriShading.push_back(0.0f);
+                    m_vkTriShading.push_back(n2.z); m_vkTriShading.push_back(sm.meshData.emissiveStrength);
                     // [3] uv0.xy + uv1.zw
                     m_vkTriShading.push_back(v0.uv.x); m_vkTriShading.push_back(v0.uv.y);
                     m_vkTriShading.push_back(v1.uv.x); m_vkTriShading.push_back(v1.uv.y);
                     // [4] uv2.xy + roughness + metallic
                     m_vkTriShading.push_back(v2.uv.x); m_vkTriShading.push_back(v2.uv.y);
                     m_vkTriShading.push_back(sm.meshData.roughness); m_vkTriShading.push_back(sm.meshData.metallic);
-                    // [5] color.xyz + texIdx (as int bits)
-                    m_vkTriShading.push_back(v0.color.x); m_vkTriShading.push_back(v0.color.y);
-                    m_vkTriShading.push_back(v0.color.z); m_vkTriShading.push_back(iBF(texIdx));
-                    // [6] emissive.xyz + area
-                    m_vkTriShading.push_back(v0.emissive.x); m_vkTriShading.push_back(v0.emissive.y);
-                    m_vkTriShading.push_back(v0.emissive.z); m_vkTriShading.push_back(area);
+                    // [5] color.xyz (tinted by baseColor) + texIdx (as int bits)
+                    m_vkTriShading.push_back(v0.color.x * sm.meshData.baseColor.x);
+                    m_vkTriShading.push_back(v0.color.y * sm.meshData.baseColor.y);
+                    m_vkTriShading.push_back(v0.color.z * sm.meshData.baseColor.z);
+                    m_vkTriShading.push_back(iBF(texIdx));
+                    // [6] emissive.xyz (scaled by emissiveStrength) + area
+                    m_vkTriShading.push_back(v0.emissive.x * sm.meshData.emissiveStrength);
+                    m_vkTriShading.push_back(v0.emissive.y * sm.meshData.emissiveStrength);
+                    m_vkTriShading.push_back(v0.emissive.z * sm.meshData.emissiveStrength);
+                    m_vkTriShading.push_back(area);
                     // [7] geoNormal.xyz + normalMapTexIdx (as int bits)
                     m_vkTriShading.push_back(geoN.x); m_vkTriShading.push_back(geoN.y);
                     m_vkTriShading.push_back(geoN.z); m_vkTriShading.push_back(iBF(normalTexIdx));
@@ -1381,15 +1393,21 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
 
 void SceneRenderer::rebuildMaterials(Scene& scene)
 {
-    // Patch material scalars into the already-reordered triangle array
+    // Patch material properties into the already-reordered triangle array
     for (size_t i = 0; i < m_rtTriangles.size(); ++i)
     {
         auto [gi, si] = m_rtTriangleSrcSubmesh[i];
-        const auto& md = scene.meshGroups[gi].submeshes[si].meshData;
-        m_rtTriangles[i].materialType = md.materialType;
-        m_rtTriangles[i].ior          = md.ior;
-        m_rtTriangles[i].roughness    = md.roughness;
-        m_rtTriangles[i].metallic     = md.metallic;
+        int triIdx    = m_rtTriangleSrcTriIdx[i];
+        const auto& sm = scene.meshGroups[gi].submeshes[si];
+        const auto& md = sm.meshData;
+        const auto& v0 = md.vertices[md.indices[triIdx * 3]];
+        m_rtTriangles[i].color            = v0.color   * md.baseColor;
+        m_rtTriangles[i].emissive         = v0.emissive * md.emissiveStrength;
+        m_rtTriangles[i].emissiveStrength = md.emissiveStrength;
+        m_rtTriangles[i].materialType     = md.materialType;
+        m_rtTriangles[i].ior              = md.ior;
+        m_rtTriangles[i].roughness        = md.roughness;
+        m_rtTriangles[i].metallic         = md.metallic;
     }
 
     // CPU raytracer: patch m_triData in-place, reset accumulation (no BVH rebuild)
@@ -1422,8 +1440,21 @@ void SceneRenderer::rebuildMaterials(Scene& scene)
                 for (size_t t = 0; t < triCount; ++t)
                 {
                     size_t base = (triStart + t) * FLOATS_PER_TRI;
+                    // [2].w = emissiveStrength
+                    m_vkTriShading[base + 11] = sm.meshData.emissiveStrength;
+                    // [4].z/.w = roughness/metallic
                     m_vkTriShading[base + 18] = sm.meshData.roughness;
                     m_vkTriShading[base + 19] = sm.meshData.metallic;
+                    // [5].xyz = color tinted by baseColor
+                    const auto& v0 = sm.meshData.vertices[sm.meshData.indices[t * 3]];
+                    m_vkTriShading[base + 20] = v0.color.x * sm.meshData.baseColor.x;
+                    m_vkTriShading[base + 21] = v0.color.y * sm.meshData.baseColor.y;
+                    m_vkTriShading[base + 22] = v0.color.z * sm.meshData.baseColor.z;
+                    // [6].xyz = emissive scaled by emissiveStrength
+                    m_vkTriShading[base + 24] = v0.emissive.x * sm.meshData.emissiveStrength;
+                    m_vkTriShading[base + 25] = v0.emissive.y * sm.meshData.emissiveStrength;
+                    m_vkTriShading[base + 26] = v0.emissive.z * sm.meshData.emissiveStrength;
+                    // [8].x/.y/.z = alphaClip/materialType/ior
                     m_vkTriShading[base + 32] = sm.meshData.alphaClip ? 1.0f : 0.0f;
                     m_vkTriShading[base + 33] = static_cast<float>(sm.meshData.materialType);
                     m_vkTriShading[base + 34] = sm.meshData.ior;
@@ -1800,6 +1831,8 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
             m_meshShader->setTexture(4, hasEmissive ? sm.emissiveTexture.get() : m_whiteTexture.get());
             m_meshShader->setBool("u_hasEmissiveMap", hasEmissive);
 
+            m_meshShader->setVec3("u_baseColor", sm.meshData.baseColor);
+            m_meshShader->setFloat("u_emissiveStrength", sm.meshData.emissiveStrength);
             m_meshShader->setInt("u_materialType", sm.meshData.materialType);
             m_meshShader->setFloat("u_roughness", sm.meshData.roughness);
             m_meshShader->setFloat("u_metallic", sm.meshData.metallic);

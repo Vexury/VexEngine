@@ -28,6 +28,8 @@ struct MeshData
     std::string normalTexturePath;
     std::string roughnessTexturePath;
     std::string metallicTexturePath;
+    glm::vec3 baseColor = {1.0f, 1.0f, 1.0f}; // albedo tint multiplied on top of vertex/texture color
+    float emissiveStrength = 1.0f;             // multiplier on emissive color and emissive texture
     bool alphaClip = false;
     int materialType = 0;   // 0=Microfacet (GGX), 1=Mirror, 2=Dielectric
     float ior = 1.5f;       // index of refraction (dielectric only)

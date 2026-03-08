@@ -845,6 +845,11 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                 // Draws full material + texture info for one submesh (used at both levels)
                 auto drawSubmeshMaterial = [&](auto& sm)
                 {
+                    // --- Base color tint ---
+                    if (ImGui::ColorEdit3("Base Color", &sm.meshData.baseColor.x))
+                        scene.materialDirty = true;
+
+                    // --- Material type ---
                     if (ImGui::Combo("Type", &sm.meshData.materialType, matTypes, 3))
                         scene.materialDirty = true;
 
@@ -869,17 +874,93 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                         ImGui::BeginDisabled(isRasterize);
                         ImGui::DragFloat("IOR", &sm.meshData.ior, 0.01f, 1.f, 3.f, "%.2f");
                         if (ImGui::IsItemDeactivatedAfterEdit()) scene.materialDirty = true;
+
+                        // Common IOR presets
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("..."))
+                            ImGui::OpenPopup("ior_presets");
+                        if (ImGui::BeginPopup("ior_presets"))
+                        {
+                            struct IORPreset { const char* name; float ior; };
+                            static constexpr IORPreset presets[] = {
+                                {"Water (1.33)",   1.33f},
+                                {"Glass (1.50)",   1.50f},
+                                {"Crystal (1.70)", 1.70f},
+                                {"Diamond (2.42)", 2.42f},
+                            };
+                            for (const auto& p : presets)
+                            {
+                                if (ImGui::MenuItem(p.name))
+                                {
+                                    sm.meshData.ior = p.ior;
+                                    scene.materialDirty = true;
+                                }
+                            }
+                            ImGui::EndPopup();
+                        }
                         ImGui::EndDisabled();
                     }
+
+                    // --- Alpha clip ---
+                    if (ImGui::Checkbox("Alpha Clip", &sm.meshData.alphaClip))
+                        scene.materialDirty = true;
+
+                    // --- Emissive strength ---
+                    ImGui::DragFloat("Emissive Strength", &sm.meshData.emissiveStrength, 0.05f, 0.f, 100.f, "%.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) scene.materialDirty = true;
 
                     if (isRasterize && sm.meshData.materialType != 0)
                         ImGui::TextDisabled("Rendered as Microfacet in rasterizer.\nSwitch to a path tracer to see this material.");
 
+                    // --- Textures ---
                     ImGui::SeparatorText("Textures");
-                    ImGui::Text("Diffuse:   %s", texName(sm.meshData.diffuseTexturePath));
-                    ImGui::Text("Normal:    %s", texName(sm.meshData.normalTexturePath));
-                    ImGui::Text("Roughness: %s", texName(sm.meshData.roughnessTexturePath));
-                    ImGui::Text("Metallic:  %s", texName(sm.meshData.metallicTexturePath));
+
+                    // Draws one texture row: [thumbnail] Label: filename
+                    // Hovering the thumbnail shows a larger popup preview.
+                    auto texRow = [](const char* label,
+                                     const std::string& path,
+                                     const std::shared_ptr<vex::Texture2D>& tex)
+                    {
+                        constexpr float kThumbSize = 18.0f;
+                        constexpr float kPreviewSize = 192.0f;
+
+                        if (tex)
+                        {
+                            ImTextureID tid = static_cast<ImTextureID>(tex->getNativeHandle());
+                            // Both GL and VK load with stbi flip → uv0=(0,1) uv1=(1,0)
+                            ImGui::Image(tid, {kThumbSize, kThumbSize}, {0.f, 1.f}, {1.f, 0.f});
+
+                            if (ImGui::IsItemHovered())
+                            {
+                                ImGui::BeginTooltip();
+                                float aspect = (tex->getHeight() > 0)
+                                    ? static_cast<float>(tex->getWidth()) / tex->getHeight()
+                                    : 1.0f;
+                                float pw = kPreviewSize * aspect;
+                                float ph = kPreviewSize;
+                                if (pw > kPreviewSize) { ph = kPreviewSize / aspect; pw = kPreviewSize; }
+                                ImGui::Image(tid, {pw, ph}, {0.f, 1.f}, {1.f, 0.f});
+                                ImGui::EndTooltip();
+                            }
+                        }
+                        else
+                        {
+                            // Placeholder square so all rows are the same height
+                            ImGui::Dummy({kThumbSize, kThumbSize});
+                        }
+
+                        ImGui::SameLine();
+                        auto s = path.find_last_of("/\\");
+                        const char* name = path.empty() ? "none"
+                                          : path.c_str() + (s != std::string::npos ? s + 1 : 0);
+                        ImGui::Text("%s: %s", label, name);
+                    };
+
+                    texRow("Diffuse",   sm.meshData.diffuseTexturePath,    sm.diffuseTexture);
+                    texRow("Normal",    sm.meshData.normalTexturePath,     sm.normalTexture);
+                    texRow("Roughness", sm.meshData.roughnessTexturePath,  sm.roughnessTexture);
+                    texRow("Metallic",  sm.meshData.metallicTexturePath,   sm.metallicTexture);
+                    texRow("Emissive",  sm.meshData.emissiveTexturePath,   sm.emissiveTexture);
                 };
 
                 if (m_submeshIndex >= 0 && m_submeshIndex < static_cast<int>(group.submeshes.size()))

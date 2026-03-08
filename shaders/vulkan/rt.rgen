@@ -257,9 +257,9 @@ vec3 pathTrace(vec3 rayOrigin, vec3 rayDirection) {
         // ── Emission ──────────────────────────────────────────────────────
         vec3 emission = vec3(0.0);
         if (u_uniforms.enableEmissive != 0u) {
-            emission = hitEmissive;
+            emission = hitEmissive;  // already scaled by emissiveStrength (baked at upload)
             if (emissTexIdx >= 0)
-                emission = sampleTexture(emissTexIdx, hitUV).rgb;
+                emission = sampleTexture(emissTexIdx, hitUV).rgb * triEmissiveStrength(triIdx);
         }
 
         if (length(emission) > 0.001) {

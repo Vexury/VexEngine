@@ -28,6 +28,7 @@ struct HitRecord
     float metallic = 0.0f;
     glm::vec3 tangent{1, 0, 0};
     float bitangentSign = 1.0f;
+    float emissiveStrength = 1.0f;
     bool hit = false;
 };
 

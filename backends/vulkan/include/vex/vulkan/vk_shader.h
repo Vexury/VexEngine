@@ -144,7 +144,11 @@ private:
         float    bloomIntensity  = 0.05f;  // offset 72
         float    bloomThreshold  = 0.8f;   // offset 76
         uint32_t bloomHorizontal = 0;      // offset 80
-    };                                     // total: 84 bytes
+        float    baseColorR      = 1.0f;   // offset 84 — shader PC offset 148
+        float    baseColorG      = 1.0f;   // offset 88
+        float    baseColorB      = 1.0f;   // offset 92
+        float    emissiveStrength= 1.0f;   // offset 96
+    };                                     // total: 100 bytes
     MeshPushConstant m_pushData{};
 
     // Wireframe pipeline

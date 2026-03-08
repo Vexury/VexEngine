@@ -41,7 +41,8 @@ void CPURaytracer::setGeometry(std::vector<Triangle> triangles, std::vector<Text
                           tri.roughnessTextureIndex, tri.metallicTextureIndex,
                           tri.alphaClip, tri.materialType, tri.ior,
                           tri.roughness, tri.metallic,
-                          tri.tangent, tri.bitangentSign };
+                          tri.tangent, tri.bitangentSign,
+                          tri.emissiveStrength };
     }
     m_textures = std::move(textures);
     buildBVH();
@@ -52,15 +53,24 @@ void CPURaytracer::setGeometry(std::vector<Triangle> triangles, std::vector<Text
 void CPURaytracer::updateMaterials(const std::vector<Triangle>& triangles)
 {
     const auto& indices = m_bvh.indices();
+    bool emissiveChanged = false;
     for (size_t i = 0; i < m_triData.size(); ++i)
     {
         uint32_t origIdx = indices[i];
         if (origIdx >= triangles.size()) continue;
-        m_triData[i].materialType = triangles[origIdx].materialType;
-        m_triData[i].ior          = triangles[origIdx].ior;
-        m_triData[i].roughness    = triangles[origIdx].roughness;
-        m_triData[i].metallic     = triangles[origIdx].metallic;
+        const auto& tri = triangles[origIdx];
+        if (m_triData[i].emissive != tri.emissive)
+            emissiveChanged = true;
+        m_triData[i].color            = tri.color;
+        m_triData[i].emissive         = tri.emissive;
+        m_triData[i].emissiveStrength = tri.emissiveStrength;
+        m_triData[i].materialType     = tri.materialType;
+        m_triData[i].ior              = tri.ior;
+        m_triData[i].roughness        = tri.roughness;
+        m_triData[i].metallic         = tri.metallic;
     }
+    if (emissiveChanged)
+        buildLightData();
     reset();
 }
 
@@ -597,8 +607,9 @@ HitRecord CPURaytracer::traceRay(const Ray& ray) const
                         ? data.geometricNormal
                         : glm::normalize(w * data.n0 + u * data.n1 + v * data.n2);
                     closest.geometricNormal = data.geometricNormal;
-                    closest.color = data.color;
-                    closest.emissive = data.emissive;
+                    closest.color            = data.color;
+                    closest.emissive         = data.emissive;
+                    closest.emissiveStrength = data.emissiveStrength;
                     closest.uv = w * data.uv0 + u * data.uv1 + v * data.uv2;
                     closest.textureIndex = data.textureIndex;
                     closest.emissiveTextureIndex = data.emissiveTextureIndex;
@@ -775,9 +786,9 @@ glm::vec3 CPURaytracer::pathTrace(const Ray& initialRay, RNG& rng) const
         glm::vec3 emission(0.0f);
         if (m_enableEmissive)
         {
-            emission = hit.emissive;
+            emission = hit.emissive;  // already scaled by emissiveStrength (baked at upload)
             if (hit.emissiveTextureIndex >= 0)
-                emission = glm::vec3(sampleTexture(hit.emissiveTextureIndex, hit.uv));
+                emission = glm::vec3(sampleTexture(hit.emissiveTextureIndex, hit.uv)) * hit.emissiveStrength;
         }
 
         if (glm::length(emission) > 0.001f)

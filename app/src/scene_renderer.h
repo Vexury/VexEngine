@@ -397,6 +397,7 @@ private:
     // Shared geometry data (for GPU upload after CPU raytracer reorders)
     std::vector<vex::CPURaytracer::Triangle> m_rtTriangles;
     std::vector<std::pair<int,int>> m_rtTriangleSrcSubmesh; // {groupIdx, submeshIdx} per m_rtTriangles entry
+    std::vector<int> m_rtTriangleSrcTriIdx;                 // triangle index within submesh per m_rtTriangles entry
     std::vector<vex::CPURaytracer::TextureData> m_rtTextures;
     vex::BVH m_rtBVH;
     std::vector<uint32_t> m_rtLightIndices;

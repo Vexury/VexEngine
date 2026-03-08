@@ -60,6 +60,11 @@ layout(push_constant) uniform PC {
     layout(offset = 116) float gamma;          // unused here
     layout(offset = 120) uint  enableACES;     // unused here
     layout(offset = 124) uint  hasEmissiveMap;
+    // offsets 128-147: enableOutline, enableBloom, bloomIntensity, bloomThreshold, bloomHorizontal
+    layout(offset = 148) float baseColorR;
+    layout(offset = 152) float baseColorG;
+    layout(offset = 156) float baseColorB;
+    layout(offset = 160) float emissiveStrength;
 } pc;
 
 layout(location = 0) out vec4 FragColor;
@@ -158,7 +163,7 @@ void main()
         N = normalize(TBN * mapN);
     }
 
-    vec3 baseColor = vColor * texColor.rgb;
+    vec3 baseColor = vColor * texColor.rgb * vec3(pc.baseColorR, pc.baseColorG, pc.baseColorB);
 
     if (pc.debugMode == 5) // Albedo (unlit)
     {
@@ -167,8 +172,8 @@ void main()
     }
     if (pc.debugMode == 6) // Emission
     {
-        vec3 em = vEmissive;
-        if (pc.hasEmissiveMap != 0u) em += texture(u_emissiveMap, vUV).rgb;
+        vec3 em = vEmissive * pc.emissiveStrength;
+        if (pc.hasEmissiveMap != 0u) em += texture(u_emissiveMap, vUV).rgb * pc.emissiveStrength;
         FragColor = vec4(em, 1.0);
         return;
     }
@@ -276,8 +281,8 @@ void main()
     vec3 result = ambient
                 + pointContrib * attenuation
                 + sunContrib;
-    result += vEmissive;
+    result += vEmissive * pc.emissiveStrength;
     if (pc.hasEmissiveMap != 0u)
-        result += texture(u_emissiveMap, vUV).rgb;
+        result += texture(u_emissiveMap, vUV).rgb * pc.emissiveStrength;
     FragColor = vec4(result, 1.0);
 }
