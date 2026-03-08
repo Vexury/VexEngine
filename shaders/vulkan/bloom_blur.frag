@@ -7,8 +7,9 @@ layout(set = 1, binding = 0) uniform sampler2D u_image;
 
 // Uses bloomHorizontal field from the shared MeshPushConstant.
 // Must match offset in vk_shader.h.
+// Fragment push constants start at offset 64 (after 64-byte vertex model matrix).
 layout(push_constant) uniform PC {
-    layout(offset = 80) uint horizontal;
+    layout(offset = 144) uint horizontal; // MeshPC offset 80 + 64
 } pc;
 
 // 9-tap separable Gaussian (σ≈1.5)

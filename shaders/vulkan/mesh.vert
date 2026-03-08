@@ -31,8 +31,12 @@ layout(set = 0, binding = 0) uniform UBO {
     float _pad7a;
     float _pad7b;
     float _pad7c;
-    mat4  model;
 };
+
+// Per-draw model matrix pushed as vertex-stage push constant (offset 0, 64 bytes).
+layout(push_constant) uniform PC {
+    mat4 model;
+} pc;
 
 layout(location = 0) out vec3 vWorldPos;
 layout(location = 1) out vec3 vNormal;
@@ -43,12 +47,12 @@ layout(location = 5) out vec4 vTangent;
 
 void main()
 {
-    vec4 worldPos = model * vec4(aPos, 1.0);
+    vec4 worldPos = pc.model * vec4(aPos, 1.0);
     vWorldPos = worldPos.xyz;
-    vNormal = mat3(transpose(inverse(model))) * aNormal;
+    vNormal = mat3(transpose(inverse(pc.model))) * aNormal;
     vColor = aColor;
     vEmissive = aEmissive;
     vUV = aUV;
-    vTangent = vec4(mat3(model) * aTangent.xyz, aTangent.w);
+    vTangent = vec4(mat3(pc.model) * aTangent.xyz, aTangent.w);
     gl_Position = projection * view * worldPos;
 }

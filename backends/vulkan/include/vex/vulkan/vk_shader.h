@@ -42,7 +42,7 @@ struct MeshUBO
     float     shadowNormalBias  = 0.0f; // world-space normal offset scale (texel-sized)
     float     _pad7a            = 0;
     float     _pad7b            = 0;
-    glm::mat4 model             = glm::mat4(1.0f); // per-group model matrix (offset 320)
+    // model matrix moved to vertex-stage push constants (offset 0, 64 bytes)
 };
 
 class VKShader : public Shader

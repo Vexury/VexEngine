@@ -6,6 +6,7 @@ add_executable(vex_app
     src/editor_ui.cpp
     src/file_dialog.cpp
     src/denoiser.cpp
+    src/command.cpp
 )
 
 if(VEX_BACKEND STREQUAL "OpenGL")

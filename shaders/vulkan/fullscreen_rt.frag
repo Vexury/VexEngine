@@ -6,17 +6,17 @@ layout(set = 1, binding = 0) uniform sampler2D u_accumMap;
 layout(set = 2, binding = 0) uniform sampler2D u_outlineMask;
 layout(set = 3, binding = 0) uniform sampler2D u_bloomMap;
 
-// Push constant block — only the fields this shader uses.
-// Must match MeshPushConstant offsets in vk_shader.h.
+// Push constant block — fragment fields start at offset 64 (after 64-byte vertex model matrix).
+// Must match MeshPushConstant offsets in vk_shader.h (+64).
 layout(push_constant) uniform PC {
-    layout(offset = 40) uint  flipV;          // offset 40
-    layout(offset = 44) float sampleCount;    // offset 44
-    layout(offset = 48) float exposure;       // offset 48
-    layout(offset = 52) float gamma;          // offset 52
-    layout(offset = 56) uint  enableACES;     // offset 56
-    layout(offset = 64) uint  enableOutline;  // offset 64
-    layout(offset = 68) uint  enableBloom;    // offset 68
-    layout(offset = 72) float bloomIntensity; // offset 72
+    layout(offset = 104) uint  flipV;          // MeshPC offset 40 + 64
+    layout(offset = 108) float sampleCount;    // MeshPC offset 44 + 64
+    layout(offset = 112) float exposure;       // MeshPC offset 48 + 64
+    layout(offset = 116) float gamma;          // MeshPC offset 52 + 64
+    layout(offset = 120) uint  enableACES;     // MeshPC offset 56 + 64
+    layout(offset = 128) uint  enableOutline;  // MeshPC offset 64 + 64
+    layout(offset = 132) uint  enableBloom;    // MeshPC offset 68 + 64
+    layout(offset = 136) float bloomIntensity; // MeshPC offset 72 + 64
 } pc;
 
 layout(location = 0) out vec4 FragColor;

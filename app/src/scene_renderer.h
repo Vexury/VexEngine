@@ -165,7 +165,9 @@ public:
     bool getGPUBilinearFiltering() const;
     void  setVKSamplerType(int v);
     int   getVKSamplerType() const;
+#ifdef VEX_BACKEND_VULKAN
     float getVKSamplesPerSec() const { return m_vkSamplesPerSec; }
+#endif
     void setGPUExposure(float v);
     float getGPUExposure() const;
     void setGPUGamma(float v);

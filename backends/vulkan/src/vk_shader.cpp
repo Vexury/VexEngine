@@ -104,7 +104,7 @@ void VKShader::buildUniformMap()
     m_uniformOffsets["u_shadowViewProj"]     = offsetof(MeshUBO, sunShadowVP);
     m_uniformOffsets["u_enableShadows"]      = offsetof(MeshUBO, enableShadows);
     m_uniformOffsets["u_shadowNormalBias"]   = offsetof(MeshUBO, shadowNormalBias);
-    m_uniformOffsets["u_model"]              = offsetof(MeshUBO, model);
+    // u_model is handled as a vertex-stage push constant — not in the UBO
 }
 
 bool VKShader::loadFromFiles(const std::string& vertexPath, const std::string& fragmentPath)
@@ -164,17 +164,23 @@ bool VKShader::loadFromFiles(const std::string& vertexPath, const std::string& f
         m_textureSetLayout, m_textureSetLayout
     };
 
-    VkPushConstantRange pushRange{};
-    pushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    pushRange.offset = 0;
-    pushRange.size = sizeof(MeshPushConstant);
+    // Two push constant ranges:
+    //   [0..64)   — vertex stage: mat4 model
+    //   [64..148) — fragment stage: MeshPushConstant (84 bytes)
+    VkPushConstantRange pushRanges[2]{};
+    pushRanges[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pushRanges[0].offset     = 0;
+    pushRanges[0].size       = sizeof(glm::mat4);
+    pushRanges[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushRanges[1].offset     = sizeof(glm::mat4);
+    pushRanges[1].size       = sizeof(MeshPushConstant);
 
     VkPipelineLayoutCreateInfo plInfo{};
     plInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     plInfo.setLayoutCount = 8;
     plInfo.pSetLayouts = setLayouts;
-    plInfo.pushConstantRangeCount = 1;
-    plInfo.pPushConstantRanges = &pushRange;
+    plInfo.pushConstantRangeCount = 2;
+    plInfo.pPushConstantRanges = pushRanges;
 
     if (vkCreatePipelineLayout(device, &plInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS)
     {
@@ -465,9 +471,9 @@ void VKShader::bind()
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
                             0, 1, &m_frameUBOs[frame].descriptorSet, 0, nullptr);
 
-    // Push all constants
+    // Push fragment constants (offset 64, after the vertex model matrix slot)
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0, sizeof(MeshPushConstant), &m_pushData);
+                       sizeof(glm::mat4), sizeof(MeshPushConstant), &m_pushData);
 }
 
 void VKShader::unbind()
@@ -533,70 +539,70 @@ void VKShader::setBool(const std::string& name, bool value)
         m_pushData.alphaClip = value ? 1u : 0u;
         auto cmd = VKContext::get().getCurrentCommandBuffer();
         vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(MeshPushConstant), &m_pushData);
+                           sizeof(glm::mat4), sizeof(MeshPushConstant), &m_pushData);
     }
     else if (name == "u_hasNormalMap")
     {
         m_pushData.hasNormalMap = value ? 1u : 0u;
         auto cmd = VKContext::get().getCurrentCommandBuffer();
         vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(MeshPushConstant), &m_pushData);
+                           sizeof(glm::mat4), sizeof(MeshPushConstant), &m_pushData);
     }
     else if (name == "u_hasRoughnessMap")
     {
         m_pushData.hasRoughnessMap = value ? 1u : 0u;
         auto cmd = VKContext::get().getCurrentCommandBuffer();
         vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(MeshPushConstant), &m_pushData);
+                           sizeof(glm::mat4), sizeof(MeshPushConstant), &m_pushData);
     }
     else if (name == "u_hasMetallicMap")
     {
         m_pushData.hasMetallicMap = value ? 1u : 0u;
         auto cmd = VKContext::get().getCurrentCommandBuffer();
         vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(MeshPushConstant), &m_pushData);
+                           sizeof(glm::mat4), sizeof(MeshPushConstant), &m_pushData);
     }
     else if (name == "u_flipV")
     {
         m_pushData.flipV = value ? 1u : 0u;
         auto cmd = VKContext::get().getCurrentCommandBuffer();
         vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(MeshPushConstant), &m_pushData);
+                           sizeof(glm::mat4), sizeof(MeshPushConstant), &m_pushData);
     }
     else if (name == "u_enableACES")
     {
         m_pushData.enableACES = value ? 1u : 0u;
         auto cmd = VKContext::get().getCurrentCommandBuffer();
         vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(MeshPushConstant), &m_pushData);
+                           sizeof(glm::mat4), sizeof(MeshPushConstant), &m_pushData);
     }
     else if (name == "u_hasEmissiveMap")
     {
         m_pushData.hasEmissiveMap = value ? 1u : 0u;
         auto cmd = VKContext::get().getCurrentCommandBuffer();
         vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(MeshPushConstant), &m_pushData);
+                           sizeof(glm::mat4), sizeof(MeshPushConstant), &m_pushData);
     }
     else if (name == "u_enableOutline")
     {
         m_pushData.enableOutline = value ? 1u : 0u;
         auto cmd = VKContext::get().getCurrentCommandBuffer();
         vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(MeshPushConstant), &m_pushData);
+                           sizeof(glm::mat4), sizeof(MeshPushConstant), &m_pushData);
     }
     else if (name == "u_enableBloom")
     {
         m_pushData.enableBloom = value ? 1u : 0u;
         auto cmd = VKContext::get().getCurrentCommandBuffer();
         vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(MeshPushConstant), &m_pushData);
+                           sizeof(glm::mat4), sizeof(MeshPushConstant), &m_pushData);
     }
     else if (name == "u_horizontal")
     {
         m_pushData.bloomHorizontal = value ? 1u : 0u;
         auto cmd = VKContext::get().getCurrentCommandBuffer();
         vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(MeshPushConstant), &m_pushData);
+                           sizeof(glm::mat4), sizeof(MeshPushConstant), &m_pushData);
     }
     else
     {
@@ -629,10 +635,19 @@ void VKShader::setVec4(const std::string& name, const glm::vec4& value)
 
 void VKShader::setMat4(const std::string& name, const glm::mat4& value)
 {
-    auto it = m_uniformOffsets.find(name);
-    if (it != m_uniformOffsets.end())
+    if (name == "u_model")
     {
-        std::memcpy(reinterpret_cast<char*>(&m_uboData) + it->second, &value, sizeof(glm::mat4));
+        // Model matrix is a per-draw vertex-stage push constant — record immediately
+        // so each group's draw commands see the correct transform.
+        auto cmd = VKContext::get().getCurrentCommandBuffer();
+        vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
+                           0, sizeof(glm::mat4), &value);
+    }
+    else
+    {
+        auto it = m_uniformOffsets.find(name);
+        if (it != m_uniformOffsets.end())
+            std::memcpy(reinterpret_cast<char*>(&m_uboData) + it->second, &value, sizeof(glm::mat4));
     }
 }
 

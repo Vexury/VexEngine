@@ -7,6 +7,7 @@ add_library(vex_core STATIC
     src/core/stb_impl.cpp
     src/core/tiny_obj_impl.cpp
     src/scene/mesh_data.cpp
+    src/scene/primitives.cpp
     src/ui/ui_layer.cpp
     src/raytracing/bvh.cpp
     src/raytracing/cpu_raytracer.cpp

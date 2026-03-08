@@ -7,9 +7,10 @@ layout(set = 1, binding = 0) uniform sampler2D u_hdrMap;
 
 // Uses bloomThreshold field from the shared MeshPushConstant.
 // Must match offset in vk_shader.h.
+// Fragment push constants start at offset 64 (after 64-byte vertex model matrix).
 layout(push_constant) uniform PC {
-    layout(offset = 44) float sampleCount;
-    layout(offset = 76) float threshold;
+    layout(offset = 108) float sampleCount; // MeshPC offset 44 + 64
+    layout(offset = 140) float threshold;   // MeshPC offset 76 + 64
 } pc;
 
 void main()

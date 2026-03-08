@@ -57,11 +57,32 @@ public:
 
     bool consumePickRequest(int& outX, int& outY);
 
-    void setGizmoMode(int mode) { m_gizmoMode = mode; }
+    void setGizmoMode(int mode)    { m_gizmoMode  = mode;  }
+    void toggleGizmoLocal()        { m_gizmoLocal = !m_gizmoLocal; }
+    bool isGizmoLocal() const      { return m_gizmoLocal; }
 
     // Deferred import: the Import OBJ button stores the path here instead of blocking
     // the current frame. App::run() calls consumePendingImport() between frames.
     bool consumePendingImport(std::string& outPath, std::string& outName);
+
+    // Deferred primitive creation
+    enum class PrimitiveType { None, Plane, Cube, Sphere, Cylinder };
+    bool consumePendingPrimitive(PrimitiveType& outType);
+
+    // Deferred volume add (routed through App so it can push an undo command)
+    bool consumePendingAddVolume();
+
+    // Deferred duplicate (set by Duplicate button or Ctrl+D)
+    bool consumePendingDuplicate();
+
+    // Gizmo drag-end commit — consumed by App to push CmdSetTransform
+    struct TransformCommit {
+        int         groupIndex;
+        int         submeshIndex = -1;  // >= 0 for direct submesh, -1 otherwise
+        std::string objectName;         // non-empty for objectName-based child selection
+        glm::mat4   before, after;
+    };
+    bool consumeTransformCommit(TransformCommit& out);
 
     // Loading overlay: called by App::runImport() to show progress between frames.
     void setLoadingState(const std::string& stage, float progress);
@@ -85,11 +106,13 @@ private:
     int m_prevEnvmapForRevert = 0;
 
     // Gizmo state
-    int       m_gizmoMode     = 0;   // 0=Translate  1=Rotate  2=Scale
-    int       m_gizmoAxis     = -1;  // 0=X 1=Y 2=Z  -1=none active
+    int       m_gizmoMode     = 0;     // 0=Translate  1=Rotate  2=Scale
+    int       m_gizmoAxis     = -1;    // 0=X 1=Y 2=Z  -1=none active
+    bool      m_gizmoLocal    = true;  // true=local space, false=world space
     bool      m_gizmoDragging = false;
     ImVec2    m_gizmoDragStart   = {};
     glm::mat4 m_gizmoMatStart    = glm::mat4(1.f);
+    glm::vec3 m_gizmoPivot       = glm::vec3(0.f); // world-space pivot frozen at drag start
     glm::vec3 m_gizmoRotRef      = glm::vec3(0.f);
     bool      m_gizmoRotRefSet   = false;
 
@@ -98,6 +121,15 @@ private:
     // Pending import (set by Import OBJ button, consumed by App between frames)
     std::string m_pendingImportPath;
     std::string m_pendingImportName;
+
+    // Pending deferred actions
+    PrimitiveType m_pendingPrimitive  = PrimitiveType::None;
+    bool          m_pendingAddVolume  = false;
+    bool          m_pendingDuplicate  = false;
+
+    // Gizmo transform commit
+    bool            m_transformCommitReady = false;
+    TransformCommit m_transformCommit      = {};
 
     // Loading overlay state
     std::string m_loadingStage;

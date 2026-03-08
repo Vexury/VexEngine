@@ -15,8 +15,9 @@ layout(set = 0, binding = 0) uniform UBO {
 
 layout(set = 1, binding = 0) uniform sampler2D u_diffuseMap;
 
+// Fragment push constants start at offset 64 (after 64-byte vertex model matrix).
 layout(push_constant) uniform PC {
-    layout(offset = 40) uint flipV;
+    layout(offset = 104) uint flipV; // MeshPC offset 40 + 64
 } pc;
 
 layout(location = 0) out vec4 FragColor;

@@ -981,10 +981,11 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
 
     for (const auto& group : scene.meshGroups)
     {
-        glm::mat3 normalMat = glm::mat3(glm::transpose(glm::inverse(group.modelMatrix)));
-
         for (const auto& sm : group.submeshes)
         {
+            const glm::mat4 combinedMat = group.modelMatrix * sm.modelMatrix;
+            const glm::mat3 normalMat   = glm::mat3(glm::transpose(glm::inverse(combinedMat)));
+
             const auto& verts = sm.meshData.vertices;
             const auto& indices = sm.meshData.indices;
 
@@ -1000,9 +1001,9 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
                 const auto& v1 = verts[indices[i + 1]];
                 const auto& v2 = verts[indices[i + 2]];
 
-                glm::vec3 p0 = glm::vec3(group.modelMatrix * glm::vec4(v0.position, 1.0f));
-                glm::vec3 p1 = glm::vec3(group.modelMatrix * glm::vec4(v1.position, 1.0f));
-                glm::vec3 p2 = glm::vec3(group.modelMatrix * glm::vec4(v2.position, 1.0f));
+                glm::vec3 p0 = glm::vec3(combinedMat * glm::vec4(v0.position, 1.0f));
+                glm::vec3 p1 = glm::vec3(combinedMat * glm::vec4(v1.position, 1.0f));
+                glm::vec3 p2 = glm::vec3(combinedMat * glm::vec4(v2.position, 1.0f));
 
                 glm::vec3 edge1 = p1 - p0;
                 glm::vec3 edge2 = p2 - p0;
@@ -1078,6 +1079,9 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
                     const auto& verts = sm.meshData.vertices;
                     const auto& idx   = sm.meshData.indices;
 
+                    const glm::mat4 combinedMat2 = scene.meshGroups[gi].modelMatrix * sm.modelMatrix;
+                    const glm::mat3 normalMat2   = glm::mat3(glm::transpose(glm::inverse(combinedMat2)));
+
                     int texIdx           = lookupTexture(sm.meshData.diffuseTexturePath);
                     int emissiveTexIdx   = lookupTexture(sm.meshData.emissiveTexturePath);
                     int normalTexIdx2    = lookupTexture(sm.meshData.normalTexturePath);
@@ -1090,14 +1094,20 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
                         const auto& v1 = verts[idx[i + 1]];
                         const auto& v2 = verts[idx[i + 2]];
 
-                        glm::vec3 edge1 = v1.position - v0.position;
-                        glm::vec3 edge2 = v2.position - v0.position;
+                        glm::vec3 p0 = glm::vec3(combinedMat2 * glm::vec4(v0.position, 1.0f));
+                        glm::vec3 p1 = glm::vec3(combinedMat2 * glm::vec4(v1.position, 1.0f));
+                        glm::vec3 p2 = glm::vec3(combinedMat2 * glm::vec4(v2.position, 1.0f));
+
+                        glm::vec3 edge1 = p1 - p0;
+                        glm::vec3 edge2 = p2 - p0;
                         glm::vec3 cr = glm::cross(edge1, edge2);
                         float len = glm::length(cr);
 
                         vex::CPURaytracer::Triangle tri;
-                        tri.v0 = v0.position; tri.v1 = v1.position; tri.v2 = v2.position;
-                        tri.n0 = v0.normal;   tri.n1 = v1.normal;   tri.n2 = v2.normal;
+                        tri.v0 = p0; tri.v1 = p1; tri.v2 = p2;
+                        tri.n0 = glm::normalize(normalMat2 * v0.normal);
+                        tri.n1 = glm::normalize(normalMat2 * v1.normal);
+                        tri.n2 = glm::normalize(normalMat2 * v2.normal);
                         tri.uv0 = v0.uv;      tri.uv1 = v1.uv;      tri.uv2 = v2.uv;
                         tri.color = v0.color;
                         tri.emissive = v0.emissive;
@@ -1202,15 +1212,16 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
 
         for (const auto& group : scene.meshGroups)
         {
-            glm::mat3 vkNormalMat = glm::mat3(glm::transpose(glm::inverse(group.modelMatrix)));
-
             for (const auto& sm : group.submeshes)
             {
+                const glm::mat4 combinedMat  = group.modelMatrix * sm.modelMatrix;
+                const glm::mat3 vkNormalMat  = glm::mat3(glm::transpose(glm::inverse(combinedMat)));
+
                 auto* vkMesh = static_cast<vex::VKMesh*>(sm.mesh.get());
                 m_vkRaytracer->addBlas(
                     vkMesh->getVertexBuffer(), vkMesh->getVertexCount(), sizeof(vex::Vertex),
                     vkMesh->getIndexBuffer(),  vkMesh->getIndexCount());
-                blasTransforms.push_back(group.modelMatrix);
+                blasTransforms.push_back(combinedMat);
 
                 m_vkInstanceOffsets.push_back(globalTriOffset);
 
@@ -1229,9 +1240,9 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
                     const auto& v1 = verts[indices[i + 1]];
                     const auto& v2 = verts[indices[i + 2]];
 
-                    glm::vec3 p0 = glm::vec3(group.modelMatrix * glm::vec4(v0.position, 1.0f));
-                    glm::vec3 p1 = glm::vec3(group.modelMatrix * glm::vec4(v1.position, 1.0f));
-                    glm::vec3 p2 = glm::vec3(group.modelMatrix * glm::vec4(v2.position, 1.0f));
+                    glm::vec3 p0 = glm::vec3(combinedMat * glm::vec4(v0.position, 1.0f));
+                    glm::vec3 p1 = glm::vec3(combinedMat * glm::vec4(v1.position, 1.0f));
+                    glm::vec3 p2 = glm::vec3(combinedMat * glm::vec4(v2.position, 1.0f));
                     glm::vec3 n0 = glm::normalize(vkNormalMat * v0.normal);
                     glm::vec3 n1 = glm::normalize(vkNormalMat * v1.normal);
                     glm::vec3 n2 = glm::normalize(vkNormalMat * v2.normal);
@@ -1617,9 +1628,11 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
 
         for (auto& group : scene.meshGroups)
         {
-            m_shadowShader->setMat4("u_model", group.modelMatrix);
             for (auto& sm : group.submeshes)
+            {
+                m_shadowShader->setMat4("u_model", group.modelMatrix * sm.modelMatrix);
                 sm.mesh->draw();
+            }
         }
 
 #ifdef VEX_BACKEND_OPENGL
@@ -1746,10 +1759,10 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
 
     for (int gi = 0; gi < static_cast<int>(scene.meshGroups.size()); ++gi)
     {
-        m_meshShader->setMat4("u_model", scene.meshGroups[gi].modelMatrix);
         for (int si = 0; si < static_cast<int>(scene.meshGroups[gi].submeshes.size()); ++si)
         {
             auto& sm = scene.meshGroups[gi].submeshes[si];
+            m_meshShader->setMat4("u_model", scene.meshGroups[gi].modelMatrix * sm.modelMatrix);
 
 #ifdef VEX_BACKEND_OPENGL
             bool isSelectedGroup = hasSelection && gi == selectedGroup;
@@ -2033,22 +2046,24 @@ void SceneRenderer::renderOutlineMask(Scene& scene, int selectedGroup,
         // VK: bind() flushes UBO to GPU, so uniforms must be written first.
         m_outlineMaskShader->setMat4("u_view",        view);
         m_outlineMaskShader->setMat4("u_projection",  proj);
-        m_outlineMaskShader->setMat4("u_model", scene.meshGroups[selectedGroup].modelMatrix);
         m_outlineMaskShader->bind();
 #else
         // GL: glUniform* requires the shader to be bound first.
         m_outlineMaskShader->bind();
         m_outlineMaskShader->setMat4("u_view",       view);
         m_outlineMaskShader->setMat4("u_projection", proj);
-        m_outlineMaskShader->setMat4("u_model", scene.meshGroups[selectedGroup].modelMatrix);
 #endif
 
-        auto& maskSubmeshes = scene.meshGroups[selectedGroup].submeshes;
+        auto& maskGroup    = scene.meshGroups[selectedGroup];
+        auto& maskSubmeshes = maskGroup.submeshes;
         for (auto& sm : maskSubmeshes)
         {
             if (selectedObjectName.empty() ||
                 sm.meshData.objectName == selectedObjectName)
+            {
+                m_outlineMaskShader->setMat4("u_model", maskGroup.modelMatrix * sm.modelMatrix);
                 sm.mesh->draw();
+            }
         }
 
         m_outlineMaskShader->unbind();
@@ -2617,15 +2632,17 @@ std::pair<int,int> SceneRenderer::pick(Scene& scene, int pixelX, int pixelY)
     {
         for (int si = 0; si < static_cast<int>(scene.meshGroups[gi].submeshes.size()); ++si)
         {
-            const auto& md      = scene.meshGroups[gi].submeshes[si].meshData;
+            const auto& sm      = scene.meshGroups[gi].submeshes[si];
+            const glm::mat4 M   = scene.meshGroups[gi].modelMatrix * sm.modelMatrix;
+            const auto& md      = sm.meshData;
             const auto& verts   = md.vertices;
             const auto& indices = md.indices;
 
             for (size_t i = 0; i + 2 < indices.size(); i += 3)
             {
-                glm::vec3 v0 = verts[indices[i + 0]].position;
-                glm::vec3 v1 = verts[indices[i + 1]].position;
-                glm::vec3 v2 = verts[indices[i + 2]].position;
+                glm::vec3 v0 = glm::vec3(M * glm::vec4(verts[indices[i + 0]].position, 1.0f));
+                glm::vec3 v1 = glm::vec3(M * glm::vec4(verts[indices[i + 1]].position, 1.0f));
+                glm::vec3 v2 = glm::vec3(M * glm::vec4(verts[indices[i + 2]].position, 1.0f));
 
                 glm::vec3 e1 = v1 - v0;
                 glm::vec3 e2 = v2 - v0;
@@ -2684,10 +2701,10 @@ std::pair<int,int> SceneRenderer::pick(Scene& scene, int pixelX, int pixelY)
     std::vector<std::pair<int,int>> drawToMesh;
     for (int gi = 0; gi < static_cast<int>(scene.meshGroups.size()); ++gi)
     {
-        m_pickShader->setMat4("u_model", scene.meshGroups[gi].modelMatrix);
         for (int si = 0; si < static_cast<int>(scene.meshGroups[gi].submeshes.size()); ++si)
         {
             auto& sm = scene.meshGroups[gi].submeshes[si];
+            m_pickShader->setMat4("u_model", scene.meshGroups[gi].modelMatrix * sm.modelMatrix);
             int drawIdx = static_cast<int>(drawToMesh.size());
             m_pickShader->setInt("u_objectID", drawIdx);
             vex::Texture2D* tex = sm.diffuseTexture

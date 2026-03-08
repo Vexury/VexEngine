@@ -3,6 +3,7 @@
 #include "scene.h"
 #include "scene_renderer.h"
 #include "editor_ui.h"
+#include "command.h"
 
 #include <vex/core/engine.h>
 
@@ -16,11 +17,14 @@ private:
     void handleInput();
     void processPicking();
     void runImport(const std::string& path, const std::string& name);
+    void duplicateSelected();
+    MeshGroupSave saveMeshGroup(int groupIndex) const;
 
     vex::Engine   m_engine;
     Scene         m_scene;
     SceneRenderer m_renderer;
     EditorUI      m_ui;
+    CommandStack  m_cmdStack;
 
     double m_lastMouseX = 0.0;
     double m_lastMouseY = 0.0;

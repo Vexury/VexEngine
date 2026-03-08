@@ -7,6 +7,22 @@
 #include <cfloat>
 #include <unordered_map>
 
+// ── Shared texture loader ─────────────────────────────────────────────────────
+
+using TexCache = std::unordered_map<std::string, std::shared_ptr<vex::Texture2D>>;
+
+static std::shared_ptr<vex::Texture2D> loadTex(const std::string& p, TexCache& cache, int& count)
+{
+    if (p.empty()) return nullptr;
+    auto it = cache.find(p);
+    if (it != cache.end()) return it->second;
+    auto t = vex::Texture2D::createFromFile(p);
+    if (t) ++count;
+    return cache[p] = std::shared_ptr<vex::Texture2D>(std::move(t));
+}
+
+// ── importOBJ ────────────────────────────────────────────────────────────────
+
 bool Scene::importOBJ(const std::string& path, const std::string& name,
                       ProgressFn onProgress)
 {
@@ -19,21 +35,8 @@ bool Scene::importOBJ(const std::string& path, const std::string& name,
     MeshGroup group;
     group.name = name;
 
-    // Texture cache: each unique path is loaded once and shared across submeshes.
-    std::unordered_map<std::string, std::shared_ptr<vex::Texture2D>> texCache;
+    TexCache texCache;
     int texCount = 0;
-
-    auto loadTex = [&](const std::string& p) -> std::shared_ptr<vex::Texture2D>
-    {
-        if (p.empty()) return nullptr;
-        auto it = texCache.find(p);
-        if (it != texCache.end()) return it->second;
-        auto t = vex::Texture2D::createFromFile(p);
-        if (t) ++texCount;
-        auto sp = std::shared_ptr<vex::Texture2D>(std::move(t));
-        texCache[p] = sp;
-        return sp;
-    };
 
     if (onProgress) onProgress("Uploading meshes and textures...", 0.3f);
 
@@ -58,11 +61,11 @@ bool Scene::importOBJ(const std::string& path, const std::string& name,
             ? "Submesh " + std::to_string(i)
             : submeshes[i].name;
         sm.mesh             = std::move(mesh);
-        sm.diffuseTexture   = loadTex(submeshes[i].diffuseTexturePath);
-        sm.normalTexture    = loadTex(submeshes[i].normalTexturePath);
-        sm.roughnessTexture = loadTex(submeshes[i].roughnessTexturePath);
-        sm.metallicTexture  = loadTex(submeshes[i].metallicTexturePath);
-        sm.emissiveTexture  = loadTex(submeshes[i].emissiveTexturePath);
+        sm.diffuseTexture   = loadTex(submeshes[i].diffuseTexturePath,   texCache, texCount);
+        sm.normalTexture    = loadTex(submeshes[i].normalTexturePath,     texCache, texCount);
+        sm.roughnessTexture = loadTex(submeshes[i].roughnessTexturePath,  texCache, texCount);
+        sm.metallicTexture  = loadTex(submeshes[i].metallicTexturePath,   texCache, texCount);
+        sm.emissiveTexture  = loadTex(submeshes[i].emissiveTexturePath,   texCache, texCount);
         sm.meshData         = submeshes[i];
         sm.vertexCount      = vc;
         sm.indexCount       = ic;
@@ -79,4 +82,52 @@ bool Scene::importOBJ(const std::string& path, const std::string& name,
                        + " (shared across " + std::to_string(submeshes.size()) + " submeshes)");
 
     return true;
+}
+
+// ── addMeshGroupFromSave ──────────────────────────────────────────────────────
+
+void Scene::addMeshGroupFromSave(const MeshGroupSave& save, int insertAt)
+{
+    MeshGroup group;
+    group.name        = save.name;
+    group.center      = save.center;
+    group.radius      = save.radius;
+    group.modelMatrix = save.modelMatrix;
+
+    TexCache texCache;
+    int texCount = 0;
+
+    vex::Mesh::beginBatchUpload();
+    for (size_t i = 0; i < save.submeshes.size(); ++i)
+    {
+        const auto& ss = save.submeshes[i];
+
+        auto mesh = vex::Mesh::create();
+        mesh->upload(ss.meshData);
+
+        SceneMesh sm;
+        sm.name             = ss.name;
+        sm.mesh             = std::move(mesh);
+        sm.diffuseTexture   = loadTex(ss.meshData.diffuseTexturePath,   texCache, texCount);
+        sm.normalTexture    = loadTex(ss.meshData.normalTexturePath,     texCache, texCount);
+        sm.roughnessTexture = loadTex(ss.meshData.roughnessTexturePath,  texCache, texCount);
+        sm.metallicTexture  = loadTex(ss.meshData.metallicTexturePath,   texCache, texCount);
+        sm.emissiveTexture  = loadTex(ss.meshData.emissiveTexturePath,   texCache, texCount);
+        sm.meshData         = ss.meshData;
+        sm.modelMatrix      = ss.modelMatrix;
+        sm.vertexCount      = static_cast<uint32_t>(ss.meshData.vertices.size());
+        sm.indexCount       = static_cast<uint32_t>(ss.meshData.indices.size());
+        group.submeshes.push_back(std::move(sm));
+    }
+    vex::Mesh::endBatchUpload();
+
+    if (insertAt < 0 || insertAt >= static_cast<int>(meshGroups.size()))
+    {
+        meshGroups.push_back(std::move(group));
+    }
+    else
+    {
+        meshGroups.insert(meshGroups.begin() + insertAt, std::move(group));
+    }
+    geometryDirty = true;
 }

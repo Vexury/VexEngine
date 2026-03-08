@@ -6,6 +6,8 @@
 #include <vex/graphics/texture.h>
 #include <vex/scene/mesh_data.h>
 
+#include "mesh_group_save.h"
+
 #include <glm/glm.hpp>
 
 #include <cmath>
@@ -24,6 +26,7 @@ struct SceneMesh
     std::shared_ptr<vex::Texture2D> metallicTexture;
     std::shared_ptr<vex::Texture2D> emissiveTexture;
     vex::MeshData meshData;
+    glm::mat4 modelMatrix = glm::mat4(1.0f);  // local transform relative to group
     uint32_t vertexCount = 0;
     uint32_t indexCount  = 0;
 };
@@ -108,4 +111,8 @@ struct Scene
     using ProgressFn = std::function<void(const std::string& stage, float progress)>;
     bool importOBJ(const std::string& path, const std::string& name,
                    ProgressFn onProgress = nullptr);
+
+    // Recreate GPU resources from a CPU save and add the group to the scene.
+    // insertAt = -1 → append; otherwise inserts at that index.
+    void addMeshGroupFromSave(const MeshGroupSave& save, int insertAt = -1);
 };

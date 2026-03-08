@@ -3,9 +3,11 @@
 #include <vex/core/window.h>
 #include <vex/core/log.h>
 #include <vex/graphics/graphics_context.h>
+#include <vex/scene/primitives.h>
 
 #include <imgui.h>
 #include <GLFW/glfw3.h>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -20,6 +22,32 @@
 
 static constexpr float ORBIT_SENSITIVITY = 0.005f;
 static constexpr float PAN_SENSITIVITY   = 0.002f;
+
+// ── Primitive helpers ─────────────────────────────────────────────────────────
+
+static vex::MeshData generatePrimitive(EditorUI::PrimitiveType type)
+{
+    switch (type)
+    {
+        case EditorUI::PrimitiveType::Plane:    return vex::Primitives::makePlane();
+        case EditorUI::PrimitiveType::Cube:     return vex::Primitives::makeCube();
+        case EditorUI::PrimitiveType::Sphere:   return vex::Primitives::makeUVSphere();
+        case EditorUI::PrimitiveType::Cylinder: return vex::Primitives::makeCylinder();
+        default: return {};
+    }
+}
+
+static const char* primitiveTypeName(EditorUI::PrimitiveType type)
+{
+    switch (type)
+    {
+        case EditorUI::PrimitiveType::Plane:    return "Plane";
+        case EditorUI::PrimitiveType::Cube:     return "Cube";
+        case EditorUI::PrimitiveType::Sphere:   return "Sphere";
+        case EditorUI::PrimitiveType::Cylinder: return "Cylinder";
+        default: return "Primitive";
+    }
+}
 
 bool App::init(const vex::EngineConfig& config)
 {
@@ -70,6 +98,39 @@ bool App::init(const vex::EngineConfig& config)
     });
 
     return true;
+}
+
+MeshGroupSave App::saveMeshGroup(int idx) const
+{
+    const auto& group = m_scene.meshGroups[idx];
+    MeshGroupSave save;
+    save.name        = group.name;
+    save.center      = group.center;
+    save.radius      = group.radius;
+    save.modelMatrix = group.modelMatrix;
+    for (const auto& sm : group.submeshes)
+    {
+        SubmeshSave ss;
+        ss.name        = sm.name;
+        ss.meshData    = sm.meshData;
+        ss.modelMatrix = sm.modelMatrix;
+        save.submeshes.push_back(std::move(ss));
+    }
+    return save;
+}
+
+void App::duplicateSelected()
+{
+    int idx = m_ui.getSelectedMeshGroup();
+    if (idx < 0 || idx >= static_cast<int>(m_scene.meshGroups.size())) return;
+
+    MeshGroupSave save = saveMeshGroup(idx);
+    save.name += " (Copy)";
+    save.modelMatrix = glm::translate(save.modelMatrix, {0.3f, 0.f, 0.f});
+
+    int newIdx = static_cast<int>(m_scene.meshGroups.size());
+    auto cmd = std::make_unique<CmdAddMeshGroup>(std::move(save), newIdx);
+    m_cmdStack.execute(std::move(cmd), m_scene, m_renderer, m_ui);
 }
 
 void App::handleInput()
@@ -128,7 +189,36 @@ void App::handleInput()
         m_panning = false;
     }
 
-    // DEL key deletion (works from any focused window)
+    // Undo / Redo
+    {
+        bool ctrl = ImGui::GetIO().KeyCtrl;
+        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Z))
+            m_cmdStack.undo(m_scene, m_renderer, m_ui);
+        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Y))
+            m_cmdStack.redo(m_scene, m_renderer, m_ui);
+        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_D))
+            duplicateSelected();
+    }
+
+    // Gizmo transform commit → push undo command
+    {
+        EditorUI::TransformCommit tc;
+        if (m_ui.consumeTransformCommit(tc))
+        {
+            // Only push if the transform actually changed
+            bool changed = false;
+            for (int i = 0; i < 4 && !changed; ++i)
+                for (int j = 0; j < 4 && !changed; ++j)
+                    changed = (tc.before[i][j] != tc.after[i][j]);
+            if (changed)
+            {
+                auto cmd = std::make_unique<CmdSetTransform>(tc.groupIndex, tc.submeshIndex, tc.objectName, tc.before, tc.after);
+                m_cmdStack.pushUndoOnly(std::move(cmd));
+            }
+        }
+    }
+
+    // DEL key deletion — routed through command stack for undo support
     if (ImGui::IsKeyPressed(ImGuiKey_Delete))
     {
         switch (m_ui.getSelectionType())
@@ -138,12 +228,13 @@ void App::handleInput()
                 int idx = m_ui.getSelectionIndex();
                 if (idx >= 0 && idx < static_cast<int>(m_scene.meshGroups.size()))
                 {
-                    vex::Log::info("Deleted: " + m_scene.meshGroups[idx].name);
-                    m_renderer.waitIdle();
-                    m_scene.meshGroups.erase(m_scene.meshGroups.begin() + idx);
-                    m_scene.geometryDirty = true;
+                    auto cmd = std::make_unique<CmdDeleteMeshGroup>(saveMeshGroup(idx), idx);
+                    m_cmdStack.execute(std::move(cmd), m_scene, m_renderer, m_ui);
                 }
-                m_ui.clearSelection();
+                else
+                {
+                    m_ui.clearSelection();
+                }
                 break;
             }
             case Selection::Volume:
@@ -151,10 +242,13 @@ void App::handleInput()
                 int idx = m_ui.getSelectionIndex();
                 if (idx >= 0 && idx < static_cast<int>(m_scene.volumes.size()))
                 {
-                    vex::Log::info("Deleted volume: " + m_scene.volumes[idx].name);
-                    m_scene.volumes.erase(m_scene.volumes.begin() + idx);
+                    auto cmd = std::make_unique<CmdDeleteVolume>(m_scene.volumes[idx], idx);
+                    m_cmdStack.execute(std::move(cmd), m_scene, m_renderer, m_ui);
                 }
-                m_ui.clearSelection();
+                else
+                {
+                    m_ui.clearSelection();
+                }
                 break;
             }
             default:
@@ -192,11 +286,13 @@ void App::handleInput()
     }
 
     // W/E/R: gizmo mode shortcuts (Translate / Rotate / Scale)
+    // G: toggle local/global transform space
     if (m_ui.isViewportHovered())
     {
         if (ImGui::IsKeyPressed(ImGuiKey_W)) m_ui.setGizmoMode(0);
         if (ImGui::IsKeyPressed(ImGuiKey_E)) m_ui.setGizmoMode(1);
         if (ImGui::IsKeyPressed(ImGuiKey_R)) m_ui.setGizmoMode(2);
+        if (ImGui::IsKeyPressed(ImGuiKey_G)) m_ui.toggleGizmoLocal();
     }
 
     // F key: focus camera on selected object
@@ -279,10 +375,57 @@ void App::run()
 {
     while (m_engine.isRunning())
     {
+        // Handle deferred primitive creation
+        {
+            EditorUI::PrimitiveType primType;
+            if (m_ui.consumePendingPrimitive(primType))
+            {
+                vex::MeshData md = generatePrimitive(primType);
+                const char*   nm = primitiveTypeName(primType);
+
+                MeshGroupSave save;
+                save.name        = nm;
+                save.center      = {0.f, 0.f, 0.f};
+                save.radius      = 1.0f;
+                save.modelMatrix = glm::mat4(1.f);
+                SubmeshSave ss;
+                ss.name     = nm;
+                ss.meshData = std::move(md);
+                save.submeshes.push_back(std::move(ss));
+
+                int newIdx = static_cast<int>(m_scene.meshGroups.size());
+                auto cmd = std::make_unique<CmdAddMeshGroup>(std::move(save), newIdx);
+                m_cmdStack.execute(std::move(cmd), m_scene, m_renderer, m_ui);
+            }
+        }
+
+        // Handle deferred volume add
+        if (m_ui.consumePendingAddVolume())
+        {
+            SceneVolume v;
+            v.name = "Volume";
+            int newIdx = static_cast<int>(m_scene.volumes.size());
+            auto cmd = std::make_unique<CmdAddVolume>(v, newIdx);
+            m_cmdStack.execute(std::move(cmd), m_scene, m_renderer, m_ui);
+        }
+
+        // Handle deferred duplicate
+        if (m_ui.consumePendingDuplicate())
+            duplicateSelected();
+
         // Handle any deferred import between frames so we can pump the loading overlay.
         std::string importPath, importName;
         if (m_ui.consumePendingImport(importPath, importName))
+        {
+            int prevCount = static_cast<int>(m_scene.meshGroups.size());
             runImport(importPath, importName);
+            if (static_cast<int>(m_scene.meshGroups.size()) > prevCount)
+            {
+                int newIdx = static_cast<int>(m_scene.meshGroups.size()) - 1;
+                auto cmd = std::make_unique<CmdAddMeshGroup>(saveMeshGroup(newIdx), newIdx);
+                m_cmdStack.pushUndoOnly(std::move(cmd));
+            }
+        }
 
         m_engine.beginFrame();
         handleInput();

@@ -26,10 +26,14 @@ layout(set = 0, binding = 0) uniform UBO {
     float _pad7a;
     float _pad7b;
     float _pad7c;
-    mat4  model;
 };
+
+// Per-draw model matrix pushed as vertex-stage push constant (offset 0, 64 bytes).
+layout(push_constant) uniform PC {
+    mat4 model;
+} pc;
 
 void main()
 {
-    gl_Position = sunShadowVP * model * vec4(aPos, 1.0);
+    gl_Position = sunShadowVP * pc.model * vec4(aPos, 1.0);
 }

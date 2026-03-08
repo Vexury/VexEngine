@@ -31,7 +31,7 @@ layout(set = 0, binding = 0) uniform UBO {
     float shadowNormalBias; // world-space normal offset per shadow texel
     float _pad7b;
     float _pad7c;
-    mat4  model;
+    // model moved to vertex-stage push constant
 };
 
 layout(set = 1, binding = 0) uniform sampler2D u_diffuseMap;
@@ -42,23 +42,24 @@ layout(set = 5, binding = 0) uniform sampler2D u_emissiveMap;
 layout(set = 6, binding = 0) uniform sampler2D u_envMap;
 layout(set = 7, binding = 0) uniform sampler2DShadow u_shadowMap;
 
+// Fragment push constants start at offset 64 (after the 64-byte vertex model matrix).
 layout(push_constant) uniform PC {
-    uint  alphaClip;
-    int   debugMode;
-    float nearPlane;
-    float farPlane;
-    int   materialType;
-    float roughness;
-    float metallic;
-    uint  hasNormalMap;
-    uint  hasRoughnessMap;
-    uint  hasMetallicMap;
-    uint  flipV;          // offset 40 — unused here, keeps offsets aligned
-    float sampleCount;    // offset 44 — unused here
-    float exposure;       // offset 48 — unused here
-    float gamma;          // offset 52 — unused here
-    uint  enableACES;     // offset 56 — unused here
-    uint  hasEmissiveMap; // offset 60
+    layout(offset = 64)  uint  alphaClip;
+    layout(offset = 68)  int   debugMode;
+    layout(offset = 72)  float nearPlane;
+    layout(offset = 76)  float farPlane;
+    layout(offset = 80)  int   materialType;
+    layout(offset = 84)  float roughness;
+    layout(offset = 88)  float metallic;
+    layout(offset = 92)  uint  hasNormalMap;
+    layout(offset = 96)  uint  hasRoughnessMap;
+    layout(offset = 100) uint  hasMetallicMap;
+    layout(offset = 104) uint  flipV;
+    layout(offset = 108) float sampleCount;    // unused here
+    layout(offset = 112) float exposure;       // unused here
+    layout(offset = 116) float gamma;          // unused here
+    layout(offset = 120) uint  enableACES;     // unused here
+    layout(offset = 124) uint  hasEmissiveMap;
 } pc;
 
 layout(location = 0) out vec4 FragColor;
