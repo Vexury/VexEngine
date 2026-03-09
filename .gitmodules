@@ -26,3 +26,6 @@
 [submodule "VexAssetsCC0"]
 	path = VexAssetsCC0
 	url = https://github.com/Vexury/VexAssetsCC0.git
+[submodule "external/nativefiledialog-extended"]
+	path = external/nativefiledialog-extended
+	url = https://github.com/btzy/nativefiledialog-extended

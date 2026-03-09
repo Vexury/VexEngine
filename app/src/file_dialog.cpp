@@ -1,127 +1,45 @@
 #include "file_dialog.h"
 
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <shobjidl.h>   // IFileOpenDialog / IFileSaveDialog
-#include <shlwapi.h>
-#pragma comment(lib, "shlwapi.lib")
-#pragma comment(lib, "ole32.lib")
+#include <nfd.h>
 
-// Helper: open IFileOpenDialog with a given filter, returns selected path or "".
-static std::string showOpenDialog(const wchar_t* filterName, const wchar_t* filterSpec,
-                                   HWND parentHwnd)
+std::string openObjFileDialog()
 {
-    std::string result;
-
-    IFileOpenDialog* pfd = nullptr;
-    HRESULT hr = CoCreateInstance(CLSID_FileOpenDialog, nullptr,
-                                   CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&pfd));
-    if (FAILED(hr)) return result;
-
-    COMDLG_FILTERSPEC filter{ filterName, filterSpec };
-    pfd->SetFileTypes(1, &filter);
-    pfd->SetFileTypeIndex(1);
-
-    DWORD flags = 0;
-    pfd->GetOptions(&flags);
-    pfd->SetOptions(flags | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST | FOS_NOCHANGEDIR);
-
-    hr = pfd->Show(parentHwnd);
-    if (SUCCEEDED(hr))
+    nfdu8char_t* outPath = nullptr;
+    nfdu8filteritem_t filter = { "OBJ Files", "obj" };
+    nfdresult_t result = NFD_OpenDialogU8(&outPath, &filter, 1, nullptr);
+    if (result == NFD_OKAY)
     {
-        IShellItem* psi = nullptr;
-        if (SUCCEEDED(pfd->GetResult(&psi)))
-        {
-            wchar_t* pszPath = nullptr;
-            if (SUCCEEDED(psi->GetDisplayName(SIGDN_FILESYSPATH, &pszPath)))
-            {
-                // Convert wide string to narrow
-                int len = WideCharToMultiByte(CP_UTF8, 0, pszPath, -1,
-                                              nullptr, 0, nullptr, nullptr);
-                if (len > 0)
-                {
-                    result.resize(len - 1);
-                    WideCharToMultiByte(CP_UTF8, 0, pszPath, -1,
-                                        result.data(), len, nullptr, nullptr);
-                }
-                CoTaskMemFree(pszPath);
-            }
-            psi->Release();
-        }
+        std::string path(outPath);
+        NFD_FreePathU8(outPath);
+        return path;
     }
-    pfd->Release();
-    return result;
-}
-
-static std::string showSaveDialog(const wchar_t* filterName,
-                                   const wchar_t* filterSpec,
-                                   const wchar_t* defaultExt,
-                                   HWND parentHwnd)
-{
-    std::string result;
-
-    IFileSaveDialog* pfd = nullptr;
-    HRESULT hr = CoCreateInstance(CLSID_FileSaveDialog, nullptr,
-                                   CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&pfd));
-    if (FAILED(hr)) return result;
-
-    COMDLG_FILTERSPEC filter{ filterName, filterSpec };
-    pfd->SetFileTypes(1, &filter);
-    pfd->SetFileTypeIndex(1);
-    pfd->SetDefaultExtension(defaultExt);
-
-    DWORD flags = 0;
-    pfd->GetOptions(&flags);
-    pfd->SetOptions(flags | FOS_OVERWRITEPROMPT | FOS_NOCHANGEDIR);
-
-    hr = pfd->Show(parentHwnd);
-    if (SUCCEEDED(hr))
-    {
-        IShellItem* psi = nullptr;
-        if (SUCCEEDED(pfd->GetResult(&psi)))
-        {
-            wchar_t* pszPath = nullptr;
-            if (SUCCEEDED(psi->GetDisplayName(SIGDN_FILESYSPATH, &pszPath)))
-            {
-                int len = WideCharToMultiByte(CP_UTF8, 0, pszPath, -1,
-                                              nullptr, 0, nullptr, nullptr);
-                if (len > 0)
-                {
-                    result.resize(len - 1);
-                    WideCharToMultiByte(CP_UTF8, 0, pszPath, -1,
-                                        result.data(), len, nullptr, nullptr);
-                }
-                CoTaskMemFree(pszPath);
-            }
-            psi->Release();
-        }
-    }
-    pfd->Release();
-    return result;
-}
-#endif
-
-std::string openObjFileDialog(void* parentHwnd)
-{
-#ifdef _WIN32
-    return showOpenDialog(L"OBJ Files (*.obj)", L"*.obj", static_cast<HWND>(parentHwnd));
-#endif
     return {};
 }
 
-std::string openHdrFileDialog(void* parentHwnd)
+std::string openHdrFileDialog()
 {
-#ifdef _WIN32
-    return showOpenDialog(L"HDR / Image Files", L"*.hdr;*.jpg;*.png", static_cast<HWND>(parentHwnd));
-#endif
+    nfdu8char_t* outPath = nullptr;
+    nfdu8filteritem_t filter = { "Image Files", "hdr,jpg,png" };
+    nfdresult_t result = NFD_OpenDialogU8(&outPath, &filter, 1, nullptr);
+    if (result == NFD_OKAY)
+    {
+        std::string path(outPath);
+        NFD_FreePathU8(outPath);
+        return path;
+    }
     return {};
 }
 
-std::string saveImageFileDialog(void* parentHwnd)
+std::string saveImageFileDialog()
 {
-#ifdef _WIN32
-    return showSaveDialog(L"PNG Image (*.png)", L"*.png", L"png", static_cast<HWND>(parentHwnd));
-#endif
+    nfdu8char_t* outPath = nullptr;
+    nfdu8filteritem_t filter = { "PNG Image", "png" };
+    nfdresult_t result = NFD_SaveDialogU8(&outPath, &filter, 1, nullptr, nullptr);
+    if (result == NFD_OKAY)
+    {
+        std::string path(outPath);
+        NFD_FreePathU8(outPath);
+        return path;
+    }
     return {};
 }

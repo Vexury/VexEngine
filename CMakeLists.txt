@@ -48,6 +48,11 @@ add_subdirectory(cmake/modules/stb)
 # tinyexr
 add_subdirectory(cmake/modules/tinyexr)
 
+# NFD Extended (native file dialogs, cross-platform)
+set(NFD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(NFD_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory(external/nativefiledialog-extended)
+
 # OIDN (optional, CPU-side denoising)
 set(OpenImageDenoise_DIR "${CMAKE_SOURCE_DIR}/external/oidn-2.4.1.x64.windows/lib/cmake/OpenImageDenoise-2.4.1")
 find_package(OpenImageDenoise QUIET)

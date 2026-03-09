@@ -40,7 +40,7 @@ bool Denoiser::denoise(float* rgb, uint32_t width, uint32_t height)
     OIDNFilter filter = oidnNewFilter(dev, "RT");
     oidnSetSharedFilterImage(filter, "color",  rgb, OIDN_FORMAT_FLOAT3, width, height, 0, 0, 0);
     oidnSetSharedFilterImage(filter, "output", rgb, OIDN_FORMAT_FLOAT3, width, height, 0, 0, 0);
-    oidnSetFilter1b(filter, "hdr", true);
+    oidnSetFilterBool(filter, "hdr", true);
     oidnCommitFilter(filter);
     oidnExecuteFilter(filter);
     oidnReleaseFilter(filter);

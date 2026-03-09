@@ -15,7 +15,7 @@ elseif(VEX_BACKEND STREQUAL "Vulkan")
     target_link_libraries(vex_app PRIVATE vex_vulkan)
 endif()
 
-target_link_libraries(vex_app PRIVATE tinyexr)
+target_link_libraries(vex_app PRIVATE tinyexr nfd)
 
 if(OpenImageDenoise_FOUND)
     target_link_libraries(vex_app PRIVATE OpenImageDenoise)

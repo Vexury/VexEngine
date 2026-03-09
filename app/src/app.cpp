@@ -14,11 +14,7 @@
 #include <cstdio>
 #include <ctime>
 
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <objbase.h>
-#endif
+#include <nfd.h>
 
 static constexpr float ORBIT_SENSITIVITY = 0.005f;
 static constexpr float PAN_SENSITIVITY   = 0.002f;
@@ -51,9 +47,7 @@ static const char* primitiveTypeName(EditorUI::PrimitiveType type)
 
 bool App::init(const vex::EngineConfig& config)
 {
-#ifdef _WIN32
-    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-#endif
+    NFD_Init();
 
     if (!m_engine.init(config))
         return false;
@@ -451,7 +445,5 @@ void App::shutdown()
     m_scene.meshGroups.clear();
     m_scene.skybox.reset();
     m_engine.shutdown();
-#ifdef _WIN32
-    CoUninitialize();
-#endif
+    NFD_Quit();
 }

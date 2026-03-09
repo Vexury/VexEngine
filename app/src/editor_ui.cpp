@@ -784,9 +784,8 @@ void EditorUI::renderHierarchy(Scene& scene, SceneRenderer& renderer)
     // Import button
     if (ImGui::Button("Import OBJ..."))
     {
-        void* hwnd = ImGui::GetMainViewport()->PlatformHandleRaw;
         vex::Log::info("File dialog opened");
-        std::string path = openObjFileDialog(hwnd);
+        std::string path = openObjFileDialog();
         vex::Log::info(path.empty() ? "File dialog cancelled" : "File dialog closed: " + path);
         if (!path.empty())
         {
@@ -808,8 +807,7 @@ void EditorUI::renderHierarchy(Scene& scene, SceneRenderer& renderer)
     ImGui::SameLine();
     if (ImGui::Button("Save Image..."))
     {
-        void* hwnd = ImGui::GetMainViewport()->PlatformHandleRaw;
-        std::string path = saveImageFileDialog(hwnd);
+        std::string path = saveImageFileDialog();
         if (!path.empty())
         {
             if (renderer.saveImage(path))
@@ -1210,7 +1208,7 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
             }
             if (ImGui::Button("Load from file..."))
             {
-                std::string hdrPath = openHdrFileDialog(ImGui::GetMainViewport()->PlatformHandleRaw);
+                std::string hdrPath = openHdrFileDialog();
                 if (!hdrPath.empty())
                 {
                     scene.customEnvmapPath = hdrPath;
@@ -1273,7 +1271,7 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
 
                     if (ImGui::Button("Save Shadow Map..."))
                     {
-                        std::string savePath = saveImageFileDialog(ImGui::GetMainViewport()->PlatformHandleRaw);
+                        std::string savePath = saveImageFileDialog();
                         if (!savePath.empty())
                         {
                             if (renderer.saveShadowMap(savePath))
