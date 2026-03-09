@@ -107,15 +107,15 @@ MeshData Primitives::makeUVSphere(float r, int stacks, int slices)
     for (int i = 0; i <= stacks; ++i)
     {
         float theta = static_cast<float>(i) / static_cast<float>(stacks) * PI;
-        float sinT  = std::sinf(theta);
-        float cosT  = std::cosf(theta);
+        float sinT  = std::sin(theta);
+        float cosT  = std::cos(theta);
         float v     = static_cast<float>(i) / static_cast<float>(stacks);
 
         for (int j = 0; j <= slices; ++j)
         {
             float phi  = static_cast<float>(j) / static_cast<float>(slices) * 2.f * PI;
-            float sinP = std::sinf(phi);
-            float cosP = std::cosf(phi);
+            float sinP = std::sin(phi);
+            float cosP = std::cos(phi);
             float u    = static_cast<float>(j) / static_cast<float>(slices);
 
             glm::vec3 pos  = { r * sinT * cosP, r * cosT, r * sinT * sinP };
@@ -160,8 +160,8 @@ MeshData Primitives::makeCylinder(float r, float h, int slices)
     for (int j = 0; j <= slices; ++j)
     {
         float phi  = static_cast<float>(j) / static_cast<float>(slices) * 2.f * PI;
-        float cosP = std::cosf(phi);
-        float sinP = std::sinf(phi);
+        float cosP = std::cos(phi);
+        float sinP = std::sin(phi);
         float u    = static_cast<float>(j) / static_cast<float>(slices);
 
         glm::vec3 norm = { cosP, 0.f, sinP };
@@ -191,8 +191,8 @@ MeshData Primitives::makeCylinder(float r, float h, int slices)
     for (int j = 0; j < slices; ++j)
     {
         float phi  = static_cast<float>(j) / static_cast<float>(slices) * 2.f * PI;
-        float cosP = std::cosf(phi);
-        float sinP = std::sinf(phi);
+        float cosP = std::cos(phi);
+        float sinP = std::sin(phi);
         glm::vec2 uv = {0.5f + 0.5f * cosP, 0.5f - 0.5f * sinP};
         md.vertices.push_back(makeVtx({r*cosP, hh, r*sinP}, {0,1,0}, uv, {1,0,0,1}));
     }
@@ -212,8 +212,8 @@ MeshData Primitives::makeCylinder(float r, float h, int slices)
     for (int j = 0; j < slices; ++j)
     {
         float phi  = static_cast<float>(j) / static_cast<float>(slices) * 2.f * PI;
-        float cosP = std::cosf(phi);
-        float sinP = std::sinf(phi);
+        float cosP = std::cos(phi);
+        float sinP = std::sin(phi);
         glm::vec2 uv = {0.5f + 0.5f * cosP, 0.5f + 0.5f * sinP};
         md.vertices.push_back(makeVtx({r*cosP, -hh, r*sinP}, {0,-1,0}, uv, {1,0,0,1}));
     }

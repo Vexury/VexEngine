@@ -10,9 +10,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
-#include <chrono>
 #include <cstdio>
-#include <ctime>
 
 #include <nfd.h>
 
@@ -49,7 +47,7 @@ bool App::init(const vex::EngineConfig& config)
 {
     NFD_Init();
 
-    if (!m_engine.init(config))
+    if (!m_engine.init(config, [] { return vex::GraphicsContext::create(); }))
         return false;
 
     if (config.headless)
@@ -248,28 +246,6 @@ void App::handleInput()
             default:
                 break;
         }
-    }
-
-    // F12: save screenshot with timestamped filename
-    if (ImGui::IsKeyPressed(ImGuiKey_F12))
-    {
-        auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-        std::tm tm = {};
-#ifdef _WIN32
-        localtime_s(&tm, &now);
-#else
-        localtime_r(&now, &tm);
-#endif
-        char buf[64];
-        std::snprintf(buf, sizeof(buf), "render_%04d%02d%02d_%02d%02d%02d.png",
-                      tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-                      tm.tm_hour, tm.tm_min, tm.tm_sec);
-        std::string path(buf);
-
-        if (m_renderer.saveImage(path))
-            vex::Log::info("Saved screenshot: " + path);
-        else
-            vex::Log::error("Failed to save screenshot: " + path);
     }
 
     // F5: reload GPU path tracer compute shader from disk

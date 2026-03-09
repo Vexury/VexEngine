@@ -14,7 +14,7 @@ Engine::~Engine()
     shutdown();
 }
 
-bool Engine::init(const EngineConfig& config)
+bool Engine::init(const EngineConfig& config, ContextFactory contextFactory)
 {
     m_headless = config.headless;
 
@@ -25,7 +25,7 @@ bool Engine::init(const EngineConfig& config)
         return true;
     }
 
-    m_context = GraphicsContext::create();
+    m_context = contextFactory();
     if (!m_context)
     {
         Log::error("Failed to create graphics context");

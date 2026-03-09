@@ -20,15 +20,33 @@ target_link_libraries(vex_app PRIVATE tinyexr nfd)
 if(OpenImageDenoise_FOUND)
     target_link_libraries(vex_app PRIVATE OpenImageDenoise)
     target_compile_definitions(vex_app PRIVATE VEX_HAS_OIDN)
-    add_custom_command(TARGET vex_app POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/external/oidn-2.4.1.x64.windows/bin/OpenImageDenoise.dll"
-            "${CMAKE_SOURCE_DIR}/external/oidn-2.4.1.x64.windows/bin/OpenImageDenoise_core.dll"
-            "${CMAKE_SOURCE_DIR}/external/oidn-2.4.1.x64.windows/bin/OpenImageDenoise_device_cpu.dll"
-            "${CMAKE_SOURCE_DIR}/external/oidn-2.4.1.x64.windows/bin/tbb12.dll"
-            $<TARGET_FILE_DIR:vex_app>
-        COMMENT "Copying OIDN runtime DLLs"
-    )
+    set(_oidn_base "${CMAKE_SOURCE_DIR}/external/${OIDN_PLATFORM_DIR}")
+    if(WIN32)
+        set(_oidn_runtime_files
+            "${_oidn_base}/bin/OpenImageDenoise.dll"
+            "${_oidn_base}/bin/OpenImageDenoise_core.dll"
+            "${_oidn_base}/bin/OpenImageDenoise_device_cpu.dll"
+            "${_oidn_base}/bin/tbb12.dll"
+        )
+    elseif(APPLE)
+        file(GLOB _oidn_runtime_files
+            "${_oidn_base}/lib/libOpenImageDenoise*.dylib"
+            "${_oidn_base}/lib/libtbb*.dylib"
+        )
+    else()
+        file(GLOB _oidn_runtime_files
+            "${_oidn_base}/lib/libOpenImageDenoise*.so*"
+            "${_oidn_base}/lib/libtbb*.so*"
+        )
+    endif()
+    if(_oidn_runtime_files)
+        add_custom_command(TARGET vex_app POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${_oidn_runtime_files}
+                $<TARGET_FILE_DIR:vex_app>
+            COMMENT "Copying OIDN runtime libraries"
+        )
+    endif()
 endif()
 
 # Compile Vulkan shaders to SPIR-V

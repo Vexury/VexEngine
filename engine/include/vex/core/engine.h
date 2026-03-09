@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -29,7 +30,8 @@ public:
     Engine(const Engine&) = delete;
     Engine& operator=(const Engine&) = delete;
 
-    bool init(const EngineConfig& config);
+    using ContextFactory = std::function<std::unique_ptr<GraphicsContext>()>;
+    bool init(const EngineConfig& config, ContextFactory contextFactory);
     void shutdown();
 
     void beginFrame();

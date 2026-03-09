@@ -260,7 +260,6 @@ void EditorUI::renderViewport(SceneRenderer& renderer, Scene& scene)
                 ImGui::TextDisabled("Scene");
                 row("Ctrl+D",     "Duplicate selected");
                 row("Ctrl+Z / Y", "Undo / Redo");
-                row("F12",        "Save screenshot");
                 row("F5",         "Reload GPU shader  (RT mode)");
 
                 ImGui::EndTooltip();
@@ -834,12 +833,6 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
 
                 const char* matTypes[] = { "Microfacet (GGX)", "Mirror", "Dielectric" };
                 bool isRasterize = (renderer.getRenderMode() == RenderMode::Rasterize);
-                auto texName = [](const std::string& path) -> const char* {
-                    if (path.empty()) return "none";
-                    auto s = path.find_last_of("/\\");
-                    return path.c_str() + (s != std::string::npos ? s + 1 : 0);
-                };
-
                 // Draws full material + texture info for one submesh (used at both levels)
                 auto drawSubmeshMaterial = [&](auto& sm)
                 {
