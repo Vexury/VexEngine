@@ -3,7 +3,7 @@
 A C++ rendering engine with an interactive editor, supporting both real-time rasterization and path tracing.
 
 ![VexEngine path traced render](renders/bistro_path_traced.png)
-*Scene: Nvidia [Amazon Lumberyard Bistro](https://developer.nvidia.com/orca/amazon-lumberyard-bistro) (CC-BY 4.0)*
+*Scene: Nvidia [Amazon Lumberyard Bistro](https://developer.nvidia.com/orca/amazon-lumberyard-bistro) (CC-BY 4.0)* rendered with VexEngine
 
 ## Features
 
