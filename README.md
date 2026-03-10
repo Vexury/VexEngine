@@ -64,11 +64,11 @@ git submodule update --init --recursive
 Then configure and build using CMake presets:
 
 ```sh
-# OpenGL (recommended)
+# OpenGL (less overhead)
 cmake --preset opengl-release
 cmake --build build-gl --config Release
 
-# Vulkan
+# Vulkan (for hardware-accelerated raytracing)
 cmake --preset vulkan-release
 cmake --build build-vk --config Release
 ```
