@@ -1358,8 +1358,33 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
 {
     ImGui::Begin("Settings");
 
-    const char* renderModes[] = { "Rasterization", "CPU Raytracing", "GPU Raytracing" };
-    ImGui::Combo("Render Mode", &m_renderModeIndex, renderModes, static_cast<int>(std::size(renderModes)));
+    // 2x2 render mode tile picker
+    {
+        const char* tileLabels[4] = {
+            "Rasterization",
+            "CPU Path Tracing",
+            "GPU Path Tracing (HW RT)",
+            "GPU Path Tracing (Compute)",
+        };
+        const float tileW = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+        const float tileH = 48.0f;
+        for (int i = 0; i < 4; ++i)
+        {
+            if (i % 2 != 0) ImGui::SameLine();
+            bool active = (m_renderModeIndex == i);
+            if (active)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Button,        ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            }
+            ImGui::PushID(i);
+            if (ImGui::Button(tileLabels[i], ImVec2(tileW, tileH)))
+                m_renderModeIndex = i;
+            ImGui::PopID();
+            if (active)
+                ImGui::PopStyleColor(2);
+        }
+    }
 
     if (m_renderModeIndex == 0)
     {
@@ -1676,6 +1701,148 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
             ImGui::TextDisabled("= %.0e", renderer.getGPURayEps());
         }
     }
+#ifdef VEX_BACKEND_VULKAN
+    else if (m_renderModeIndex == 3)
+    {
+        {
+            uint32_t samples = renderer.getRaytraceSampleCount();
+            uint32_t maxSamp = renderer.getGPUMaxSamples();
+            if (maxSamp > 0 && samples >= maxSamp)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 1.0f, 0.4f, 1.0f));
+                ImGui::Text("Samples: %u / %u  (converged)", samples, maxSamp);
+                ImGui::PopStyleColor();
+            }
+            else if (maxSamp > 0)
+                ImGui::Text("Samples: %u / %u", samples, maxSamp);
+            else
+                ImGui::Text("Samples: %u", samples);
+        }
+        {
+            int v = static_cast<int>(renderer.getGPUMaxSamples());
+            if (ImGui::DragInt("Max Samples##compute", &v, 8.0f, 0, 1 << 20))
+                renderer.setGPUMaxSamples(static_cast<uint32_t>(std::max(0, v)));
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("0 = unlimited");
+        }
+
+        {
+            uint32_t sampleCount = renderer.getRaytraceSampleCount();
+            bool canDenoise = renderer.isDenoiserReady() && (sampleCount > 0);
+            if (!canDenoise) ImGui::BeginDisabled();
+            if (ImGui::Button("Denoise##compute")) renderer.triggerDenoise();
+            if (!canDenoise) ImGui::EndDisabled();
+            if (renderer.getShowDenoisedResult())
+            {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(showing denoised)");
+            }
+        }
+
+        if (ImGui::CollapsingHeader("Path Tracing##compute", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            int maxDepth = renderer.getGPUMaxDepth();
+            if (ImGui::SliderInt("Max Depth##compute", &maxDepth, 1, 16))
+                renderer.setGPUMaxDepth(maxDepth);
+
+            bool nee = renderer.getGPUEnableNEE();
+            if (ImGui::Checkbox("Next Event Estimation##compute", &nee))
+                renderer.setGPUEnableNEE(nee);
+
+            bool rr = renderer.getGPUEnableRR();
+            if (ImGui::Checkbox("Russian Roulette##compute", &rr))
+                renderer.setGPUEnableRR(rr);
+
+            bool aa = renderer.getGPUEnableAA();
+            if (ImGui::Checkbox("Anti-Aliasing##compute", &aa))
+                renderer.setGPUEnableAA(aa);
+
+            bool firefly = renderer.getGPUEnableFireflyClamping();
+            if (ImGui::Checkbox("Firefly Clamping##compute", &firefly))
+                renderer.setGPUEnableFireflyClamping(firefly);
+
+            const char* samplerItems[] = { "PCG (Default)", "Halton", "Blue Noise (IGN)" };
+            int samplerType = renderer.getVKSamplerType();
+            if (ImGui::Combo("Sampler##compute", &samplerType, samplerItems, 3))
+                renderer.setVKSamplerType(samplerType);
+        }
+
+        if (ImGui::CollapsingHeader("Lighting##compute", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            bool env = renderer.getGPUEnableEnvironment();
+            if (ImGui::Checkbox("Environment Lighting##compute", &env))
+                renderer.setGPUEnableEnvironment(env);
+
+            float envMult = renderer.getGPUEnvLightMultiplier();
+            if (ImGui::SliderFloat("Env Multiplier##compute", &envMult, 0.0f, 2.0f, "%.2f"))
+                renderer.setGPUEnvLightMultiplier(envMult);
+        }
+
+        if (ImGui::CollapsingHeader("Shading##compute"))
+        {
+            bool flatShade = renderer.getGPUFlatShading();
+            if (ImGui::Checkbox("Flat Shading##compute", &flatShade))
+                renderer.setGPUFlatShading(flatShade);
+
+            bool normalMap = renderer.getGPUEnableNormalMapping();
+            if (ImGui::Checkbox("Normal Mapping##compute", &normalMap))
+                renderer.setGPUEnableNormalMapping(normalMap);
+
+            bool emissive = renderer.getGPUEnableEmissive();
+            if (ImGui::Checkbox("Emissive Materials##compute", &emissive))
+                renderer.setGPUEnableEmissive(emissive);
+
+            bool bilinear = renderer.getGPUBilinearFiltering();
+            if (ImGui::Checkbox("Bilinear Filtering##compute", &bilinear))
+                renderer.setGPUBilinearFiltering(bilinear);
+        }
+
+        if (ImGui::CollapsingHeader("Post Processing##compute", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            float exposure = renderer.getGPUExposure();
+            if (ImGui::SliderFloat("Exposure##compute", &exposure, -5.0f, 5.0f, "%.1f"))
+                renderer.setGPUExposure(exposure);
+
+            bool aces = renderer.getGPUEnableACES();
+            if (ImGui::Checkbox("ACES Tonemapping##compute", &aces))
+                renderer.setGPUEnableACES(aces);
+
+            float gamma = renderer.getGPUGamma();
+            if (ImGui::SliderFloat("Gamma##compute", &gamma, 1.0f, 3.0f, "%.2f"))
+                renderer.setGPUGamma(gamma);
+
+            ImGui::SeparatorText("Bloom");
+            bool bloomEnabled = renderer.getBloomEnabled();
+            if (ImGui::Checkbox("Bloom##compute", &bloomEnabled))
+                renderer.setBloomEnabled(bloomEnabled);
+            ImGui::BeginDisabled(!bloomEnabled);
+            float bloomThresh = renderer.getBloomThreshold();
+            if (ImGui::SliderFloat("Threshold##bloomcompute", &bloomThresh, 0.0f, 2.0f, "%.2f"))
+                renderer.setBloomThreshold(bloomThresh);
+            float bloomIntensity = renderer.getBloomIntensity();
+            if (ImGui::SliderFloat("Intensity##bloomcompute", &bloomIntensity, 0.0f, 1.0f, "%.3f"))
+                renderer.setBloomIntensity(bloomIntensity);
+            int bloomPasses = renderer.getBloomBlurPasses();
+            if (ImGui::SliderInt("Blur Passes##bloomcompute", &bloomPasses, 1, 10))
+                renderer.setBloomBlurPasses(bloomPasses);
+            ImGui::EndDisabled();
+        }
+
+        if (ImGui::CollapsingHeader("Diagnostics##compute"))
+        {
+            int expVal = static_cast<int>(std::round(std::log10(renderer.getGPURayEps())));
+            expVal = std::clamp(expVal, -5, -1);
+            if (ImGui::SliderInt("Ray EPS (10^n)##compute", &expVal, -5, -1))
+                renderer.setGPURayEps(std::pow(10.0f, static_cast<float>(expVal)));
+            ImGui::SameLine();
+            ImGui::TextDisabled("= %.0e", renderer.getGPURayEps());
+
+            float sps = renderer.getVKComputeSamplesPerSec();
+            if (sps > 0.0f)
+                ImGui::Text("Samples/sec: %.1f", sps);
+        }
+    }
+#endif
     ImGui::End();
 }
 
@@ -1742,13 +1909,11 @@ void EditorUI::renderStats(SceneRenderer& renderer, Scene& scene, vex::GraphicsC
     ImGui::Text("FPS:        %.1f", io.Framerate);
     ImGui::Text("Frame time: %.2f ms", 1000.0f / io.Framerate);
     ImGui::Text("Draw calls: %d", renderer.getDrawCalls());
-#ifdef VEX_BACKEND_VULKAN
     {
-        float sps = renderer.getVKSamplesPerSec();
+        float sps = renderer.getSamplesPerSec();
         if (sps > 0.0f)
             ImGui::Text("Samples/sec: %.1f", sps);
     }
-#endif
 
     bool vsync = ctx.getVSync();
     if (ImGui::Checkbox("VSync", &vsync))

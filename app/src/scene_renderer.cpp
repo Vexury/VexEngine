@@ -218,11 +218,24 @@ bool SceneRenderer::init([[maybe_unused]] Scene& scene)
 #ifdef VEX_BACKEND_VULKAN
     m_rasterHDRFB = vex::Framebuffer::create({ .width = 1280, .height = 720, .hasDepth = true, .hdrColor = true });
 
+    // Mesh shader draws into m_rasterHDRFB (R16G16B16A16_SFLOAT), not m_framebuffer (R8G8B8A8_UNORM).
+    // Re-prepare here so the pipeline's renderpass format matches the actual draw target.
+    m_meshShader->preparePipeline(*m_rasterHDRFB);
+    if (scene.skybox)
+        scene.skybox->preparePipeline(*m_rasterHDRFB);
+
     m_vkRaytracer = std::make_unique<vex::VKGpuRaytracer>();
     if (!m_vkRaytracer->init())
     {
         vex::Log::error("Failed to initialize Vulkan RT raytracer");
         m_vkRaytracer.reset();
+    }
+
+    m_vkComputeRaytracer = std::make_unique<vex::VKComputeRaytracer>();
+    if (!m_vkComputeRaytracer->init())
+    {
+        vex::Log::error("Failed to initialize Vulkan compute path tracer");
+        m_vkComputeRaytracer.reset();
     }
 
     m_vkFullscreenRTShader = vex::Shader::create();
@@ -304,6 +317,9 @@ void SceneRenderer::shutdown()
     if (m_vkRaytracer)
         m_vkRaytracer->shutdown();
     m_vkRaytracer.reset();
+    if (m_vkComputeRaytracer)
+        m_vkComputeRaytracer->shutdown();
+    m_vkComputeRaytracer.reset();
 #endif
     m_outlineMaskShader.reset();
     m_outlineMaskFB.reset();
@@ -414,9 +430,11 @@ void SceneRenderer::setRenderMode(RenderMode mode)
 
     m_renderMode = mode;
 
-    const char* modeName = (mode == RenderMode::Rasterize)   ? "Rasterize"
-                         : (mode == RenderMode::CPURaytrace) ? "CPU Raytrace"
-                                                             : "GPU Raytrace";
+    const char* modeName = (mode == RenderMode::Rasterize)       ? "Rasterize"
+                         : (mode == RenderMode::CPURaytrace)     ? "CPU Raytrace"
+                         : (mode == RenderMode::GPURaytrace)     ? "GPU Raytrace"
+                         : (mode == RenderMode::ComputeRaytrace) ? "Compute Raytrace"
+                                                                  : "Unknown";
     vex::Log::info("Render mode: " + std::string(modeName));
 
     // Invalidate all change-detection state so the new mode fully
@@ -442,8 +460,11 @@ void SceneRenderer::setRenderMode(RenderMode mode)
 
     // When entering any path tracing mode, force a full geometry rebuild so that
     // any model matrix changes made via gizmos during rasterization are applied.
-    if (mode == RenderMode::CPURaytrace || mode == RenderMode::GPURaytrace)
+    if (mode == RenderMode::CPURaytrace || mode == RenderMode::GPURaytrace ||
+        mode == RenderMode::ComputeRaytrace)
         m_pendingGeomRebuild = true;
+
+    m_samplesPerSec = 0.0f;
 
     if (mode == RenderMode::CPURaytrace && m_cpuRaytracer)
         m_cpuRaytracer->reset();
@@ -462,7 +483,26 @@ void SceneRenderer::setRenderMode(RenderMode mode)
         m_vkSampleCount = 0;
         m_vkGeomDirty = true;
     }
+    if (mode == RenderMode::ComputeRaytrace && m_vkComputeRaytracer)
+    {
+        m_vkComputeRaytracer->reset();
+        m_vkComputeSampleCount = 0;
+        m_vkComputeGeomDirty = true;
+    }
 #endif
+}
+
+float SceneRenderer::getSamplesPerSec() const
+{
+#ifdef VEX_BACKEND_VULKAN
+    if (m_renderMode == RenderMode::GPURaytrace)
+        return m_vkSamplesPerSec;
+    if (m_renderMode == RenderMode::ComputeRaytrace)
+        return m_vkComputeSamplesPerSec;
+#endif
+    if (m_renderMode == RenderMode::CPURaytrace || m_renderMode == RenderMode::GPURaytrace)
+        return m_samplesPerSec;
+    return 0.0f;
 }
 
 uint32_t SceneRenderer::getRaytraceSampleCount() const
@@ -474,6 +514,8 @@ uint32_t SceneRenderer::getRaytraceSampleCount() const
 #ifdef VEX_BACKEND_VULKAN
     if (m_renderMode == RenderMode::GPURaytrace)
         return m_vkSampleCount;
+    if (m_renderMode == RenderMode::ComputeRaytrace)
+        return m_vkComputeSampleCount;
 #endif
     return m_cpuRaytracer ? m_cpuRaytracer->getSampleCount() : 0;
 }
@@ -1060,7 +1102,8 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
     // In the Vulkan build, GPU RT uses BLAS/TLAS so we can skip the CPU BVH when not in CPU RT mode.
     // In the OpenGL build, GPU RT also uses m_rtTriangles + m_rtBVH, so always build it.
 #ifdef VEX_BACKEND_VULKAN
-    const bool needsCpuBvh = (m_renderMode == RenderMode::CPURaytrace);
+    const bool needsCpuBvh = (m_renderMode == RenderMode::CPURaytrace ||
+                               m_renderMode == RenderMode::ComputeRaytrace);
 #else
     const bool needsCpuBvh = true;
 #endif
@@ -1381,6 +1424,8 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
         m_vkRaytracer->buildTlas(blasTransforms);
         m_vkGeomDirty = true;  // uploadSceneData + createOutputImage deferred to renderVKRaytrace
         m_vkSampleCount = 0;
+        m_vkComputeGeomDirty   = true;  // compute path tracer also needs re-upload
+        m_vkComputeSampleCount = 0;
 
         vex::Log::info("  VK GPU: " + std::to_string(m_vkInstanceOffsets.size()) + " BLASes + TLAS, "
                       + std::to_string(m_vkTriShading.size() / 52) + " triangles, "
@@ -1466,6 +1511,14 @@ void SceneRenderer::rebuildMaterials(Scene& scene)
         m_vkSampleCount = 0;
         m_vkRaytracer->reset();
     }
+
+    // VK compute path tracer: full re-upload needed (triangle data reordered by BVH)
+    if (m_vkComputeRaytracer)
+    {
+        m_vkComputeGeomDirty   = true;
+        m_vkComputeSampleCount = 0;
+        m_vkComputeRaytracer->reset();
+    }
 #endif
 }
 
@@ -1484,7 +1537,8 @@ void SceneRenderer::renderScene(Scene& scene, int selectedGroup, int selectedSub
     // VK: also trigger when switching to CPU RT with a stale BVH (GPU RT uses BLAS/TLAS, not the CPU BVH).
     // GL: trigger whenever BVH is dirty — GPU RT also needs m_rtTriangles/m_rtBVH.
 #ifdef VEX_BACKEND_VULKAN
-    if (scene.geometryDirty || (m_renderMode == RenderMode::CPURaytrace && m_cpuBVHDirty))
+    if (scene.geometryDirty || ((m_renderMode == RenderMode::CPURaytrace ||
+                                  m_renderMode == RenderMode::ComputeRaytrace) && m_cpuBVHDirty))
 #else
     if (scene.geometryDirty || m_cpuBVHDirty)
 #endif
@@ -1523,6 +1577,11 @@ void SceneRenderer::renderScene(Scene& scene, int selectedGroup, int selectedSub
         renderGPURaytrace(scene);
 #else
         renderVKRaytrace(scene);
+#endif
+        break;
+    case RenderMode::ComputeRaytrace:
+#ifdef VEX_BACKEND_VULKAN
+        renderVKComputeRaytrace(scene);
 #endif
         break;
     case RenderMode::Rasterize:
@@ -2302,7 +2361,21 @@ void SceneRenderer::renderCPURaytrace(Scene& scene)
     {
         // Trace one sample (skip if sample limit reached)
         if (m_cpuMaxSamples == 0 || m_cpuRaytracer->getSampleCount() < m_cpuMaxSamples)
+        {
+            auto now = std::chrono::steady_clock::now();
+            if (m_cpuRaytracer->getSampleCount() == 0) {
+                m_samplesPerSec = 0.0f;
+            } else {
+                float dt = std::chrono::duration<float>(now - m_lastSampleTime).count();
+                if (dt > 1e-6f) {
+                    float instant = 1.0f / dt;
+                    m_samplesPerSec = m_samplesPerSec < 1e-6f
+                        ? instant : m_samplesPerSec * 0.9f + instant * 0.1f;
+                }
+            }
+            m_lastSampleTime = now;
             m_cpuRaytracer->traceSample();
+        }
 
         // Upload result to texture
         const auto& pixels = m_cpuRaytracer->getPixelBuffer();
@@ -2539,7 +2612,21 @@ void SceneRenderer::renderGPURaytrace(Scene& scene)
 
     // Dispatch compute shader (skip if sample limit reached)
     if (m_gpuMaxSamples == 0 || m_gpuRaytracer->getSampleCount() < m_gpuMaxSamples)
+    {
+        auto now = std::chrono::steady_clock::now();
+        if (m_gpuRaytracer->getSampleCount() == 0) {
+            m_samplesPerSec = 0.0f;
+        } else {
+            float dt = std::chrono::duration<float>(now - m_lastSampleTime).count();
+            if (dt > 1e-6f) {
+                float instant = 1.0f / dt;
+                m_samplesPerSec = m_samplesPerSec < 1e-6f
+                    ? instant : m_samplesPerSec * 0.9f + instant * 0.1f;
+            }
+        }
+        m_lastSampleTime = now;
         m_gpuRaytracer->traceSample();
+    }
 
     // Bloom pass for GPU RT accumulation (normalize by sample count in threshold shader)
     uint32_t bloomTex = 0;
@@ -3259,6 +3346,430 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
     m_framebuffer->unbind();
     m_drawCalls = 1;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Vulkan compute (software BVH) path tracer render path
+// ─────────────────────────────────────────────────────────────────────────────
+
+void SceneRenderer::renderVKComputeRaytrace(Scene& scene)
+{
+    if (!m_vkComputeRaytracer)
+        return;
+
+    const auto& spec = m_framebuffer->getSpec();
+    uint32_t w = spec.width;
+    uint32_t h = spec.height;
+
+    // ── Environment map change detection ──────────────────────────────────────
+    bool envChanged     = false;
+    bool envDataChanged = false;
+
+    bool customPathChanged = (scene.customEnvmapPath != m_prevCustomEnvmapPath);
+    if (customPathChanged)
+        m_prevCustomEnvmapPath = scene.customEnvmapPath;
+
+    if (scene.currentEnvmap != m_prevEnvmapIndex || customPathChanged)
+    {
+        m_prevEnvmapIndex = scene.currentEnvmap;
+        envChanged     = true;
+        envDataChanged = true;
+
+        if (scene.currentEnvmap > Scene::SolidColor)
+        {
+            std::string envPath = (scene.currentEnvmap == Scene::CustomHDR)
+                ? scene.customEnvmapPath
+                : std::string(Scene::envmapPaths[scene.currentEnvmap]);
+
+            int ew, eh, ech;
+            stbi_set_flip_vertically_on_load(false);
+            float* envData = stbi_loadf(envPath.c_str(), &ew, &eh, &ech, 3);
+            if (envData)
+            {
+                m_vkEnvMapW = ew;
+                m_vkEnvMapH = eh;
+                m_vkEnvMapData.assign(envData, envData + ew * eh * 3);
+                stbi_image_free(envData);
+
+                int W = ew, H = eh;
+                std::vector<float> luminance(W * H);
+                for (int idx = 0; idx < W * H; ++idx)
+                {
+                    float r = m_vkEnvMapData[idx * 3 + 0];
+                    float g = m_vkEnvMapData[idx * 3 + 1];
+                    float b = m_vkEnvMapData[idx * 3 + 2];
+                    luminance[idx] = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+                }
+                std::vector<float> rowIntegral(H, 0.0f);
+                for (int row = 0; row < H; ++row)
+                {
+                    float sinTheta = std::sin((float(row) + 0.5f) / float(H) * 3.14159265f);
+                    for (int col = 0; col < W; ++col)
+                        rowIntegral[row] += luminance[row * W + col] * sinTheta;
+                }
+                m_vkEnvCdfData.assign(H + W * H + 1, 0.0f);
+                float rowSum = 0.0f;
+                for (int row = 0; row < H; ++row)
+                {
+                    rowSum += rowIntegral[row];
+                    m_vkEnvCdfData[row] = rowSum;
+                }
+                float totalIntegral = rowSum;
+                if (totalIntegral > 0.0f)
+                    for (int row = 0; row < H; ++row) m_vkEnvCdfData[row] /= totalIntegral;
+                for (int row = 0; row < H; ++row)
+                {
+                    float sinTheta = std::sin((float(row) + 0.5f) / float(H) * 3.14159265f);
+                    float colSum = 0.0f;
+                    for (int col = 0; col < W; ++col)
+                    {
+                        colSum += luminance[row * W + col] * sinTheta;
+                        m_vkEnvCdfData[H + row * W + col] = colSum;
+                    }
+                    if (colSum > 0.0f)
+                        for (int col = 0; col < W; ++col)
+                            m_vkEnvCdfData[H + row * W + col] /= colSum;
+                }
+                m_vkEnvCdfData[H + W * H] = totalIntegral;
+            }
+            else
+            {
+                m_vkEnvMapData.clear();
+                m_vkEnvCdfData.clear();
+                m_vkEnvMapW = 0; m_vkEnvMapH = 0;
+            }
+        }
+        else
+        {
+            m_vkEnvMapData.clear();
+            m_vkEnvCdfData.clear();
+            m_vkEnvMapW = 0; m_vkEnvMapH = 0;
+        }
+    }
+
+    if (scene.currentEnvmap == Scene::SolidColor && scene.skyboxColor != m_prevSkyboxColor)
+    {
+        m_prevSkyboxColor = scene.skyboxColor;
+        envChanged = true;
+    }
+
+    // ── Upload geometry if dirty ──────────────────────────────────────────────
+    bool firstRender = (m_vkComputeRTTexW == 0 && m_vkComputeRTTexH == 0);
+
+    if (envDataChanged && !firstRender)
+    {
+        if (!m_vkEnvMapData.empty())
+            m_vkComputeRaytracer->uploadEnvironmentMap(m_vkEnvMapData, m_vkEnvMapW, m_vkEnvMapH, m_vkEnvCdfData);
+        else
+            m_vkComputeRaytracer->clearEnvironmentMap();
+    }
+
+    if (m_vkComputeGeomDirty || firstRender)
+    {
+        m_vkComputeRaytracer->uploadGeometry(
+            m_rtTriangles, m_rtBVH,
+            m_rtLightIndices, m_rtLightCDF, m_rtTotalLightArea,
+            m_rtTextures);
+        m_vkComputeGeomDirty = false;
+
+        // Upload env map alongside geometry on first render / forced rebuild
+        if (!m_vkEnvMapData.empty())
+            m_vkComputeRaytracer->uploadEnvironmentMap(m_vkEnvMapData, m_vkEnvMapW, m_vkEnvMapH, m_vkEnvCdfData);
+        else
+            m_vkComputeRaytracer->clearEnvironmentMap();
+    }
+
+    // ── Resize output image if needed ─────────────────────────────────────────
+    if (w != m_vkComputeRTTexW || h != m_vkComputeRTTexH)
+    {
+        m_vkComputeRaytracer->createOutputImage(w, h);
+        m_vkComputeRTTexW = w;
+        m_vkComputeRTTexH = h;
+        m_vkComputeRaytracer->reset();
+        m_vkComputeSampleCount = 0;
+        m_showDenoisedResult   = false;
+        if (m_vkFullscreenRTShader)
+            static_cast<vex::VKShader*>(m_vkFullscreenRTShader.get())->clearExternalTextureCache();
+    }
+    else if (envChanged)
+    {
+        m_vkComputeRaytracer->reset();
+        m_vkComputeSampleCount = 0;
+        m_showDenoisedResult   = false;
+    }
+
+    // ── Point light change detection ──────────────────────────────────────────
+    bool lightChanged = (scene.showLight       != m_prevShowLight
+                      || scene.lightPos        != m_prevLightPos
+                      || scene.lightColor      != m_prevLightColor
+                      || scene.lightIntensity  != m_prevLightIntensity);
+    if (lightChanged)
+    {
+        m_vkComputeRaytracer->reset();
+        m_vkComputeSampleCount = 0;
+        m_showDenoisedResult   = false;
+        m_prevShowLight        = scene.showLight;
+        m_prevLightPos         = scene.lightPos;
+        m_prevLightColor       = scene.lightColor;
+        m_prevLightIntensity   = scene.lightIntensity;
+    }
+
+    // ── Sun light change detection ────────────────────────────────────────────
+    glm::vec3 sunDir = scene.getSunDirection();
+    bool sunChanged = (scene.showSun          != m_prevShowSun
+                    || sunDir                  != m_prevSunDirection
+                    || scene.sunColor          != m_prevSunColor
+                    || scene.sunIntensity      != m_prevSunIntensity
+                    || scene.sunAngularRadius  != m_prevSunAngularRadius);
+    if (sunChanged)
+    {
+        m_vkComputeRaytracer->reset();
+        m_vkComputeSampleCount = 0;
+        m_showDenoisedResult   = false;
+        m_prevShowSun          = scene.showSun;
+        m_prevSunDirection     = sunDir;
+        m_prevSunColor         = scene.sunColor;
+        m_prevSunIntensity     = scene.sunIntensity;
+        m_prevSunAngularRadius = scene.sunAngularRadius;
+    }
+
+    // ── Camera change detection ───────────────────────────────────────────────
+    float aspect = static_cast<float>(w) / static_cast<float>(h);
+    glm::mat4 view = scene.camera.getViewMatrix();
+    glm::mat4 proj = scene.camera.getProjectionMatrix(aspect);
+    glm::vec3 camPos = scene.camera.getPosition();
+
+    if (camPos != m_prevCameraPos || view != m_prevViewMatrix)
+    {
+        m_vkComputeRaytracer->reset();
+        m_vkComputeSampleCount = 0;
+        m_showDenoisedResult   = false;
+        m_prevCameraPos  = camPos;
+        m_prevViewMatrix = view;
+    }
+
+    if (scene.camera.aperture != m_prevAperture || scene.camera.focusDistance != m_prevFocusDistance)
+    {
+        m_vkComputeRaytracer->reset();
+        m_vkComputeSampleCount = 0;
+        m_showDenoisedResult   = false;
+        m_prevAperture      = scene.camera.aperture;
+        m_prevFocusDistance = scene.camera.focusDistance;
+    }
+
+    // ── Build VKComputeUniforms ───────────────────────────────────────────────
+    glm::vec3 right = glm::vec3(view[0][0], view[1][0], view[2][0]);
+    glm::vec3 up    = glm::vec3(view[0][1], view[1][1], view[2][1]);
+    glm::mat4 vp    = proj * view;
+
+    vex::VKComputeUniforms u{};
+    vex::vkComputeUniformsSetMat4(u.inverseVP,      glm::inverse(vp));
+    vex::vkComputeUniformsSetVec3(u.cameraOrigin,   camPos);
+    u.aperture      = scene.camera.aperture;
+    vex::vkComputeUniformsSetVec3(u.cameraRight,    right);
+    u.focusDistance = scene.camera.focusDistance;
+    vex::vkComputeUniformsSetVec3(u.cameraUp,       up);
+    u.sampleCount   = m_vkComputeSampleCount;
+    u.width         = w;
+    u.height        = h;
+    u.maxDepth      = m_vkMaxDepth;
+    u.rayEps        = m_vkRayEps;
+    u.enableNEE             = m_vkEnableNEE             ? 1u : 0u;
+    u.enableAA              = m_vkEnableAA              ? 1u : 0u;
+    u.enableFireflyClamping = m_vkEnableFireflyClamping ? 1u : 0u;
+    u.enableEnvLighting     = m_vkEnableEnvLighting     ? 1u : 0u;
+    u.envLightMultiplier    = m_vkEnvLightMultiplier;
+    u.flatShading           = m_vkFlatShading           ? 1u : 0u;
+    u.enableNormalMapping   = m_vkEnableNormalMapping   ? 1u : 0u;
+    u.enableEmissive        = m_vkEnableEmissive        ? 1u : 0u;
+    u.bilinearFiltering     = m_vkBilinearFiltering     ? 1u : 0u;
+    u.samplerType           = static_cast<uint32_t>(m_vkSamplerType);
+    u.enableRR              = m_vkEnableRR              ? 1u : 0u;
+
+    // Point light
+    vex::vkComputeUniformsSetVec3(u.pointLightPos,   scene.lightPos);
+    vex::vkComputeUniformsSetVec3(u.pointLightColor, scene.lightColor * scene.lightIntensity);
+    u.pointLightEnabled = scene.showLight ? 1u : 0u;
+
+    // Sun / directional light
+    vex::vkComputeUniformsSetVec3(u.sunDir,   sunDir);
+    vex::vkComputeUniformsSetVec3(u.sunColor, scene.sunColor * scene.sunIntensity);
+    u.sunAngularRadius = scene.sunAngularRadius;
+    u.sunEnabled       = scene.showSun ? 1u : 0u;
+
+    // Environment
+    vex::vkComputeUniformsSetVec3(u.envColor, scene.skyboxColor);
+    u.hasEnvMap    = (m_vkEnvMapW > 0) ? 1u : 0u;
+    u.envMapWidth  = m_vkEnvMapW;
+    u.envMapHeight = m_vkEnvMapH;
+    u.hasEnvCDF    = m_vkEnvCdfData.empty() ? 0u : 1u;
+
+    // Light count and total area (from CPU RT data)
+    u.lightCount     = static_cast<uint32_t>(m_rtLightIndices.size());
+    u.totalLightArea = m_rtTotalLightArea;
+
+    // Compute-only fields
+    u.triangleCount = m_vkComputeRaytracer->getTriangleCount();
+    u.bvhNodeCount  = m_vkComputeRaytracer->getBvhNodeCount();
+
+    m_vkComputeRaytracer->setUniforms(u);
+
+    // ── Trace one sample ──────────────────────────────────────────────────────
+    auto cmd = vex::VKContext::get().getCurrentCommandBuffer();
+    if (!m_showDenoisedResult && (m_gpuMaxSamples == 0 || m_vkComputeSampleCount < m_gpuMaxSamples))
+    {
+        m_vkComputeRaytracer->traceSample(cmd);
+
+        auto now = std::chrono::steady_clock::now();
+        if (m_vkComputeSampleCount == 0)
+        {
+            m_vkComputeSamplesPerSec = 0.0f;
+        }
+        else
+        {
+            float dt = std::chrono::duration<float>(now - m_vkComputeLastSampleTime).count();
+            if (dt > 1e-6f)
+            {
+                float instant = 1.0f / dt;
+                m_vkComputeSamplesPerSec = m_vkComputeSamplesPerSec < 1e-6f
+                    ? instant
+                    : m_vkComputeSamplesPerSec * 0.9f + instant * 0.1f;
+            }
+        }
+        m_vkComputeLastSampleTime = now;
+
+        ++m_vkComputeSampleCount;
+        m_vkComputeRaytracer->postTraceBarrier(cmd);
+    }
+
+    // ── Bloom pass ────────────────────────────────────────────────────────────
+    VkImageView vkRTBloomView    = VK_NULL_HANDLE;
+    VkSampler   vkRTBloomSampler = VK_NULL_HANDLE;
+    bool vkRTBloomActive = m_bloomEnabled
+                           && m_vkBloomThresholdShader && m_vkBloomBlurShader
+                           && m_vkBloomFB[0] && m_vkBloomFB[1];
+    if (vkRTBloomActive)
+    {
+        const auto& outSpec = m_framebuffer->getSpec();
+        uint32_t bw = std::max(1u, outSpec.width / 2);
+        uint32_t bh = std::max(1u, outSpec.height / 2);
+        if (m_vkBloomFBW != bw || m_vkBloomFBH != bh)
+        {
+            m_vkBloomFB[0]->resize(bw, bh);
+            m_vkBloomFB[1]->resize(bw, bh);
+            m_vkBloomFBW = bw;
+            m_vkBloomFBH = bh;
+            m_vkBloomThresholdShader->preparePipeline(*m_vkBloomFB[0]);
+            m_vkBloomBlurShader->preparePipeline(*m_vkBloomFB[0]);
+            static_cast<vex::VKShader*>(m_vkBloomThresholdShader.get())->clearExternalTextureCache();
+            static_cast<vex::VKShader*>(m_vkBloomBlurShader.get())->clearExternalTextureCache();
+        }
+
+        auto* vkThreshVK = static_cast<vex::VKShader*>(m_vkBloomThresholdShader.get());
+        m_vkBloomFB[0]->bind();
+        m_vkBloomFB[0]->clear(0.0f, 0.0f, 0.0f, 1.0f);
+        m_vkBloomThresholdShader->setFloat("u_threshold",   m_bloomThreshold);
+        m_vkBloomThresholdShader->setFloat("u_sampleCount", static_cast<float>(m_vkComputeSampleCount));
+        m_vkBloomThresholdShader->bind();
+        vkThreshVK->setExternalTextureVK(0,
+            m_vkComputeRaytracer->getOutputImageView(),
+            m_vkComputeRaytracer->getDisplaySampler(),
+            VK_IMAGE_LAYOUT_GENERAL);
+        m_fullscreenQuad->draw();
+        m_vkBloomThresholdShader->unbind();
+        m_vkBloomFB[0]->unbind();
+
+        auto* vkBlurVK = static_cast<vex::VKShader*>(m_vkBloomBlurShader.get());
+        bool horizontal = true;
+        for (int i = 0; i < m_bloomBlurPasses * 2; ++i)
+        {
+            int src = horizontal ? 0 : 1;
+            int dst = horizontal ? 1 : 0;
+            auto* srcFBVK = static_cast<vex::VKFramebuffer*>(m_vkBloomFB[src].get());
+            m_vkBloomFB[dst]->bind();
+            m_vkBloomFB[dst]->clear(0.0f, 0.0f, 0.0f, 1.0f);
+            m_vkBloomBlurShader->bind();
+            vkBlurVK->setExternalTextureVK(0,
+                srcFBVK->getColorImageView(),
+                srcFBVK->getColorSampler(),
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            m_vkBloomBlurShader->setBool("u_horizontal", horizontal);
+            m_fullscreenQuad->draw();
+            m_vkBloomBlurShader->unbind();
+            m_vkBloomFB[dst]->unbind();
+            horizontal = !horizontal;
+        }
+        auto* vkBloom0 = static_cast<vex::VKFramebuffer*>(m_vkBloomFB[0].get());
+        vkRTBloomView    = vkBloom0->getColorImageView();
+        vkRTBloomSampler = vkBloom0->getColorSampler();
+    }
+
+    // ── Display ───────────────────────────────────────────────────────────────
+    m_framebuffer->bind();
+    m_framebuffer->clear(0.0f, 0.0f, 0.0f, 1.0f);
+
+    if (m_showDenoisedResult && m_vkFullscreenRTShader && m_raytraceTexture)
+    {
+        auto* rtShaderVK = static_cast<vex::VKShader*>(m_vkFullscreenRTShader.get());
+        auto* vkTex      = static_cast<vex::VKTexture2D*>(m_raytraceTexture.get());
+        auto* vkMaskFB   = static_cast<vex::VKFramebuffer*>(m_outlineMaskFB.get());
+
+        m_vkFullscreenRTShader->setFloat("u_sampleCount",    1.0f);
+        m_vkFullscreenRTShader->setFloat("u_exposure",       0.0f);
+        m_vkFullscreenRTShader->setFloat("u_gamma",          1.0f);
+        m_vkFullscreenRTShader->setFloat("u_bloomIntensity", 0.0f);
+        m_vkFullscreenRTShader->bind();
+        m_vkFullscreenRTShader->setBool("u_enableACES",    false);
+        m_vkFullscreenRTShader->setBool("u_flipV",         true);
+        m_vkFullscreenRTShader->setBool("u_enableOutline", m_outlineActive);
+        m_vkFullscreenRTShader->setBool("u_enableBloom",   false);
+
+        rtShaderVK->setExternalTextureVK(0,
+            vkTex->getImageView(), vkTex->getSampler(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        rtShaderVK->setExternalTextureVK(1,
+            vkMaskFB->getColorImageView(), vkMaskFB->getColorSampler(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        rtShaderVK->setExternalTextureVK(2,
+            vkMaskFB->getColorImageView(), vkMaskFB->getColorSampler(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        m_fullscreenQuad->draw();
+        m_vkFullscreenRTShader->unbind();
+    }
+    else if (m_vkFullscreenRTShader && m_vkComputeRaytracer->getOutputImageView())
+    {
+        auto* rtShaderVK = static_cast<vex::VKShader*>(m_vkFullscreenRTShader.get());
+
+        m_vkFullscreenRTShader->setFloat("u_sampleCount",    static_cast<float>(m_vkComputeSampleCount));
+        m_vkFullscreenRTShader->setFloat("u_exposure",       m_vkExposure);
+        m_vkFullscreenRTShader->setFloat("u_gamma",          m_vkGamma);
+        m_vkFullscreenRTShader->setFloat("u_bloomIntensity", m_bloomIntensity);
+        m_vkFullscreenRTShader->bind();
+        m_vkFullscreenRTShader->setBool("u_enableACES",    m_vkEnableACES);
+        m_vkFullscreenRTShader->setBool("u_flipV",         true);
+        m_vkFullscreenRTShader->setBool("u_enableOutline", m_outlineActive);
+        m_vkFullscreenRTShader->setBool("u_enableBloom",   vkRTBloomActive);
+
+        rtShaderVK->setExternalTextureVK(0,
+            m_vkComputeRaytracer->getOutputImageView(),
+            m_vkComputeRaytracer->getDisplaySampler(),
+            VK_IMAGE_LAYOUT_GENERAL);
+
+        auto* vkMaskFB = static_cast<vex::VKFramebuffer*>(m_outlineMaskFB.get());
+        rtShaderVK->setExternalTextureVK(1,
+            vkMaskFB->getColorImageView(), vkMaskFB->getColorSampler(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        rtShaderVK->setExternalTextureVK(2,
+            vkRTBloomActive ? vkRTBloomView    : vkMaskFB->getColorImageView(),
+            vkRTBloomActive ? vkRTBloomSampler : vkMaskFB->getColorSampler(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+        m_fullscreenQuad->draw();
+        m_vkFullscreenRTShader->unbind();
+    }
+
+    m_framebuffer->unbind();
+    m_drawCalls = 1;
+}
 #endif // VEX_BACKEND_VULKAN
 
 // ---------------------------------------------------------------------------
@@ -3286,6 +3797,22 @@ void SceneRenderer::triggerDenoise()
         aces     = m_vkEnableACES;
 
         // Ensure m_raytraceTexture exists at the right size for CPU-side display
+        if (!m_raytraceTexture || w != m_raytraceTexW || h != m_raytraceTexH)
+        {
+            m_raytraceTexture = vex::Texture2D::create(w, h, 4);
+            m_raytraceTexW = w;
+            m_raytraceTexH = h;
+            if (m_vkFullscreenRTShader)
+                static_cast<vex::VKShader*>(m_vkFullscreenRTShader.get())->clearExternalTextureCache();
+        }
+    }
+    else if (m_renderMode == RenderMode::ComputeRaytrace && m_vkComputeRaytracer)
+    {
+        m_vkComputeRaytracer->readbackLinearHDR(m_denoiseLinearHDR);
+        exposure = m_vkExposure;
+        gamma    = m_vkGamma;
+        aces     = m_vkEnableACES;
+
         if (!m_raytraceTexture || w != m_raytraceTexW || h != m_raytraceTexH)
         {
             m_raytraceTexture = vex::Texture2D::create(w, h, 4);

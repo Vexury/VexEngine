@@ -15,6 +15,7 @@
 
 #ifdef VEX_BACKEND_VULKAN
 #include <vex/vulkan/vk_gpu_raytracer.h>
+#include <vex/vulkan/vk_compute_raytracer.h>
 #endif
 
 #include <glm/glm.hpp>
@@ -28,7 +29,7 @@
 
 struct Scene;
 
-enum class RenderMode { Rasterize, CPURaytrace, GPURaytrace };
+enum class RenderMode { Rasterize, CPURaytrace, GPURaytrace, ComputeRaytrace };
 
 enum class DebugMode : int {
     None       = 0,  // Normal Blinn-Phong shading
@@ -54,6 +55,7 @@ public:
 
     vex::Framebuffer* getFramebuffer() { return m_framebuffer.get(); }
     int getDrawCalls() const { return m_drawCalls; }
+    float getSamplesPerSec() const;
 
     // Shadow map debug display
     // Returns an ImTextureID-compatible handle (0 if shadow map not yet rendered).
@@ -167,6 +169,7 @@ public:
     int   getVKSamplerType() const;
 #ifdef VEX_BACKEND_VULKAN
     float getVKSamplesPerSec() const { return m_vkSamplesPerSec; }
+    float getVKComputeSamplesPerSec() const { return m_vkComputeSamplesPerSec; }
 #endif
     void setGPUExposure(float v);
     float getGPUExposure() const;
@@ -217,6 +220,7 @@ private:
 #endif
 #ifdef VEX_BACKEND_VULKAN
     void renderVKRaytrace(Scene& scene);
+    void renderVKComputeRaytrace(Scene& scene);
 #endif
     void rebuildRaytraceGeometry(Scene& scene, ProgressFn progress = nullptr);
 
@@ -255,6 +259,10 @@ private:
     RenderMode m_renderMode = RenderMode::Rasterize;
     DebugMode  m_debugMode  = DebugMode::None;
     bool m_enableNormalMapping = true;
+
+    // Samples/sec — shared EMA for CPU RT and GL GPU RT modes
+    float                                        m_samplesPerSec    = 0.0f;
+    std::chrono::steady_clock::time_point        m_lastSampleTime   = {};
 
     // CPU raytracing
     bool m_cpuBVHDirty        = false; // CPU BVH not yet built for current geometry
@@ -357,6 +365,15 @@ private:
     float m_vkExposure   = 0.0f;
     float m_vkGamma      = 2.2f;
     bool  m_vkEnableACES = true;
+
+    // VK Compute (software BVH) path tracer
+    std::unique_ptr<vex::VKComputeRaytracer> m_vkComputeRaytracer;
+    bool     m_vkComputeGeomDirty    = false;
+    uint32_t m_vkComputeSampleCount  = 0;
+    uint32_t m_vkComputeRTTexW       = 0;
+    uint32_t m_vkComputeRTTexH       = 0;
+    float    m_vkComputeSamplesPerSec = 0.0f;
+    std::chrono::steady_clock::time_point m_vkComputeLastSampleTime = {};
 #endif
 
     // Camera change detection

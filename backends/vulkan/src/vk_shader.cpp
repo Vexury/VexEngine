@@ -390,7 +390,7 @@ void VKShader::createPipeline(VkRenderPass renderPass, bool depthTest,
     rasterizer.cullMode = VK_CULL_MODE_NONE;
     rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterizer.lineWidth = 1.0f;
-    rasterizer.depthBiasEnable = VK_TRUE; // values set dynamically via vkCmdSetDepthBias
+    rasterizer.depthBiasEnable = depthOnly ? VK_TRUE : VK_FALSE; // depth bias only needed for shadow pass
 
     VkPipelineMultisampleStateCreateInfo multisampling{};
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
@@ -419,12 +419,21 @@ void VKShader::createPipeline(VkRenderPass renderPass, bool depthTest,
         blending.pAttachments = &blendAttachment;
     }
 
-    VkDynamicState dynamicStates[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
-                                       VK_DYNAMIC_STATE_DEPTH_BIAS };
+    VkDynamicState dynamicStatesWithBias[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
+                                               VK_DYNAMIC_STATE_DEPTH_BIAS };
+    VkDynamicState dynamicStatesNoBias[]   = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
     VkPipelineDynamicStateCreateInfo dynamicState{};
     dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dynamicState.dynamicStateCount = 3;
-    dynamicState.pDynamicStates = dynamicStates;
+    if (depthOnly)
+    {
+        dynamicState.dynamicStateCount = 3;
+        dynamicState.pDynamicStates = dynamicStatesWithBias;
+    }
+    else
+    {
+        dynamicState.dynamicStateCount = 2;
+        dynamicState.pDynamicStates = dynamicStatesNoBias;
+    }
 
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -450,9 +459,15 @@ void VKShader::createPipeline(VkRenderPass renderPass, bool depthTest,
     }
 
     if (polygonMode == VK_POLYGON_MODE_LINE)
+    {
+        if (m_wireframePipeline) vkDestroyPipeline(device, m_wireframePipeline, nullptr);
         m_wireframePipeline = newPipeline;
+    }
     else
+    {
+        if (m_pipeline) vkDestroyPipeline(device, m_pipeline, nullptr);
         m_pipeline = newPipeline;
+    }
 }
 
 void VKShader::bind()

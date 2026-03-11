@@ -296,6 +296,23 @@ void VKSkybox::createPipeline(VkRenderPass renderPass)
     auto device = ctx.getDevice();
     auto allocator = ctx.getAllocator();
 
+    // Free any previously created pipeline resources before recreating
+    if (m_pipeline)            { vkDestroyPipeline(device, m_pipeline, nullptr);                         m_pipeline = VK_NULL_HANDLE; }
+    if (m_pipelineLayout)      { vkDestroyPipelineLayout(device, m_pipelineLayout, nullptr);             m_pipelineLayout = VK_NULL_HANDLE; }
+    if (m_descriptorPool)      { vkDestroyDescriptorPool(device, m_descriptorPool, nullptr);             m_descriptorPool = VK_NULL_HANDLE; }
+    if (m_descriptorSetLayout) { vkDestroyDescriptorSetLayout(device, m_descriptorSetLayout, nullptr);   m_descriptorSetLayout = VK_NULL_HANDLE; }
+    if (m_vertModule)          { vkDestroyShaderModule(device, m_vertModule, nullptr);                   m_vertModule = VK_NULL_HANDLE; }
+    if (m_fragModule)          { vkDestroyShaderModule(device, m_fragModule, nullptr);                   m_fragModule = VK_NULL_HANDLE; }
+    for (auto& frame : m_frames)
+    {
+        if (frame.uboBuffer)
+        {
+            vmaDestroyBuffer(allocator, frame.uboBuffer, frame.uboAllocation);
+            frame.uboBuffer     = VK_NULL_HANDLE;
+            frame.uboAllocation = VK_NULL_HANDLE;
+        }
+    }
+
     // Load shader modules
     auto loadModule = [&](const std::string& path) -> VkShaderModule
     {

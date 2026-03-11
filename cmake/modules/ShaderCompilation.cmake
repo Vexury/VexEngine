@@ -36,7 +36,7 @@ function(compile_shaders TARGET SHADER_DIR)
 
         add_custom_command(
             OUTPUT ${SPV_FILE}
-            COMMAND ${GLSLC} -I "${SHADER_DIR}" "${SHADER}" -o "${SPV_FILE}"
+            COMMAND ${GLSLC} --target-env=vulkan1.2 -I "${SHADER_DIR}" "${SHADER}" -o "${SPV_FILE}"
             DEPENDS ${SHADER}
             COMMENT "Compiling ${SHADER_NAME} -> SPIR-V"
             VERBATIM
