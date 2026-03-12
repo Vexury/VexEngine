@@ -48,8 +48,7 @@ public:
     bool init(Scene& scene);
     void shutdown();
 
-    void renderScene(Scene& scene, int selectedGroup, int selectedSubmesh = -1,
-                     const std::string& selectedObjectName = {});
+    void renderScene(Scene& scene, int selectedNodeIdx, int selectedSubmesh = -1);
     std::pair<int,int> pick(Scene& scene, int pixelX, int pixelY);
     void waitIdle(); // call before destroying GPU-referenced scene resources
 
@@ -208,9 +207,9 @@ public:
     void buildGeometry(Scene& scene, ProgressFn progress = nullptr);
 
 private:
-    void renderRasterize(Scene& scene, int selectedGroup, int selectedSubmesh);
+    void renderRasterize(Scene& scene, int selectedNodeIdx, int selectedSubmesh);
     void renderCPURaytrace(Scene& scene);
-    void renderOutlineMask(Scene& scene, int selectedGroup, const std::string& selectedObjectName,
+    void renderOutlineMask(Scene& scene, int selectedNodeIdx,
                            const glm::mat4& view, const glm::mat4& proj);
     void rebuildMaterials(Scene& scene);
 
@@ -238,11 +237,11 @@ private:
 
     uint32_t  m_cpuMaxSamples = 0; // 0 = unlimited
     uint32_t  m_gpuMaxSamples = 0; // 0 = unlimited (shared by GL and VK GPU RT)
-    // Local-space AABB per group (one entry per MeshGroup, rebuilt in rebuildRaytraceGeometry).
+    // Local-space AABB per node (one entry per SceneNode, rebuilt in rebuildRaytraceGeometry).
     // The world-space scene AABB for shadow frustum fitting is computed each frame by
-    // transforming these 8 corners by the current group.modelMatrix, so gizmo transforms
+    // transforming these 8 corners by the current node's world matrix, so gizmo transforms
     // are always reflected without needing a full geometry rebuild.
-    std::vector<vex::AABB> m_groupLocalAABBs;
+    std::vector<vex::AABB> m_nodeLocalAABBs;
 
     // Screen-space outline (both backends)
     std::unique_ptr<vex::Framebuffer> m_outlineMaskFB;

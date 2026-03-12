@@ -26,18 +26,20 @@ struct SceneMesh
     std::shared_ptr<vex::Texture2D> metallicTexture;
     std::shared_ptr<vex::Texture2D> emissiveTexture;
     vex::MeshData meshData;
-    glm::mat4 modelMatrix = glm::mat4(1.0f);  // local transform relative to group
+    glm::mat4 modelMatrix = glm::mat4(1.0f);  // local transform relative to node
     uint32_t vertexCount = 0;
     uint32_t indexCount  = 0;
 };
 
-struct MeshGroup
+struct SceneNode
 {
     std::string name;
     std::vector<SceneMesh> submeshes;
     glm::vec3 center { 0.0f };
     float     radius = 1.0f;
-    glm::mat4 modelMatrix = glm::mat4(1.0f);
+    glm::mat4 localMatrix = glm::mat4(1.0f);  // local transform (relative to parent)
+    int       parentIndex   = -1;              // index into scene.nodes; -1 = root
+    std::vector<int> childIndices;             // ordered children
 };
 
 struct SceneVolume
@@ -55,7 +57,7 @@ struct SceneVolume
 struct Scene
 {
     vex::Camera camera;
-    std::vector<MeshGroup> meshGroups;
+    std::vector<SceneNode> nodes;
     std::vector<SceneVolume> volumes;
     std::unique_ptr<vex::Skybox> skybox;
 
@@ -108,11 +110,27 @@ struct Scene
     bool geometryDirty = false;
     bool materialDirty = false;
 
+    // Returns the accumulated world-space matrix of a node (product of all ancestor localMatrices).
+    glm::mat4 getWorldMatrix(int nodeIdx) const;
+
     using ProgressFn = std::function<void(const std::string& stage, float progress)>;
     bool importOBJ(const std::string& path, const std::string& name,
                    ProgressFn onProgress = nullptr);
 
-    // Recreate GPU resources from a CPU save and add the group to the scene.
+    // Recreate GPU resources from a CPU save and add the node to the scene.
     // insertAt = -1 → append; otherwise inserts at that index.
-    void addMeshGroupFromSave(const MeshGroupSave& save, int insertAt = -1);
+    // When insertAt >= 0, calls fixRefsAfterInsert first so existing refs stay valid.
+    void addNodeFromSave(const NodeSave& save, int insertAt = -1);
 };
+
+// ── Index fixup helpers ───────────────────────────────────────────────────────
+// Keep parentIndex/childIndices coherent after flat-vector insert or erase.
+
+// After erasing node at removedIdx: decrement all refs > removedIdx.
+void fixRefsAfterRemove(Scene& scene, int removedIdx);
+
+// Before inserting at insertedIdx: increment all refs >= insertedIdx.
+void fixRefsAfterInsert(Scene& scene, int insertedIdx);
+
+// Collect subtree rooted at nodeIdx; returned in DESCENDING index order (safe erase order).
+std::vector<int> collectSubtree(const Scene& scene, int nodeIdx);

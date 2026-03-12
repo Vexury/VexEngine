@@ -1012,20 +1012,21 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
         return it != textureMap.end() ? it->second : -1;
     };
 
-    // Rebuild per-group local-space AABBs (no model matrix — raw mesh positions).
-    // The shadow pass transforms these corners by group.modelMatrix each frame.
-    m_groupLocalAABBs.clear();
-    m_groupLocalAABBs.resize(scene.meshGroups.size());
-    for (size_t gi = 0; gi < scene.meshGroups.size(); ++gi)
-        for (const auto& sm : scene.meshGroups[gi].submeshes)
+    // Rebuild per-node local-space AABBs (raw mesh positions, no model matrix applied).
+    // The shadow pass transforms these corners by the node's world matrix each frame.
+    m_nodeLocalAABBs.clear();
+    m_nodeLocalAABBs.resize(scene.nodes.size());
+    for (size_t ni = 0; ni < scene.nodes.size(); ++ni)
+        for (const auto& sm : scene.nodes[ni].submeshes)
             for (const auto& v : sm.meshData.vertices)
-                m_groupLocalAABBs[gi].grow(v.position);
+                m_nodeLocalAABBs[ni].grow(v.position);
 
-    for (const auto& group : scene.meshGroups)
+    for (int ni = 0; ni < (int)scene.nodes.size(); ++ni)
     {
-        for (const auto& sm : group.submeshes)
+        const glm::mat4 nodeWorld = scene.getWorldMatrix(ni);
+        for (const auto& sm : scene.nodes[ni].submeshes)
         {
-            const glm::mat4 combinedMat = group.modelMatrix * sm.modelMatrix;
+            const glm::mat4 combinedMat = nodeWorld * sm.modelMatrix;
             const glm::mat3 normalMat   = glm::mat3(glm::transpose(glm::inverse(combinedMat)));
 
             const auto& verts = sm.meshData.vertices;
@@ -1116,15 +1117,16 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
             std::vector<vex::CPURaytracer::Triangle> gpuTriangles;
             std::vector<std::pair<int,int>> gpuTriangleSrc;
             std::vector<int> gpuTriangleSrcIdx; // triangle index within submesh
-            for (int gi = 0; gi < static_cast<int>(scene.meshGroups.size()); ++gi)
+            for (int ni = 0; ni < static_cast<int>(scene.nodes.size()); ++ni)
             {
-                for (int si = 0; si < static_cast<int>(scene.meshGroups[gi].submeshes.size()); ++si)
+                const glm::mat4 nodeWorld2 = scene.getWorldMatrix(ni);
+                for (int si = 0; si < static_cast<int>(scene.nodes[ni].submeshes.size()); ++si)
                 {
-                const auto& sm = scene.meshGroups[gi].submeshes[si];
+                const auto& sm = scene.nodes[ni].submeshes[si];
                     const auto& verts = sm.meshData.vertices;
                     const auto& idx   = sm.meshData.indices;
 
-                    const glm::mat4 combinedMat2 = scene.meshGroups[gi].modelMatrix * sm.modelMatrix;
+                    const glm::mat4 combinedMat2 = nodeWorld2 * sm.modelMatrix;
                     const glm::mat3 normalMat2   = glm::mat3(glm::transpose(glm::inverse(combinedMat2)));
 
                     int texIdx           = lookupTexture(sm.meshData.diffuseTexturePath);
@@ -1183,7 +1185,7 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
                         }
 
                         gpuTriangles.push_back(tri);
-                        gpuTriangleSrc.push_back({gi, si});
+                        gpuTriangleSrc.push_back({ni, si});
                         gpuTriangleSrcIdx.push_back(triWithinSubmesh);
                     }
                 }
@@ -1261,11 +1263,12 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
         float vkTotalLightArea = 0.0f;
         uint32_t globalTriOffset = 0;
 
-        for (const auto& group : scene.meshGroups)
+        for (int ni = 0; ni < (int)scene.nodes.size(); ++ni)
         {
-            for (const auto& sm : group.submeshes)
+            const glm::mat4 nodeWorld = scene.getWorldMatrix(ni);
+            for (const auto& sm : scene.nodes[ni].submeshes)
             {
-                const glm::mat4 combinedMat  = group.modelMatrix * sm.modelMatrix;
+                const glm::mat4 combinedMat  = nodeWorld * sm.modelMatrix;
                 const glm::mat3 vkNormalMat  = glm::mat3(glm::transpose(glm::inverse(combinedMat)));
 
                 auto* vkMesh = static_cast<vex::VKMesh*>(sm.mesh.get());
@@ -1443,7 +1446,7 @@ void SceneRenderer::rebuildMaterials(Scene& scene)
     {
         auto [gi, si] = m_rtTriangleSrcSubmesh[i];
         int triIdx    = m_rtTriangleSrcTriIdx[i];
-        const auto& sm = scene.meshGroups[gi].submeshes[si];
+        const auto& sm = scene.nodes[gi].submeshes[si];
         const auto& md = sm.meshData;
         const auto& v0 = md.vertices[md.indices[triIdx * 3]];
         m_rtTriangles[i].color            = v0.color   * md.baseColor;
@@ -1476,9 +1479,9 @@ void SceneRenderer::rebuildMaterials(Scene& scene)
     {
         static constexpr size_t FLOATS_PER_TRI = 52;
         size_t blasIdx = 0;
-        for (const auto& group : scene.meshGroups)
+        for (const auto& node : scene.nodes)
         {
-            for (const auto& sm : group.submeshes)
+            for (const auto& sm : node.submeshes)
             {
                 uint32_t triStart = m_vkInstanceOffsets[blasIdx];
                 size_t   triCount = sm.meshData.indices.size() / 3;
@@ -1522,8 +1525,7 @@ void SceneRenderer::rebuildMaterials(Scene& scene)
 #endif
 }
 
-void SceneRenderer::renderScene(Scene& scene, int selectedGroup, int selectedSubmesh,
-                                 const std::string& selectedObjectName)
+void SceneRenderer::renderScene(Scene& scene, int selectedNodeIdx, int selectedSubmesh)
 {
     // If we just switched to a path tracing mode, force a geometry rebuild so that
     // any gizmo model matrix changes from rasterization mode are applied.
@@ -1533,7 +1535,21 @@ void SceneRenderer::renderScene(Scene& scene, int selectedGroup, int selectedSub
         m_pendingGeomRebuild  = false;
     }
 
-    // Full geometry rebuild (new mesh loaded, etc.)
+    // Full geometry rebuild (new mesh loaded, transform changed in RT mode, etc.)
+    // In rasterizer mode, defer the expensive rebuild: just mark m_pendingGeomRebuild
+    // so it fires the moment the user switches to a RT mode.
+    if (scene.geometryDirty && m_renderMode == RenderMode::Rasterize)
+    {
+        m_pendingGeomRebuild = true;
+        scene.geometryDirty  = false;
+        // material-only changes still need to propagate for the rasterizer
+        if (scene.materialDirty)
+        {
+            rebuildMaterials(scene);
+            scene.materialDirty = false;
+        }
+    }
+
     // VK: also trigger when switching to CPU RT with a stale BVH (GPU RT uses BLAS/TLAS, not the CPU BVH).
     // GL: trigger whenever BVH is dirty — GPU RT also needs m_rtTriangles/m_rtBVH.
 #ifdef VEX_BACKEND_VULKAN
@@ -1558,13 +1574,13 @@ void SceneRenderer::renderScene(Scene& scene, int selectedGroup, int selectedSub
     // Outline mask pass — runs unconditionally for all render modes so path tracers
     // can sample it in their display pass. Must happen before the mode dispatch.
     {
-        m_outlineActive = (selectedGroup >= 0
-                        && selectedGroup < static_cast<int>(scene.meshGroups.size()));
+        m_outlineActive = (selectedNodeIdx >= 0
+                        && selectedNodeIdx < static_cast<int>(scene.nodes.size()));
         const auto& spec = m_framebuffer->getSpec();
         float aspect = static_cast<float>(spec.width) / static_cast<float>(spec.height);
         glm::mat4 maskView = scene.camera.getViewMatrix();
         glm::mat4 maskProj = scene.camera.getProjectionMatrix(aspect);
-        renderOutlineMask(scene, selectedGroup, selectedObjectName, maskView, maskProj);
+        renderOutlineMask(scene, selectedNodeIdx, maskView, maskProj);
     }
 
     switch (m_renderMode)
@@ -1585,12 +1601,12 @@ void SceneRenderer::renderScene(Scene& scene, int selectedGroup, int selectedSub
 #endif
         break;
     case RenderMode::Rasterize:
-        renderRasterize(scene, selectedGroup, selectedSubmesh);
+        renderRasterize(scene, selectedNodeIdx, selectedSubmesh);
         break;
     }
 }
 
-void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unused]] int selectedSubmesh)
+void SceneRenderer::renderRasterize(Scene& scene, int selectedNodeIdx, [[maybe_unused]] int selectedSubmesh)
 {
     // Keep the intermediate HDR framebuffer in sync with the output framebuffer size
     bool hdrFBResized = false;
@@ -1617,14 +1633,14 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
 
         // Fit the shadow frustum to the world-space AABB of all scene geometry.
         // Computed per-frame by transforming each group's cached local-space AABB
-        // corners through the current group.modelMatrix, so gizmo transforms are
+        // corners through the current node's world matrix, so gizmo transforms are
         // reflected immediately without a full geometry rebuild.
         // Fall back to a unit cube around the camera target if no geometry is loaded yet.
         vex::AABB worldAABB;
-        for (size_t gi = 0; gi < scene.meshGroups.size() && gi < m_groupLocalAABBs.size(); ++gi)
+        for (int ni = 0; ni < (int)scene.nodes.size() && ni < (int)m_nodeLocalAABBs.size(); ++ni)
         {
-            const vex::AABB& local = m_groupLocalAABBs[gi];
-            const glm::mat4& M     = scene.meshGroups[gi].modelMatrix;
+            const vex::AABB& local = m_nodeLocalAABBs[ni];
+            const glm::mat4  M     = scene.getWorldMatrix(ni);
             for (int c = 0; c < 8; ++c)
             {
                 glm::vec3 corner(
@@ -1700,13 +1716,13 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
         m_shadowShader->bind();
 
         // OpenGL: set the actual GL uniform (after bind, program is active)
-        // Vulkan: "u_lightViewProj" not in uniform map → no-op
+        // Vulkan: "u_lightViewProj" not in uniform map, no-op
         m_shadowShader->setMat4("u_lightViewProj", lightVP);
 
         // Small constant hardware depth bias during shadow rendering.
         // Normal offset (in mesh.frag) handles grazing angles; this tiny constant
-        // covers surfaces that directly face the light (where normal offset → 0).
-        // Slope-scale is intentionally zero: at grazing angles tan(theta) → infinity,
+        // covers surfaces that directly face the light (where normal offset close to 0).
+        // Slope-scale is intentionally zero: at grazing angles tan(theta) goes to infinity,
         // which creates the exact peter-panning gap we are trying to avoid.
 #ifdef VEX_BACKEND_OPENGL
         glEnable(GL_POLYGON_OFFSET_FILL);
@@ -1716,11 +1732,12 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
         vkCmdSetDepthBias(vex::VKContext::get().getCurrentCommandBuffer(), 1.25f, 0.0f, 0.0f);
 #endif
 
-        for (auto& group : scene.meshGroups)
+        for (int ni = 0; ni < (int)scene.nodes.size(); ++ni)
         {
-            for (auto& sm : group.submeshes)
+            const glm::mat4 nodeWorld = scene.getWorldMatrix(ni);
+            for (auto& sm : scene.nodes[ni].submeshes)
             {
-                m_shadowShader->setMat4("u_model", group.modelMatrix * sm.modelMatrix);
+                m_shadowShader->setMat4("u_model", nodeWorld * sm.modelMatrix);
                 sm.mesh->draw();
             }
         }
@@ -1767,8 +1784,8 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
         ++m_drawCalls;
     }
 
-    [[maybe_unused]] bool hasSelection = (selectedGroup >= 0
-                                          && selectedGroup < static_cast<int>(scene.meshGroups.size()));
+    [[maybe_unused]] bool hasSelection = (selectedNodeIdx >= 0
+                                          && selectedNodeIdx < static_cast<int>(scene.nodes.size()));
 
     // --- Main mesh pass ---
     m_meshShader->bind();
@@ -1827,7 +1844,7 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
         m_meshShader->setFloat("u_envLightMultiplier", m_rasterEnvLightMultiplier);
         m_meshShader->setBool("u_enableEnvLighting", m_rasterEnableEnvLighting);
         m_meshShader->setBool("u_hasEnvMap", hasEnvMap && m_rasterEnableEnvLighting);
-        // Bind env map at slot 5 (→ descriptor set 6)
+        // Bind env map at slot 5 (descriptor set 6)
         m_meshShader->setTexture(5, hasEnvMap ? m_vkRasterEnvTex.get() : m_whiteTexture.get());
 
         // Shadow map and shadow uniforms
@@ -1838,7 +1855,7 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
         {
             auto* vkShadowFB    = static_cast<vex::VKFramebuffer*>(m_shadowFB.get());
             auto* vkMeshShader  = static_cast<vex::VKShader*>(m_meshShader.get());
-            // Bind shadow depth at slot 6 (→ descriptor set 7)
+            // Bind shadow depth at slot 6 (descriptor set 7)
             vkMeshShader->setExternalTextureVK(6,
                 vkShadowFB->getDepthImageView(),
                 vkShadowFB->getDepthCompSampler(),
@@ -1847,16 +1864,17 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
     }
 #endif
 
-    for (int gi = 0; gi < static_cast<int>(scene.meshGroups.size()); ++gi)
+    for (int ni = 0; ni < static_cast<int>(scene.nodes.size()); ++ni)
     {
-        for (int si = 0; si < static_cast<int>(scene.meshGroups[gi].submeshes.size()); ++si)
+        const glm::mat4 nodeWorld = scene.getWorldMatrix(ni);
+        for (int si = 0; si < static_cast<int>(scene.nodes[ni].submeshes.size()); ++si)
         {
-            auto& sm = scene.meshGroups[gi].submeshes[si];
-            m_meshShader->setMat4("u_model", scene.meshGroups[gi].modelMatrix * sm.modelMatrix);
+            auto& sm = scene.nodes[ni].submeshes[si];
+            m_meshShader->setMat4("u_model", nodeWorld * sm.modelMatrix);
 
 #ifdef VEX_BACKEND_OPENGL
-            bool isSelectedGroup = hasSelection && gi == selectedGroup;
-            bool writeStencil = isSelectedGroup && (selectedSubmesh < 0 || si == selectedSubmesh);
+            bool isSelectedNode = hasSelection && ni == selectedNodeIdx;
+            bool writeStencil = isSelectedNode && (selectedSubmesh < 0 || si == selectedSubmesh);
             if (writeStencil)
             {
                 glEnable(GL_STENCIL_TEST);
@@ -1935,7 +1953,7 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
 
         glDisable(GL_DEPTH_TEST);
 
-        // Threshold pass: HDR → bloom[0]
+        // Threshold pass: HDR -> bloom[0]
         m_bloomFB[0]->bind(); // sets viewport to bw×bh
         m_bloomThresholdShader->bind();
         glActiveTexture(GL_TEXTURE0);
@@ -1969,7 +1987,7 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
         bloomTex = static_cast<GLuint>(m_bloomFB[0]->getColorAttachmentHandle());
     }
 
-    // --- Tone-map blit: HDR intermediate buffer → output framebuffer ---
+    // --- Tone-map blit: HDR intermediate buffer -> output framebuffer ---
     if (m_fullscreenRTShader)
     {
         m_framebuffer->bind();
@@ -2034,7 +2052,7 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
         auto* vkHDRFB2 = static_cast<vex::VKFramebuffer*>(m_rasterHDRFB.get());
         auto* vkThreshVK = static_cast<vex::VKShader*>(m_vkBloomThresholdShader.get());
 
-        // Threshold pass: rasterHDRFB → bloom[0]
+        // Threshold pass: rasterHDRFB -> bloom[0]
         m_vkBloomFB[0]->bind();
         m_vkBloomFB[0]->clear(0.0f, 0.0f, 0.0f, 1.0f);
         m_vkBloomThresholdShader->setFloat("u_threshold", m_bloomThreshold);
@@ -2075,7 +2093,7 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
         vkBloomSampler = vkBloom0->getColorSampler();
     }
 
-    // --- Tone-map blit: HDR intermediate buffer → output framebuffer ---
+    // --- Tone-map blit: HDR intermediate buffer -> output framebuffer ---
     if (m_vkFullscreenRTShader)
     {
         auto* vkHDRFB    = static_cast<vex::VKFramebuffer*>(m_rasterHDRFB.get());
@@ -2122,8 +2140,7 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedGroup, [[maybe_unu
 #endif
 }
 
-void SceneRenderer::renderOutlineMask(Scene& scene, int selectedGroup,
-                                      const std::string& selectedObjectName,
+void SceneRenderer::renderOutlineMask(Scene& scene, int selectedNodeIdx,
                                       const glm::mat4& view, const glm::mat4& proj)
 {
     m_outlineMaskFB->bind();
@@ -2146,16 +2163,11 @@ void SceneRenderer::renderOutlineMask(Scene& scene, int selectedGroup,
         m_outlineMaskShader->setMat4("u_projection", proj);
 #endif
 
-        auto& maskGroup    = scene.meshGroups[selectedGroup];
-        auto& maskSubmeshes = maskGroup.submeshes;
-        for (auto& sm : maskSubmeshes)
+        const glm::mat4 nodeWorld = scene.getWorldMatrix(selectedNodeIdx);
+        for (auto& sm : scene.nodes[selectedNodeIdx].submeshes)
         {
-            if (selectedObjectName.empty() ||
-                sm.meshData.objectName == selectedObjectName)
-            {
-                m_outlineMaskShader->setMat4("u_model", maskGroup.modelMatrix * sm.modelMatrix);
-                sm.mesh->draw();
-            }
+            m_outlineMaskShader->setMat4("u_model", nodeWorld * sm.modelMatrix);
+            sm.mesh->draw();
         }
 
         m_outlineMaskShader->unbind();
@@ -2239,7 +2251,7 @@ void SceneRenderer::renderCPURaytrace(Scene& scene)
 #endif
 
 #ifdef VEX_BACKEND_VULKAN
-                // Convert float RGB → RGBA8 (Reinhard tonemap) for Vulkan rasterizer env texture
+                // Convert float RGB -> RGBA8 (Reinhard tonemap) for Vulkan rasterizer env texture
                 {
                     int npix = ew * eh;
                     std::vector<uint8_t> rgba8(npix * 4);
@@ -2748,12 +2760,13 @@ std::pair<int,int> SceneRenderer::pick(Scene& scene, int pixelX, int pixelY)
 
     constexpr float EPS = 1e-7f;
 
-    for (int gi = 0; gi < static_cast<int>(scene.meshGroups.size()); ++gi)
+    for (int ni = 0; ni < static_cast<int>(scene.nodes.size()); ++ni)
     {
-        for (int si = 0; si < static_cast<int>(scene.meshGroups[gi].submeshes.size()); ++si)
+        const glm::mat4 nodeWorld = scene.getWorldMatrix(ni);
+        for (int si = 0; si < static_cast<int>(scene.nodes[ni].submeshes.size()); ++si)
         {
-            const auto& sm      = scene.meshGroups[gi].submeshes[si];
-            const glm::mat4 M   = scene.meshGroups[gi].modelMatrix * sm.modelMatrix;
+            const auto& sm      = scene.nodes[ni].submeshes[si];
+            const glm::mat4 M   = nodeWorld * sm.modelMatrix;
             const auto& md      = sm.meshData;
             const auto& verts   = md.vertices;
             const auto& indices = md.indices;
@@ -2783,7 +2796,7 @@ std::pair<int,int> SceneRenderer::pick(Scene& scene, int pixelX, int pixelY)
                 if (t > EPS && t < bestT)
                 {
                     bestT       = t;
-                    bestGroup   = gi;
+                    bestGroup   = ni;
                     bestSubmesh = si;
                 }
             }
@@ -2817,14 +2830,15 @@ std::pair<int,int> SceneRenderer::pick(Scene& scene, int pixelX, int pixelY)
     m_pickShader->setMat4("u_view", view);
     m_pickShader->setMat4("u_projection", proj);
 
-    // Build flat-draw-index -> {groupIdx, submeshIdx} mapping
+    // Build flat-draw-index -> {nodeIdx, submeshIdx} mapping
     std::vector<std::pair<int,int>> drawToMesh;
-    for (int gi = 0; gi < static_cast<int>(scene.meshGroups.size()); ++gi)
+    for (int ni = 0; ni < static_cast<int>(scene.nodes.size()); ++ni)
     {
-        for (int si = 0; si < static_cast<int>(scene.meshGroups[gi].submeshes.size()); ++si)
+        const glm::mat4 nodeWorld = scene.getWorldMatrix(ni);
+        for (int si = 0; si < static_cast<int>(scene.nodes[ni].submeshes.size()); ++si)
         {
-            auto& sm = scene.meshGroups[gi].submeshes[si];
-            m_pickShader->setMat4("u_model", scene.meshGroups[gi].modelMatrix * sm.modelMatrix);
+            auto& sm = scene.nodes[ni].submeshes[si];
+            m_pickShader->setMat4("u_model", nodeWorld * sm.modelMatrix);
             int drawIdx = static_cast<int>(drawToMesh.size());
             m_pickShader->setInt("u_objectID", drawIdx);
             vex::Texture2D* tex = sm.diffuseTexture
@@ -2833,7 +2847,7 @@ std::pair<int,int> SceneRenderer::pick(Scene& scene, int pixelX, int pixelY)
             m_pickShader->setTexture(0, tex);
             m_pickShader->setBool("u_alphaClip", sm.meshData.alphaClip);
             sm.mesh->draw();
-            drawToMesh.push_back({gi, si});
+            drawToMesh.push_back({ni, si});
         }
     }
     m_pickShader->unbind();
@@ -2865,8 +2879,8 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
     uint32_t h = spec.height;
 
     // ── Environment map change detection ──────────────────────────────────────
-    bool envChanged     = false; // any env change → accumulation reset
-    bool envDataChanged = false; // env SSBO data changed → full scene data re-upload
+    bool envChanged     = false; // any env change -> accumulation reset
+    bool envDataChanged = false; // env SSBO data changed -> full scene data re-upload
 
     bool customPathChanged = (scene.customEnvmapPath != m_prevCustomEnvmapPath);
     if (customPathChanged)
@@ -3885,7 +3899,7 @@ uintptr_t SceneRenderer::getShadowMapDisplayHandle()
 bool SceneRenderer::shadowMapFlipsUV() const
 {
 #ifdef VEX_BACKEND_VULKAN
-    // Shadow map uses standard (non-Y-flipped) viewport → row 0 = NDC y=-1 = scene bottom.
+    // Shadow map uses standard (non-Y-flipped) viewport -> row 0 = NDC y=-1 = scene bottom.
     // ImGui's UV y=0 maps to image top, so the display appears inverted — flip to correct.
     return m_shadowFB != nullptr;
 #else

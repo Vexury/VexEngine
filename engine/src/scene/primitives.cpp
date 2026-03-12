@@ -29,7 +29,7 @@ static MeshData baseData(const char* name)
 }
 
 // ── Plane ────────────────────────────────────────────────────────────────────
-// Face-up (+Y), centred at origin in XZ plane. UVs 0→1.
+// Face-up (+Y), centred at origin in XZ plane. UVs 0 to 1.
 // Winding: CCW from above (normal = +Y).
 MeshData Primitives::makePlane(float w, float h)
 {

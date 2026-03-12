@@ -18,7 +18,7 @@ private:
     void processPicking();
     void runImport(const std::string& path, const std::string& name);
     void duplicateSelected();
-    MeshGroupSave saveMeshGroup(int groupIndex) const;
+    NodeSave saveNode(int nodeIndex) const;
 
     vex::Engine   m_engine;
     Scene         m_scene;

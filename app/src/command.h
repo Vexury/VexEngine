@@ -7,6 +7,7 @@
 #include <deque>
 #include <memory>
 #include <string>
+#include <vector>
 
 struct Scene;
 class SceneRenderer;
@@ -23,22 +24,50 @@ struct ICommand
 
 // ── Concrete commands ────────────────────────────────────────────────────────
 
-struct CmdAddMeshGroup : ICommand
+// Adds a single node (no children) at insertionIndex.
+struct CmdAddNode : ICommand
 {
-    MeshGroupSave save;
-    int           index;  // meshGroups index the group occupies after redo
+    NodeSave save;
+    int      insertionIndex;  // index in scene.nodes after redo
+    int      parentIndex;     // -1 if root; parent is NOT in save (it's an existing node)
+    int      siblingPos;      // insertion position in parent's childIndices (-1 = append)
 
-    CmdAddMeshGroup(MeshGroupSave s, int idx) : save(std::move(s)), index(idx) {}
+    CmdAddNode(NodeSave s, int idx, int parent = -1, int sibPos = -1)
+        : save(std::move(s)), insertionIndex(idx), parentIndex(parent), siblingPos(sibPos) {}
     void undo(Scene& s, SceneRenderer& r, EditorUI& ui) override;
     void redo(Scene& s, SceneRenderer& r, EditorUI& ui) override;
 };
 
-struct CmdDeleteMeshGroup : ICommand
+// Deletes a subtree rooted at a node. Saves entire subtree for undo.
+struct CmdDeleteNode : ICommand
 {
-    MeshGroupSave save;
-    int           index;  // original position in meshGroups
+    std::vector<NodeSave> subtreeSaves;      // one per node, in ascending originalIndex order
+    std::vector<int>      originalIndices;   // ascending originalIndex order (matches subtreeSaves)
+    int                   rootParentIdx;     // parent of root before deletion (-1 = root of scene)
+    int                   rootSiblingPos;    // position of root in parent's childIndices
 
-    CmdDeleteMeshGroup(MeshGroupSave s, int idx) : save(std::move(s)), index(idx) {}
+    CmdDeleteNode(const Scene& scene, int rootNodeIdx);
+    void undo(Scene& s, SceneRenderer& r, EditorUI& ui) override;
+    void redo(Scene& s, SceneRenderer& r, EditorUI& ui) override;
+
+private:
+    static NodeSave captureNode(const Scene& scene, int nodeIdx);
+};
+
+// Reparents a node (no flat-vector changes, only parentIndex/childIndices + localMatrix).
+struct CmdReparent : ICommand
+{
+    int       nodeIdx;
+    int       oldParentIdx;     // -1 if was root
+    int       newParentIdx;     // -1 if becoming root
+    int       oldSiblingPos;    // position in old parent's childIndices (for undo)
+    glm::mat4 oldLocalMatrix;
+    glm::mat4 newLocalMatrix;   // preserves world position: inv(parent.world) * node.world
+
+    CmdReparent(int node, int oldPar, int newPar, int oldSibPos,
+                glm::mat4 oldLocal, glm::mat4 newLocal)
+        : nodeIdx(node), oldParentIdx(oldPar), newParentIdx(newPar),
+          oldSiblingPos(oldSibPos), oldLocalMatrix(oldLocal), newLocalMatrix(newLocal) {}
     void undo(Scene& s, SceneRenderer& r, EditorUI& ui) override;
     void redo(Scene& s, SceneRenderer& r, EditorUI& ui) override;
 };
@@ -63,16 +92,25 @@ struct CmdDeleteVolume : ICommand
     void redo(Scene& s, SceneRenderer& r, EditorUI& ui) override;
 };
 
+// Undo/redo wrapper for OBJ import: swaps CmdDeleteNode's undo/redo so that
+// undo() removes the imported subtree and redo() restores it.
+struct CmdImportUndo : ICommand
+{
+    CmdDeleteNode delCmd;
+    explicit CmdImportUndo(CmdDeleteNode d) : delCmd(std::move(d)) {}
+    void undo(Scene& s, SceneRenderer& r, EditorUI& ui) override { delCmd.redo(s, r, ui); }
+    void redo(Scene& s, SceneRenderer& r, EditorUI& ui) override { delCmd.undo(s, r, ui); }
+};
+
+// Simplified transform command: stores nodeIdx + local matrix before/after.
 struct CmdSetTransform : ICommand
 {
-    int         groupIdx;
-    int         submeshIdx;   // >= 0 = specific submesh index; -1 = use objectName or group
-    std::string objectName;   // non-empty = apply to all submeshes with this objectName
-    glm::mat4   before;       // local matrix before (group.modelMatrix or sm.modelMatrix)
-    glm::mat4   after;        // local matrix after
+    int       nodeIdx;
+    glm::mat4 before;   // localMatrix before
+    glm::mat4 after;    // localMatrix after
 
-    CmdSetTransform(int gIdx, int sIdx, std::string objName, glm::mat4 b, glm::mat4 a)
-        : groupIdx(gIdx), submeshIdx(sIdx), objectName(std::move(objName)), before(b), after(a) {}
+    CmdSetTransform(int idx, glm::mat4 b, glm::mat4 a)
+        : nodeIdx(idx), before(b), after(a) {}
     void undo(Scene& s, SceneRenderer& r, EditorUI& ui) override;
     void redo(Scene& s, SceneRenderer& r, EditorUI& ui) override;
 };

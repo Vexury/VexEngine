@@ -4,6 +4,7 @@
 #include <vex/core/log.h>
 #include <vex/graphics/graphics_context.h>
 #include <vex/scene/primitives.h>
+#include <vex/raytracing/bvh.h>
 
 #include <imgui.h>
 #include <GLFW/glfw3.h>
@@ -64,16 +65,16 @@ bool App::init(const vex::EngineConfig& config)
     m_scene.camera.fov = 45.0f;
 
     // Focus camera on the loaded scene
-    if (!m_scene.meshGroups.empty())
+    if (!m_scene.nodes.empty())
     {
         glm::vec3 sceneCenter{0.0f};
-        for (const auto& g : m_scene.meshGroups)
-            sceneCenter += g.center;
-        sceneCenter /= static_cast<float>(m_scene.meshGroups.size());
+        for (const auto& n : m_scene.nodes)
+            sceneCenter += n.center;
+        sceneCenter /= static_cast<float>(m_scene.nodes.size());
 
         float sceneRadius = 0.0f;
-        for (const auto& g : m_scene.meshGroups)
-            sceneRadius = std::max(sceneRadius, glm::length(g.center - sceneCenter) + g.radius);
+        for (const auto& n : m_scene.nodes)
+            sceneRadius = std::max(sceneRadius, glm::length(n.center - sceneCenter) + n.radius);
 
         m_scene.camera.setOrbit(sceneCenter, sceneRadius * 2.5f, 0.0f, 0.15f);
         m_scene.camera.farPlane = std::max(100.0f, sceneRadius * 4.5f);
@@ -92,15 +93,17 @@ bool App::init(const vex::EngineConfig& config)
     return true;
 }
 
-MeshGroupSave App::saveMeshGroup(int idx) const
+NodeSave App::saveNode(int idx) const
 {
-    const auto& group = m_scene.meshGroups[idx];
-    MeshGroupSave save;
-    save.name        = group.name;
-    save.center      = group.center;
-    save.radius      = group.radius;
-    save.modelMatrix = group.modelMatrix;
-    for (const auto& sm : group.submeshes)
+    const auto& node = m_scene.nodes[idx];
+    NodeSave save;
+    save.name         = node.name;
+    save.center       = node.center;
+    save.radius       = node.radius;
+    save.localMatrix  = node.localMatrix;
+    save.parentIndex  = node.parentIndex;
+    save.childIndices = node.childIndices;
+    for (const auto& sm : node.submeshes)
     {
         SubmeshSave ss;
         ss.name        = sm.name;
@@ -114,14 +117,17 @@ MeshGroupSave App::saveMeshGroup(int idx) const
 void App::duplicateSelected()
 {
     int idx = m_ui.getSelectedMeshGroup();
-    if (idx < 0 || idx >= static_cast<int>(m_scene.meshGroups.size())) return;
+    if (idx < 0 || idx >= static_cast<int>(m_scene.nodes.size())) return;
 
-    MeshGroupSave save = saveMeshGroup(idx);
+    const auto& node = m_scene.nodes[idx];
+
+    NodeSave save = saveNode(idx);
     save.name += " (Copy)";
-    save.modelMatrix = glm::translate(save.modelMatrix, {0.3f, 0.f, 0.f});
+    save.localMatrix = glm::translate(save.localMatrix, {0.3f, 0.f, 0.f});
+    save.childIndices.clear();  // copy is childless
 
-    int newIdx = static_cast<int>(m_scene.meshGroups.size());
-    auto cmd = std::make_unique<CmdAddMeshGroup>(std::move(save), newIdx);
+    int newIdx = static_cast<int>(m_scene.nodes.size());
+    auto cmd = std::make_unique<CmdAddNode>(std::move(save), newIdx, node.parentIndex, -1);
     m_cmdStack.execute(std::move(cmd), m_scene, m_renderer, m_ui);
 }
 
@@ -192,7 +198,7 @@ void App::handleInput()
             duplicateSelected();
     }
 
-    // Gizmo transform commit → push undo command
+    // Gizmo transform commit -> push undo command
     {
         EditorUI::TransformCommit tc;
         if (m_ui.consumeTransformCommit(tc))
@@ -204,7 +210,7 @@ void App::handleInput()
                     changed = (tc.before[i][j] != tc.after[i][j]);
             if (changed)
             {
-                auto cmd = std::make_unique<CmdSetTransform>(tc.groupIndex, tc.submeshIndex, tc.objectName, tc.before, tc.after);
+                auto cmd = std::make_unique<CmdSetTransform>(tc.nodeIdx, tc.before, tc.after);
                 m_cmdStack.pushUndoOnly(std::move(cmd));
             }
         }
@@ -218,9 +224,9 @@ void App::handleInput()
             case Selection::Mesh:
             {
                 int idx = m_ui.getSelectionIndex();
-                if (idx >= 0 && idx < static_cast<int>(m_scene.meshGroups.size()))
+                if (idx >= 0 && idx < static_cast<int>(m_scene.nodes.size()))
                 {
-                    auto cmd = std::make_unique<CmdDeleteMeshGroup>(saveMeshGroup(idx), idx);
+                    auto cmd = std::make_unique<CmdDeleteNode>(m_scene, idx);
                     m_cmdStack.execute(std::move(cmd), m_scene, m_renderer, m_ui);
                 }
                 else
@@ -273,12 +279,16 @@ void App::handleInput()
             case Selection::Mesh:
             {
                 int idx = m_ui.getSelectionIndex();
-                if (idx >= 0 && idx < static_cast<int>(m_scene.meshGroups.size()))
+                if (idx >= 0 && idx < static_cast<int>(m_scene.nodes.size()))
                 {
-                    auto& g = m_scene.meshGroups[idx];
-                    m_scene.camera.getTarget() = g.center;
-                    m_scene.camera.getDistance() = g.radius * 2.5f;
-                    float needed = m_scene.camera.getDistance() + g.radius * 2.0f;
+                    const auto& node = m_scene.nodes[idx];
+                    // World-space center of the node
+                    glm::vec3 center = glm::vec3(m_scene.getWorldMatrix(idx) * glm::vec4(node.center, 1.0f));
+                    float radius = node.radius;
+
+                    m_scene.camera.getTarget() = center;
+                    m_scene.camera.getDistance() = radius * 2.5f;
+                    float needed = m_scene.camera.getDistance() + radius * 2.0f;
                     m_scene.camera.farPlane = std::max(100.0f, needed);
                 }
                 break;
@@ -298,18 +308,9 @@ void App::processPicking()
     if (!m_ui.consumePickRequest(pickX, pickY))
         return;
 
-    auto [groupIdx, submeshIdx] = m_renderer.pick(m_scene, pickX, pickY);
-    if (groupIdx >= 0)
-    {
-        // Select at object level (not submesh level) so the hierarchy highlight
-        // and the inspector view match what you'd get by clicking in the hierarchy.
-        const auto& groups = m_scene.meshGroups;
-        std::string objName;
-        if (submeshIdx >= 0 && submeshIdx < (int)groups[groupIdx].submeshes.size())
-            objName = groups[groupIdx].submeshes[submeshIdx].meshData.objectName;
-        m_ui.setSelection(Selection::Mesh, groupIdx, -1);
-        m_ui.setSelectedObjectName(objName);
-    }
+    auto [nodeIdx, submeshIdx] = m_renderer.pick(m_scene, pickX, pickY);
+    if (nodeIdx >= 0)
+        m_ui.setSelection(Selection::Mesh, nodeIdx, -1);
     else
         m_ui.clearSelection();
 }
@@ -353,18 +354,19 @@ void App::run()
                 vex::MeshData md = generatePrimitive(primType);
                 const char*   nm = primitiveTypeName(primType);
 
-                MeshGroupSave save;
+                NodeSave save;
                 save.name        = nm;
                 save.center      = {0.f, 0.f, 0.f};
                 save.radius      = 1.0f;
-                save.modelMatrix = glm::mat4(1.f);
+                save.localMatrix = glm::mat4(1.f);
+                save.parentIndex = -1;
                 SubmeshSave ss;
                 ss.name     = nm;
                 ss.meshData = std::move(md);
                 save.submeshes.push_back(std::move(ss));
 
-                int newIdx = static_cast<int>(m_scene.meshGroups.size());
-                auto cmd = std::make_unique<CmdAddMeshGroup>(std::move(save), newIdx);
+                int newIdx = static_cast<int>(m_scene.nodes.size());
+                auto cmd = std::make_unique<CmdAddNode>(std::move(save), newIdx);
                 m_cmdStack.execute(std::move(cmd), m_scene, m_renderer, m_ui);
             }
         }
@@ -383,17 +385,56 @@ void App::run()
         if (m_ui.consumePendingDuplicate())
             duplicateSelected();
 
+        // Handle deferred reparent (from hierarchy drag-and-drop)
+        {
+            EditorUI::PendingReparent pr;
+            if (m_ui.consumePendingReparent(pr))
+            {
+                int nodeIdx = pr.nodeIdx;
+                if (nodeIdx >= 0 && nodeIdx < (int)m_scene.nodes.size())
+                {
+                    auto& node = m_scene.nodes[nodeIdx];
+                    int oldParent = node.parentIndex;
+
+                    // Find old sibling position
+                    int oldSibPos = 0;
+                    if (oldParent >= 0 && oldParent < (int)m_scene.nodes.size())
+                    {
+                        const auto& pc = m_scene.nodes[oldParent].childIndices;
+                        for (int i = 0; i < (int)pc.size(); ++i)
+                            if (pc[i] == nodeIdx) { oldSibPos = i; break; }
+                    }
+
+                    glm::mat4 oldLocal = node.localMatrix;
+                    glm::mat4 oldWorld = m_scene.getWorldMatrix(nodeIdx);
+
+                    // Compute new local matrix that preserves world position
+                    glm::mat4 newLocal;
+                    if (pr.newParentIdx >= 0 && pr.newParentIdx < (int)m_scene.nodes.size())
+                        newLocal = glm::inverse(m_scene.getWorldMatrix(pr.newParentIdx)) * oldWorld;
+                    else
+                        newLocal = oldWorld;
+
+                    auto cmd = std::make_unique<CmdReparent>(
+                        nodeIdx, oldParent, pr.newParentIdx, oldSibPos, oldLocal, newLocal);
+                    m_cmdStack.execute(std::move(cmd), m_scene, m_renderer, m_ui);
+                }
+            }
+        }
+
         // Handle any deferred import between frames so we can pump the loading overlay.
         std::string importPath, importName;
         if (m_ui.consumePendingImport(importPath, importName))
         {
-            int prevCount = static_cast<int>(m_scene.meshGroups.size());
+            int prevCount = static_cast<int>(m_scene.nodes.size());
             runImport(importPath, importName);
-            if (static_cast<int>(m_scene.meshGroups.size()) > prevCount)
+            if (static_cast<int>(m_scene.nodes.size()) > prevCount)
             {
-                int newIdx = static_cast<int>(m_scene.meshGroups.size()) - 1;
-                auto cmd = std::make_unique<CmdAddMeshGroup>(saveMeshGroup(newIdx), newIdx);
-                m_cmdStack.pushUndoOnly(std::move(cmd));
+                // Root was inserted at prevCount; CmdImportUndo captures the full
+                // subtree (root + any objectName children) for correct undo/redo.
+                m_cmdStack.pushUndoOnly(
+                    std::make_unique<CmdImportUndo>(CmdDeleteNode(m_scene, prevCount)));
+                m_ui.setSelection(Selection::Mesh, prevCount);
             }
         }
 
@@ -401,8 +442,7 @@ void App::run()
         handleInput();
         m_renderer.setRenderMode(static_cast<RenderMode>(m_ui.getRenderModeIndex()));
         m_renderer.setDebugMode(static_cast<DebugMode>(m_ui.getDebugModeIndex()));
-        m_renderer.renderScene(m_scene, m_ui.getSelectedMeshGroup(), m_ui.getSelectedSubmesh(),
-                               m_ui.getSelectedObjectName());
+        m_renderer.renderScene(m_scene, m_ui.getSelectedMeshGroup(), m_ui.getSelectedSubmesh());
         m_ui.renderViewport(m_renderer, m_scene);
         processPicking();
         m_ui.renderHierarchy(m_scene, m_renderer);
@@ -418,7 +458,7 @@ void App::shutdown()
 {
     m_engine.getGraphicsContext().waitIdle();
     m_renderer.shutdown();
-    m_scene.meshGroups.clear();
+    m_scene.nodes.clear();
     m_scene.skybox.reset();
     m_engine.shutdown();
     NFD_Quit();

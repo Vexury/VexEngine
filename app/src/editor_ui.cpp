@@ -24,7 +24,7 @@
 // Gizmo helpers (file-scope)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Project world pos → viewport screen pos (returns {-99999,-99999} if behind camera)
+// Project world pos to viewport screen pos (returns {-99999,-99999} if behind camera)
 static ImVec2 gizmoProject(const glm::vec3& p, const glm::mat4& vp, ImVec2 org, ImVec2 sz)
 {
     glm::vec4 c = vp * glm::vec4(p, 1.f);
@@ -105,6 +105,25 @@ bool EditorUI::consumeTransformCommit(TransformCommit& out)
     out = m_transformCommit;
     m_transformCommitReady = false;
     return true;
+}
+
+bool EditorUI::consumePendingReparent(PendingReparent& out)
+{
+    if (!m_pendingReparentReady) return false;
+    out = m_pendingReparent;
+    m_pendingReparentReady = false;
+    return true;
+}
+
+bool EditorUI::isAncestorOf(const Scene& scene, int potentialAncestor, int node) const
+{
+    int cur = node;
+    while (cur >= 0 && cur < (int)scene.nodes.size())
+    {
+        if (cur == potentialAncestor) return true;
+        cur = scene.nodes[cur].parentIndex;
+    }
+    return false;
 }
 
 void EditorUI::setLoadingState(const std::string& stage, float progress)
@@ -249,7 +268,7 @@ void EditorUI::renderViewport(SceneRenderer& renderer, Scene& scene)
                 row("Del",        "Delete selected");
 
                 ImGui::Spacing();
-                ImGui::TextDisabled("Transform");
+                ImGui::TextDisabled("Transform (Only in Rasterization mode)");
                 row("W",          "Move");
                 row("E",          "Rotate");
                 row("R",          "Scale  (center knob = uniform)");
@@ -281,55 +300,23 @@ void EditorUI::renderViewport(SceneRenderer& renderer, Scene& scene)
 
 bool EditorUI::drawGizmo(Scene& scene, ImDrawList* dl, ImVec2 vpOrigin, ImVec2 vpSize)
 {
-    if (m_selectionIndex < 0 || m_selectionIndex >= static_cast<int>(scene.meshGroups.size()))
+    if (m_selectionIndex < 0 || m_selectionIndex >= static_cast<int>(scene.nodes.size()))
         return false;
 
-    auto& group = scene.meshGroups[m_selectionIndex];
+    auto& node = scene.nodes[m_selectionIndex];
 
-    // Determine which target the gizmo operates on:
-    //   isSubmesh  — explicit submesh index (m_submeshIndex >= 0)
-    //   isChildObj — child selected by objectName (!m_selectedObjectName.empty())
-    //   group      — top-level group selection
-    bool isSubmesh  = (m_submeshIndex >= 0 && m_submeshIndex < static_cast<int>(group.submeshes.size()));
-    bool isChildObj = (!isSubmesh && !m_selectedObjectName.empty());
-
-    // For objectName-based selections, find the first matching submesh index.
-    int childSI = -1;
-    if (isChildObj)
-    {
-        for (int i = 0; i < static_cast<int>(group.submeshes.size()); ++i)
-        {
-            if (group.submeshes[i].meshData.objectName == m_selectedObjectName)
-            { childSI = i; break; }
-        }
-        if (childSI < 0) return false;  // objectName not found — nothing to operate on
-    }
-
-    // Returns the current world-space matrix of the gizmo target.
+    // Returns the current world-space matrix of the selected node.
     auto currentWorldMat = [&]() -> glm::mat4 {
-        if (isSubmesh)  return group.modelMatrix * group.submeshes[m_submeshIndex].modelMatrix;
-        if (isChildObj) return group.modelMatrix * group.submeshes[childSI].modelMatrix;
-        return group.modelMatrix;
+        return scene.getWorldMatrix(m_selectionIndex);
     };
 
-    // Writes a new world-space matrix back to the appropriate target.
-    // For objectName selections, ALL submeshes sharing that name move together.
+    // Writes a new world-space matrix back to the node's localMatrix.
     auto writeBack = [&](const glm::mat4& newWorld) {
-        if (isSubmesh)
-        {
-            group.submeshes[m_submeshIndex].modelMatrix = glm::inverse(group.modelMatrix) * newWorld;
-        }
-        else if (isChildObj)
-        {
-            glm::mat4 localMat = glm::inverse(group.modelMatrix) * newWorld;
-            for (auto& sm2 : group.submeshes)
-                if (sm2.meshData.objectName == m_selectedObjectName)
-                    sm2.modelMatrix = localMat;
-        }
+        if (node.parentIndex >= 0)
+            node.localMatrix = glm::inverse(scene.getWorldMatrix(node.parentIndex)) * newWorld;
         else
-        {
-            group.modelMatrix = newWorld;
-        }
+            node.localMatrix = newWorld;
+        scene.geometryDirty = true;
     };
 
     float aspect = vpSize.x / vpSize.y;
@@ -339,32 +326,19 @@ bool EditorUI::drawGizmo(Scene& scene, ImDrawList* dl, ImVec2 vpOrigin, ImVec2 v
 
     glm::vec3 camPos = scene.camera.getPosition();
 
-    // Compute the visual pivot: geometric center (AABB) of the selected submesh(es)
-    // transformed to world space.  For group-level selection this is just the origin.
-    auto submeshAABBCenter = [&](const SceneMesh& sm) -> glm::vec3 {
-        if (sm.meshData.vertices.empty()) return glm::vec3(0.f);
-        glm::vec3 bmin = sm.meshData.vertices[0].position;
-        glm::vec3 bmax = bmin;
-        for (const auto& v : sm.meshData.vertices)
-        { bmin = glm::min(bmin, v.position); bmax = glm::max(bmax, v.position); }
-        return (bmin + bmax) * 0.5f;
-    };
-
+    // Compute the visual pivot: AABB center of all submeshes in node-local space
+    // (applying each sm.modelMatrix to get node-local coordinates).
     glm::vec3 localCenter(0.f);
-    if (isSubmesh)
     {
-        localCenter = submeshAABBCenter(group.submeshes[m_submeshIndex]);
-    }
-    else if (isChildObj)
-    {
-        // Combined AABB for all submeshes sharing this objectName
         glm::vec3 bmin(FLT_MAX), bmax(-FLT_MAX);
         bool any = false;
-        for (const auto& sm2 : group.submeshes)
+        for (const auto& sm : node.submeshes)
         {
-            if (sm2.meshData.objectName != m_selectedObjectName) continue;
-            for (const auto& v : sm2.meshData.vertices)
-            { bmin = glm::min(bmin, v.position); bmax = glm::max(bmax, v.position); any = true; }
+            for (const auto& v : sm.meshData.vertices)
+            {
+                glm::vec3 p = glm::vec3(sm.modelMatrix * glm::vec4(v.position, 1.0f));
+                bmin = glm::min(bmin, p); bmax = glm::max(bmax, p); any = true;
+            }
         }
         if (any) localCenter = (bmin + bmax) * 0.5f;
     }
@@ -448,6 +422,7 @@ bool EditorUI::drawGizmo(Scene& scene, ImDrawList* dl, ImVec2 vpOrigin, ImVec2 v
             m_gizmoAxis      = hoveredAxis;
             m_gizmoDragStart = mouse;
             m_gizmoMatStart  = currentWorldMat();
+            m_gizmoLocalStart = node.localMatrix;
             m_gizmoPivot     = pivot;
         }
 
@@ -502,7 +477,7 @@ bool EditorUI::drawGizmo(Scene& scene, ImDrawList* dl, ImVec2 vpOrigin, ImVec2 v
 
         if (m_gizmoDragging && lmbReleased)
         {
-            m_transformCommit      = { m_selectionIndex, m_submeshIndex, m_selectedObjectName, m_gizmoMatStart, currentWorldMat() };
+            m_transformCommit      = { m_selectionIndex, m_gizmoLocalStart, node.localMatrix };
             m_transformCommitReady = true;
             m_gizmoDragging        = false;
             m_gizmoAxis            = -1;
@@ -569,12 +544,13 @@ bool EditorUI::drawGizmo(Scene& scene, ImDrawList* dl, ImVec2 vpOrigin, ImVec2 v
 
         if (!m_gizmoDragging && lmbJustPressed && hoveredAxis >= 0)
         {
-            m_gizmoDragging  = true;
-            m_gizmoAxis      = hoveredAxis;
-            m_gizmoDragStart = mouse;
-            m_gizmoMatStart  = currentWorldMat();
-            m_gizmoPivot     = pivot;
-            m_gizmoRotRefSet = false;
+            m_gizmoDragging   = true;
+            m_gizmoAxis       = hoveredAxis;
+            m_gizmoDragStart  = mouse;
+            m_gizmoMatStart   = currentWorldMat();
+            m_gizmoLocalStart = node.localMatrix;
+            m_gizmoPivot      = pivot;
+            m_gizmoRotRefSet  = false;
         }
 
         if (m_gizmoDragging && lmbDown)
@@ -623,7 +599,7 @@ bool EditorUI::drawGizmo(Scene& scene, ImDrawList* dl, ImVec2 vpOrigin, ImVec2 v
 
         if (m_gizmoDragging && lmbReleased)
         {
-            m_transformCommit      = { m_selectionIndex, m_submeshIndex, m_selectedObjectName, m_gizmoMatStart, currentWorldMat() };
+            m_transformCommit      = { m_selectionIndex, m_gizmoLocalStart, node.localMatrix };
             m_transformCommitReady = true;
             m_gizmoDragging        = false;
             m_gizmoAxis            = -1;
@@ -657,6 +633,60 @@ bool EditorUI::drawGizmo(Scene& scene, ImDrawList* dl, ImVec2 vpOrigin, ImVec2 v
         dl->AddCircleFilled(origin2D, 4.f, IM_COL32(255, 255, 255, 200));
 
     return (hoveredAxis >= 0) || m_gizmoDragging;
+}
+
+void EditorUI::drawHierarchyNode(int nodeIdx, Scene& scene)
+{
+    SceneNode& node = scene.nodes[nodeIdx];
+    bool isSelected = (m_selectionType == Selection::Mesh && m_selectionIndex == nodeIdx);
+
+    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow
+                             | ImGuiTreeNodeFlags_DefaultOpen
+                             | ImGuiTreeNodeFlags_SpanAvailWidth;
+    if (node.childIndices.empty())
+        flags |= ImGuiTreeNodeFlags_Leaf;
+    if (isSelected)
+        flags |= ImGuiTreeNodeFlags_Selected;
+
+    ImGui::PushID(nodeIdx);
+    bool open = ImGui::TreeNodeEx(node.name.c_str(), flags);
+
+    if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
+    {
+        m_selectionType  = Selection::Mesh;
+        m_selectionIndex = nodeIdx;
+        m_submeshIndex   = -1;
+        m_selectedObjectName.clear();
+    }
+
+    // Drag source
+    if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+    {
+        ImGui::SetDragDropPayload("SCENE_NODE", &nodeIdx, sizeof(int));
+        ImGui::Text("Move: %s", node.name.c_str());
+        ImGui::EndDragDropSource();
+    }
+
+    // Drop target — reparent dragged node onto this node
+    if (ImGui::BeginDragDropTarget())
+    {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SCENE_NODE"))
+        {
+            int draggedIdx = *static_cast<const int*>(payload->Data);
+            if (draggedIdx != nodeIdx && !isAncestorOf(scene, draggedIdx, nodeIdx))
+                m_pendingReparent = { draggedIdx, nodeIdx }, m_pendingReparentReady = true;
+        }
+        ImGui::EndDragDropTarget();
+    }
+
+    if (open)
+    {
+        for (int childIdx : node.childIndices)
+            drawHierarchyNode(childIdx, scene);
+        ImGui::TreePop();
+    }
+
+    ImGui::PopID();
 }
 
 void EditorUI::renderHierarchy(Scene& scene, SceneRenderer& renderer)
@@ -715,52 +745,23 @@ void EditorUI::renderHierarchy(Scene& scene, SceneRenderer& renderer)
     if (ImGui::Button("Add Volume"))
         m_pendingAddVolume = true;
 
-    // Mesh groups
-    for (int gi = 0; gi < static_cast<int>(scene.meshGroups.size()); ++gi)
+    // Scene nodes (recursive tree)
+    for (int ni = 0; ni < static_cast<int>(scene.nodes.size()); ++ni)
+        if (scene.nodes[ni].parentIndex == -1)
+            drawHierarchyNode(ni, scene);
+
+    // Drop-to-root invisible target at bottom of node list
     {
-        bool groupSelected = (m_selectionType == Selection::Mesh && m_selectionIndex == gi);
-
-        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow
-                                 | ImGuiTreeNodeFlags_DefaultOpen;
-        if (groupSelected && m_submeshIndex == -1)
-            flags |= ImGuiTreeNodeFlags_Selected;
-
-        bool open = ImGui::TreeNodeEx(scene.meshGroups[gi].name.c_str(), flags);
-
-        if (ImGui::IsItemClicked())
+        ImGui::Dummy(ImVec2(ImGui::GetContentRegionAvail().x, 8.f));
+        if (ImGui::BeginDragDropTarget())
         {
-            m_selectionType      = Selection::Mesh;
-            m_selectionIndex     = gi;
-            m_submeshIndex       = -1;
-            m_selectedObjectName.clear();
-        }
-
-        if (open)
-        {
-            const auto& submeshes = scene.meshGroups[gi].submeshes;
-            std::string lastObj;
-            for (int si = 0; si < static_cast<int>(submeshes.size()); ++si)
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SCENE_NODE"))
             {
-                const std::string& objName = submeshes[si].meshData.objectName;
-                // One entry per unique objectName (submeshes from the same shape
-                // are contiguous — skip duplicates).
-                if (objName == lastObj) continue;
-                lastObj = objName;
-
-                const std::string& displayName = objName.empty()
-                    ? submeshes[si].name : objName;
-                bool objSelected = groupSelected
-                    && m_selectedObjectName == objName;
-
-                if (ImGui::Selectable(displayName.c_str(), objSelected))
-                {
-                    m_selectionType         = Selection::Mesh;
-                    m_selectionIndex        = gi;
-                    m_selectedObjectName    = objName;
-                    m_submeshIndex          = -1;
-                }
+                int draggedIdx = *static_cast<const int*>(payload->Data);
+                if (scene.nodes[draggedIdx].parentIndex != -1)
+                    m_pendingReparent = { draggedIdx, -1 }, m_pendingReparentReady = true;
             }
-            ImGui::TreePop();
+            ImGui::EndDragDropTarget();
         }
     }
 
@@ -827,20 +828,18 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
     {
         case Selection::Mesh:
         {
-            if (m_selectionIndex >= 0 && m_selectionIndex < static_cast<int>(scene.meshGroups.size()))
+            if (m_selectionIndex >= 0 && m_selectionIndex < static_cast<int>(scene.nodes.size()))
             {
-                auto& group = scene.meshGroups[m_selectionIndex];
+                auto& node = scene.nodes[m_selectionIndex];
 
                 const char* matTypes[] = { "Microfacet (GGX)", "Mirror", "Dielectric" };
                 bool isRasterize = (renderer.getRenderMode() == RenderMode::Rasterize);
-                // Draws full material + texture info for one submesh (used at both levels)
+
                 auto drawSubmeshMaterial = [&](auto& sm)
                 {
-                    // --- Base color tint ---
                     if (ImGui::ColorEdit3("Base Color", &sm.meshData.baseColor.x))
                         scene.materialDirty = true;
 
-                    // --- Material type ---
                     if (ImGui::Combo("Type", &sm.meshData.materialType, matTypes, 3))
                         scene.materialDirty = true;
 
@@ -866,7 +865,6 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                         ImGui::DragFloat("IOR", &sm.meshData.ior, 0.01f, 1.f, 3.f, "%.2f");
                         if (ImGui::IsItemDeactivatedAfterEdit()) scene.materialDirty = true;
 
-                        // Common IOR presets
                         ImGui::SameLine();
                         if (ImGui::SmallButton("..."))
                             ImGui::OpenPopup("ior_presets");
@@ -892,22 +890,17 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                         ImGui::EndDisabled();
                     }
 
-                    // --- Alpha clip ---
                     if (ImGui::Checkbox("Alpha Clip", &sm.meshData.alphaClip))
                         scene.materialDirty = true;
 
-                    // --- Emissive strength ---
                     ImGui::DragFloat("Emissive Strength", &sm.meshData.emissiveStrength, 0.05f, 0.f, 100.f, "%.2f");
                     if (ImGui::IsItemDeactivatedAfterEdit()) scene.materialDirty = true;
 
                     if (isRasterize && sm.meshData.materialType != 0)
                         ImGui::TextDisabled("Rendered as Microfacet in rasterizer.\nSwitch to a path tracer to see this material.");
 
-                    // --- Textures ---
                     ImGui::SeparatorText("Textures");
 
-                    // Draws one texture row: [thumbnail] Label: filename
-                    // Hovering the thumbnail shows a larger popup preview.
                     auto texRow = [](const char* label,
                                      const std::string& path,
                                      const std::shared_ptr<vex::Texture2D>& tex)
@@ -918,7 +911,6 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                         if (tex)
                         {
                             ImTextureID tid = static_cast<ImTextureID>(tex->getNativeHandle());
-                            // Both GL and VK load with stbi flip → uv0=(0,1) uv1=(1,0)
                             ImGui::Image(tid, {kThumbSize, kThumbSize}, {0.f, 1.f}, {1.f, 0.f});
 
                             if (ImGui::IsItemHovered())
@@ -936,7 +928,6 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                         }
                         else
                         {
-                            // Placeholder square so all rows are the same height
                             ImGui::Dummy({kThumbSize, kThumbSize});
                         }
 
@@ -954,232 +945,89 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                     texRow("Emissive",  sm.meshData.emissiveTexturePath,   sm.emissiveTexture);
                 };
 
-                if (m_submeshIndex >= 0 && m_submeshIndex < static_cast<int>(group.submeshes.size()))
+                ImGui::TextUnformatted(node.name.c_str());
+                ImGui::Separator();
+
+                ImGui::SeparatorText("Transform");
+
+                glm::vec3 decompScale, decompTranslation, decompSkew;
+                glm::vec4 decompPerspective;
+                glm::quat decompRotation;
+                glm::decompose(node.localMatrix, decompScale, decompRotation,
+                               decompTranslation, decompSkew, decompPerspective);
+                glm::vec3 eulerDeg = glm::degrees(glm::eulerAngles(glm::conjugate(decompRotation)));
+
+                bool needRecompose = false;
+                bool released      = false;
+
+                if (ImGui::DragFloat3("Translation", &decompTranslation.x, 0.01f, 0.f, 0.f, "%.3f"))
+                    needRecompose = true;
+                released |= ImGui::IsItemDeactivatedAfterEdit();
+                if (ImGui::DragFloat3("Rotation",    &eulerDeg.x,          0.5f,  0.f, 0.f, "%.1f"))
+                    needRecompose = true;
+                released |= ImGui::IsItemDeactivatedAfterEdit();
+                if (ImGui::DragFloat3("Scale",       &decompScale.x,       0.01f, 0.001f, 0.f, "%.3f"))
+                    needRecompose = true;
+                released |= ImGui::IsItemDeactivatedAfterEdit();
+
+                if (needRecompose)
                 {
-                    // --- Submesh selected: transform + material ---
-                    auto& sm = group.submeshes[m_submeshIndex];
-                    ImGui::Text("%s > %s", group.name.c_str(), sm.name.c_str());
-                    ImGui::Separator();
-                    ImGui::Text("Vertices:  %u", sm.vertexCount);
-                    ImGui::Text("Triangles: %u", sm.indexCount / 3);
-
-                    ImGui::SeparatorText("Transform");
-
-                    glm::vec3 decompScale, decompTranslation, decompSkew;
-                    glm::vec4 decompPerspective;
-                    glm::quat decompRotation;
-                    glm::decompose(sm.modelMatrix, decompScale, decompRotation,
-                                   decompTranslation, decompSkew, decompPerspective);
-                    glm::vec3 eulerDeg = glm::degrees(glm::eulerAngles(glm::conjugate(decompRotation)));
-
-                    bool needRecompose = false;
-                    bool released      = false;
-
-                    if (ImGui::DragFloat3("Translation", &decompTranslation.x, 0.01f, 0.f, 0.f, "%.3f"))
-                        needRecompose = true;
-                    released |= ImGui::IsItemDeactivatedAfterEdit();
-                    if (ImGui::DragFloat3("Rotation",    &eulerDeg.x,          0.5f,  0.f, 0.f, "%.1f"))
-                        needRecompose = true;
-                    released |= ImGui::IsItemDeactivatedAfterEdit();
-                    if (ImGui::DragFloat3("Scale",       &decompScale.x,       0.01f, 0.001f, 0.f, "%.3f"))
-                        needRecompose = true;
-                    released |= ImGui::IsItemDeactivatedAfterEdit();
-
-                    if (needRecompose)
-                    {
-                        decompScale = glm::max(decompScale, glm::vec3(0.001f));
-                        sm.modelMatrix = glm::translate(glm::mat4(1.f), decompTranslation)
-                                       * glm::mat4_cast(glm::quat(glm::radians(eulerDeg)))
-                                       * glm::scale(glm::mat4(1.f), decompScale);
-                    }
-                    if (released && renderer.getRenderMode() != RenderMode::Rasterize)
-                        scene.geometryDirty = true;
-
-                    if (ImGui::Button("Reset Transform"))
-                    {
-                        sm.modelMatrix = glm::mat4(1.f);
-                        if (renderer.getRenderMode() != RenderMode::Rasterize)
-                            scene.geometryDirty = true;
-                    }
-
-                    ImGui::SeparatorText("Material");
-                    drawSubmeshMaterial(sm);
+                    decompScale = glm::max(decompScale, glm::vec3(0.001f));
+                    node.localMatrix = glm::translate(glm::mat4(1.f), decompTranslation)
+                                     * glm::mat4_cast(glm::quat(glm::radians(eulerDeg)))
+                                     * glm::scale(glm::mat4(1.f), decompScale);
                 }
-                else if (m_selectedObjectName.empty())
+                if (released && renderer.getRenderMode() != RenderMode::Rasterize)
+                    scene.geometryDirty = true;
+
+                if (ImGui::Button("Reset Transform"))
                 {
-                    // --- Parent group selected (top-level hierarchy click) ---
-                    // Transform applies to the whole group — show it here only.
-                    ImGui::TextUnformatted(group.name.c_str());
-                    ImGui::Separator();
-
-                    ImGui::SeparatorText("Transform");
-
-                    glm::vec3 decompScale, decompTranslation, decompSkew;
-                    glm::vec4 decompPerspective;
-                    glm::quat decompRotation;
-                    glm::decompose(group.modelMatrix, decompScale, decompRotation,
-                                   decompTranslation, decompSkew, decompPerspective);
-                    glm::vec3 eulerDeg = glm::degrees(glm::eulerAngles(glm::conjugate(decompRotation)));
-
-                    bool needRecompose = false;
-                    bool released      = false;
-
-                    if (ImGui::DragFloat3("Translation", &decompTranslation.x, 0.01f, 0.f, 0.f, "%.3f"))
-                        needRecompose = true;
-                    released |= ImGui::IsItemDeactivatedAfterEdit();
-                    if (ImGui::DragFloat3("Rotation",    &eulerDeg.x,          0.5f,  0.f, 0.f, "%.1f"))
-                        needRecompose = true;
-                    released |= ImGui::IsItemDeactivatedAfterEdit();
-                    if (ImGui::DragFloat3("Scale",       &decompScale.x,       0.01f, 0.001f, 0.f, "%.3f"))
-                        needRecompose = true;
-                    released |= ImGui::IsItemDeactivatedAfterEdit();
-
-                    if (needRecompose)
-                    {
-                        decompScale = glm::max(decompScale, glm::vec3(0.001f));
-                        group.modelMatrix = glm::translate(glm::mat4(1.f), decompTranslation)
-                                          * glm::mat4_cast(glm::quat(glm::radians(eulerDeg)))
-                                          * glm::scale(glm::mat4(1.f), decompScale);
-                    }
-                    if (released && renderer.getRenderMode() != RenderMode::Rasterize)
+                    node.localMatrix = glm::mat4(1.f);
+                    if (renderer.getRenderMode() != RenderMode::Rasterize)
                         scene.geometryDirty = true;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Duplicate"))
+                    m_pendingDuplicate = true;
 
-                    if (ImGui::Button("Reset Transform"))
-                    {
-                        group.modelMatrix = glm::mat4(1.f);
-                        if (renderer.getRenderMode() != RenderMode::Rasterize)
-                            scene.geometryDirty = true;
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::Button("Duplicate"))
-                        m_pendingDuplicate = true;
-
-                    // Material(s): inline for single-submesh objects, collapsibles for multi
-                    if (group.submeshes.size() == 1)
-                    {
-                        ImGui::SeparatorText("Material");
-                        drawSubmeshMaterial(group.submeshes[0]);
-                    }
-                    else
-                    {
-                        ImGui::SeparatorText("Materials");
-                        for (int si = 0; si < static_cast<int>(group.submeshes.size()); ++si)
-                        {
-                            ImGui::PushID(si);
-                            if (ImGui::CollapsingHeader(group.submeshes[si].name.c_str()))
-                            {
-                                ImGui::Text("Vertices:  %u", group.submeshes[si].vertexCount);
-                                ImGui::Text("Triangles: %u", group.submeshes[si].indexCount / 3);
-                                drawSubmeshMaterial(group.submeshes[si]);
-                            }
-                            ImGui::PopID();
-                        }
-                    }
-
-                    uint32_t bvhNodes = renderer.getBVHNodeCount();
-                    if (bvhNodes > 0)
-                    {
-                        ImGui::SeparatorText("BVH");
-                        ImGui::Text("Nodes: %u", bvhNodes);
-                        vex::AABB root = renderer.getBVHRootAABB();
-                        glm::vec3 sz = root.max - root.min;
-                        ImGui::Text("Root AABB: %.2f x %.2f x %.2f", sz.x, sz.y, sz.z);
-                        ImGui::Text("  Min: (%.2f, %.2f, %.2f)", root.min.x, root.min.y, root.min.z);
-                        ImGui::Text("  Max: (%.2f, %.2f, %.2f)", root.max.x, root.max.y, root.max.z);
-                        ImGui::Text("SAH Cost: %.1f", renderer.getBVHSAHCost());
-                        size_t mem = renderer.getBVHMemoryBytes();
-                        if (mem < 1024)
-                            ImGui::Text("Memory: %zu B", mem);
-                        else
-                            ImGui::Text("Memory: %.1f KB", static_cast<float>(mem) / 1024.0f);
-                    }
+                // Materials — inline for single-submesh nodes, collapsibles for multi
+                if (node.submeshes.size() == 1)
+                {
+                    ImGui::SeparatorText("Material");
+                    drawSubmeshMaterial(node.submeshes[0]);
                 }
                 else
                 {
-                    // --- Child object selected (hierarchy child click or viewport pick) ---
-                    ImGui::Text("%s > %s", group.name.c_str(), m_selectedObjectName.c_str());
-                    ImGui::Separator();
-
-                    // Transform: use first matching submesh's local matrix.
-                    // All submeshes sharing this objectName move together.
-                    int firstSI = -1;
-                    for (int si2 = 0; si2 < static_cast<int>(group.submeshes.size()); ++si2)
+                    ImGui::SeparatorText("Materials");
+                    for (int si = 0; si < static_cast<int>(node.submeshes.size()); ++si)
                     {
-                        if (group.submeshes[si2].meshData.objectName == m_selectedObjectName)
-                        { firstSI = si2; break; }
-                    }
-                    if (firstSI >= 0)
-                    {
-                        auto& smT = group.submeshes[firstSI];
-                        ImGui::SeparatorText("Transform");
-
-                        glm::vec3 decompScale, decompTranslation, decompSkew;
-                        glm::vec4 decompPerspective;
-                        glm::quat decompRotation;
-                        glm::decompose(smT.modelMatrix, decompScale, decompRotation,
-                                       decompTranslation, decompSkew, decompPerspective);
-                        glm::vec3 eulerDeg = glm::degrees(glm::eulerAngles(glm::conjugate(decompRotation)));
-
-                        bool needRecompose = false;
-                        bool released      = false;
-
-                        if (ImGui::DragFloat3("Translation", &decompTranslation.x, 0.01f, 0.f, 0.f, "%.3f"))
-                            needRecompose = true;
-                        released |= ImGui::IsItemDeactivatedAfterEdit();
-                        if (ImGui::DragFloat3("Rotation",    &eulerDeg.x,          0.5f,  0.f, 0.f, "%.1f"))
-                            needRecompose = true;
-                        released |= ImGui::IsItemDeactivatedAfterEdit();
-                        if (ImGui::DragFloat3("Scale",       &decompScale.x,       0.01f, 0.001f, 0.f, "%.3f"))
-                            needRecompose = true;
-                        released |= ImGui::IsItemDeactivatedAfterEdit();
-
-                        if (needRecompose)
+                        ImGui::PushID(si);
+                        if (ImGui::CollapsingHeader(node.submeshes[si].name.c_str()))
                         {
-                            decompScale = glm::max(decompScale, glm::vec3(0.001f));
-                            glm::mat4 newMat = glm::translate(glm::mat4(1.f), decompTranslation)
-                                             * glm::mat4_cast(glm::quat(glm::radians(eulerDeg)))
-                                             * glm::scale(glm::mat4(1.f), decompScale);
-                            // Apply to all submeshes sharing this objectName
-                            for (auto& sm2 : group.submeshes)
-                                if (sm2.meshData.objectName == m_selectedObjectName)
-                                    sm2.modelMatrix = newMat;
+                            ImGui::Text("Vertices:  %u", node.submeshes[si].vertexCount);
+                            ImGui::Text("Triangles: %u", node.submeshes[si].indexCount / 3);
+                            drawSubmeshMaterial(node.submeshes[si]);
                         }
-                        if (released && renderer.getRenderMode() != RenderMode::Rasterize)
-                            scene.geometryDirty = true;
-
-                        if (ImGui::Button("Reset Transform"))
-                        {
-                            for (auto& sm2 : group.submeshes)
-                                if (sm2.meshData.objectName == m_selectedObjectName)
-                                    sm2.modelMatrix = glm::mat4(1.f);
-                            if (renderer.getRenderMode() != RenderMode::Rasterize)
-                                scene.geometryDirty = true;
-                        }
+                        ImGui::PopID();
                     }
+                }
 
-                    // Show materials for all submeshes belonging to this object
-                    if (group.submeshes.size() == 1)
-                    {
-                        ImGui::SeparatorText("Material");
-                        drawSubmeshMaterial(group.submeshes[0]);
-                    }
+                uint32_t bvhNodes = renderer.getBVHNodeCount();
+                if (bvhNodes > 0)
+                {
+                    ImGui::SeparatorText("BVH");
+                    ImGui::Text("Nodes: %u", bvhNodes);
+                    vex::AABB root = renderer.getBVHRootAABB();
+                    glm::vec3 sz = root.max - root.min;
+                    ImGui::Text("Root AABB: %.2f x %.2f x %.2f", sz.x, sz.y, sz.z);
+                    ImGui::Text("  Min: (%.2f, %.2f, %.2f)", root.min.x, root.min.y, root.min.z);
+                    ImGui::Text("  Max: (%.2f, %.2f, %.2f)", root.max.x, root.max.y, root.max.z);
+                    ImGui::Text("SAH Cost: %.1f", renderer.getBVHSAHCost());
+                    size_t mem = renderer.getBVHMemoryBytes();
+                    if (mem < 1024)
+                        ImGui::Text("Memory: %zu B", mem);
                     else
-                    {
-                        ImGui::SeparatorText("Materials");
-                        for (int si = 0; si < static_cast<int>(group.submeshes.size()); ++si)
-                        {
-                            auto& sm = group.submeshes[si];
-                            if (sm.meshData.objectName != m_selectedObjectName) continue;
-                            ImGui::PushID(si);
-                            if (ImGui::CollapsingHeader(sm.name.c_str()))
-                            {
-                                ImGui::Text("Vertices:  %u", sm.vertexCount);
-                                ImGui::Text("Triangles: %u", sm.indexCount / 3);
-                                drawSubmeshMaterial(sm);
-                            }
-                            ImGui::PopID();
-                        }
-                    }
+                        ImGui::Text("Memory: %.1f KB", static_cast<float>(mem) / 1024.0f);
                 }
             }
             break;
@@ -1927,9 +1775,9 @@ void EditorUI::renderStats(SceneRenderer& renderer, Scene& scene, vex::GraphicsC
     int      totalSubs    = 0;
     int      totalTex     = 0;
 
-    for (const auto& group : scene.meshGroups)
+    for (const auto& node : scene.nodes)
     {
-        for (const auto& sm : group.submeshes)
+        for (const auto& sm : node.submeshes)
         {
             totalVerts   += sm.vertexCount;
             totalIndices += sm.indexCount;
@@ -1939,7 +1787,7 @@ void EditorUI::renderStats(SceneRenderer& renderer, Scene& scene, vex::GraphicsC
         }
     }
 
-    ImGui::Text("Mesh groups:  %d", static_cast<int>(scene.meshGroups.size()));
+    ImGui::Text("Nodes:        %d", static_cast<int>(scene.nodes.size()));
     ImGui::Text("Submeshes:    %d", totalSubs);
     ImGui::Text("Vertices:     %u", totalVerts);
     ImGui::Text("Triangles:    %u", totalIndices / 3);

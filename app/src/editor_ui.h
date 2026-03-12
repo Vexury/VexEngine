@@ -77,12 +77,18 @@ public:
 
     // Gizmo drag-end commit — consumed by App to push CmdSetTransform
     struct TransformCommit {
-        int         groupIndex;
-        int         submeshIndex = -1;  // >= 0 for direct submesh, -1 otherwise
-        std::string objectName;         // non-empty for objectName-based child selection
-        glm::mat4   before, after;
+        int       nodeIdx;
+        glm::mat4 before;  // localMatrix at drag start
+        glm::mat4 after;   // localMatrix at drag end
     };
     bool consumeTransformCommit(TransformCommit& out);
+
+    // Deferred reparent (set by hierarchy drag-and-drop, consumed by App between frames)
+    struct PendingReparent { int nodeIdx; int newParentIdx; };  // newParentIdx=-1 = make root
+    bool consumePendingReparent(PendingReparent& out);
+
+    // Ancestor check (used to prevent parenting a node to one of its own descendants)
+    bool isAncestorOf(const Scene& scene, int potentialAncestor, int node) const;
 
     // Loading overlay: called by App::runImport() to show progress between frames.
     void setLoadingState(const std::string& stage, float progress);
@@ -117,6 +123,7 @@ private:
     bool      m_gizmoRotRefSet   = false;
 
     bool drawGizmo(Scene& scene, ImDrawList* dl, ImVec2 vpOrigin, ImVec2 vpSize);
+    void drawHierarchyNode(int nodeIdx, Scene& scene);
 
     // Pending import (set by Import OBJ button, consumed by App between frames)
     std::string m_pendingImportPath;
@@ -130,6 +137,13 @@ private:
     // Gizmo transform commit
     bool            m_transformCommitReady = false;
     TransformCommit m_transformCommit      = {};
+
+    // Gizmo local matrix snapshot at drag start (for TransformCommit.before)
+    glm::mat4 m_gizmoLocalStart = glm::mat4(1.f);
+
+    // Pending reparent (set by hierarchy drag-and-drop, consumed by App between frames)
+    bool           m_pendingReparentReady = false;
+    PendingReparent m_pendingReparent      = {};
 
     // Loading overlay state
     std::string m_loadingStage;

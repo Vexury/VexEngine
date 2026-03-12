@@ -172,12 +172,12 @@ std::vector<MeshData> MeshData::loadOBJ(const std::string& path)
                 if (!m.diffuse_texname.empty())
                     color = glm::vec3(1.0f);
 
-                // Ns → roughness: sqrt(2 / (Ns + 2)) maps Blinn-Phong exponent to GGX roughness.
+                // Ns - roughness: sqrt(2 / (Ns + 2)) maps Blinn-Phong exponent to GGX roughness.
                 // Roughness textures (map_Ns) are expected in the 0-1 PBR range, not as Ns exponents.
                 group.roughness = glm::clamp(
                     std::sqrt(2.0f / (std::max(m.shininess, 0.0f) + 2.0f)), 0.0f, 1.0f);
 
-                // illum → metallic (mirror materials are metallic)
+                // illum - metallic (mirror materials are metallic)
                 if (m.illum == 3 || m.illum == 5)
                     group.metallic = 1.0f;
 
