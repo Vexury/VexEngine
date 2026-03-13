@@ -34,15 +34,16 @@ A C++ rendering engine with an interactive editor, supporting both real-time ras
 - Bloom: threshold → separable Gaussian blur → HDR composite
 - OIDN denoising (Intel Open Image Denoise, path tracer only)
 
-Implemented three ways:
+Implemented four ways:
 - **CPU** — multithreaded, SAH BVH acceleration
-- **GPU (OpenGL)** — compute shader, same BVH uploaded to GPU
-- **GPU (Vulkan)** — hardware ray tracing (`VK_KHR_ray_tracing_pipeline`), BLAS/TLAS acceleration structures, alpha-clipped geometry via any-hit shader
+- **GPU (OpenGL, Compute)** — compute shader, same BVH uploaded to GPU
+- **GPU (Vulkan, Compute)** — compute shader path tracer, software BVH on GPU
+- **GPU (Vulkan, HW RT)** — hardware ray tracing (`VK_KHR_ray_tracing_pipeline`), BLAS/TLAS acceleration structures, alpha-clipped geometry via any-hit shader
 
 **Editor**
 - ImGui-based UI: scene hierarchy, material editor, light controls, environment maps, volume manager
 - Viewport gizmos for translate, rotate, and scale (W / E / R)
-- Live switching between all three render modes
+- Live switching between all render modes
 - Save rendered image to PNG
 - Timestamped log output for performance tracking
 
@@ -68,7 +69,7 @@ Then configure and build using CMake presets:
 cmake --preset opengl-release
 cmake --build build-gl --config Release
 
-# Vulkan (for hardware-accelerated raytracing)
+# Vulkan (compute path tracer + hardware ray tracing)
 cmake --preset vulkan-release
 cmake --build build-vk --config Release
 ```
