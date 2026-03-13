@@ -96,7 +96,7 @@ if(VEX_BACKEND STREQUAL "Vulkan")
 endif()
 
 # --- IDE folder organization ---
-foreach(TARGET glfw glad glm imgui stb miniz tinyexr)
+foreach(TARGET glfw glad glm imgui stb miniz tinyexr nfd)
     if(TARGET ${TARGET})
         set_target_properties(${TARGET} PROPERTIES FOLDER "External")
     endif()
