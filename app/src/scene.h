@@ -11,10 +11,21 @@
 #include <glm/glm.hpp>
 
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
+
+// CPU-side pixel data for a texture, populated during importOBJ and consumed
+// (then cleared) by rebuildRaytraceGeometry to avoid a second stbi_load pass.
+struct TexPixels
+{
+    std::vector<uint8_t> pixels; // unflipped RGBA8
+    int width  = 0;
+    int height = 0;
+};
 
 struct SceneMesh
 {
@@ -110,6 +121,11 @@ struct Scene
     bool geometryDirty = false;
     bool materialDirty = false;
 
+    // Pixel cache populated during importOBJ / addNodeFromSave.
+    // Used by SceneRenderer::rebuildRaytraceGeometry to skip the second stbi_load
+    // per texture. Cleared by rebuildRaytraceGeometry after consumption.
+    std::unordered_map<std::string, TexPixels> importedTexPixels;
+
     // Returns the accumulated world-space matrix of a node (product of all ancestor localMatrices).
     glm::mat4 getWorldMatrix(int nodeIdx) const;
 
@@ -121,6 +137,11 @@ struct Scene
     // insertAt = -1 → append; otherwise inserts at that index.
     // When insertAt >= 0, calls fixRefsAfterInsert first so existing refs stay valid.
     void addNodeFromSave(const NodeSave& save, int insertAt = -1);
+
+    // Fill importedTexPixels via parallel stbi_load over all unique texture paths in
+    // the current scene nodes. Called by rebuildRaytraceGeometry when the cache is
+    // empty (e.g. after a render-mode switch discarded it).
+    void prefetchTextures();
 };
 
 // ── Index fixup helpers ───────────────────────────────────────────────────────

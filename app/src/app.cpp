@@ -11,6 +11,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 
 #include <nfd.h>
@@ -317,6 +318,8 @@ void App::processPicking()
 
 void App::runImport(const std::string& path, const std::string& name)
 {
+    auto t_import_total = std::chrono::steady_clock::now();
+
     // Pump a single loading frame: update the overlay and present.
     auto pumpFrame = [&](const std::string& stage, float progress)
     {
@@ -340,6 +343,13 @@ void App::runImport(const std::string& path, const std::string& name)
     m_renderer.buildGeometry(m_scene, pumpFrame);
 
     m_ui.clearLoadingState();
+
+    float t_import_ms = std::chrono::duration<float, std::milli>(
+        std::chrono::steady_clock::now() - t_import_total).count();
+    char buf[128];
+    std::snprintf(buf, sizeof(buf),
+        "Import complete: %.1f s total", t_import_ms / 1000.0f);
+    vex::Log::info(buf);
 }
 
 void App::run()

@@ -119,6 +119,8 @@ public:
     size_t   getBVHMemoryBytes() const { return m_bvh.memoryBytes(); }
     AABB     getBVHRootAABB() const { return m_bvh.rootAABB(); }
     float    getBVHSAHCost() const { return m_bvh.sahCost(); }
+    // Full BVH (for sharing with GPU compute path — avoids a second identical build)
+    const BVH& getBVH() const { return m_bvh; }
 
     // Point light (caller is responsible for calling reset() after changes)
     void setPointLight(const glm::vec3& pos, const glm::vec3& color, bool enabled);

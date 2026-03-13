@@ -12,7 +12,10 @@ void main()
     if (u_alphaClip && texture(u_diffuseMap, vUV).a < 0.5)
         discard;
 
-    // Encode object ID + 1 into the red channel (0 = background)
-    float id = float(u_objectID + 1) / 255.0;
-    FragColor = vec4(id, 0.0, 0.0, 1.0);
+    // Encode object ID + 1 across RGB channels (24-bit, supports ~16M objects)
+    int encoded = u_objectID + 1;
+    FragColor = vec4(float((encoded >> 16) & 0xFF) / 255.0,
+                     float((encoded >>  8) & 0xFF) / 255.0,
+                     float( encoded        & 0xFF) / 255.0,
+                     1.0);
 }

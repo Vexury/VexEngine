@@ -140,7 +140,9 @@ int GLFramebuffer::readPixel(int x, int y) const
     int readY = static_cast<int>(m_spec.height) - 1 - y;
     unsigned char pixel[4] = {};
     glReadPixels(x, readY, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
-    return static_cast<int>(pixel[0]);
+    return (static_cast<int>(pixel[0]) << 16)
+         | (static_cast<int>(pixel[1]) <<  8)
+         |  static_cast<int>(pixel[2]);
 }
 
 std::vector<uint8_t> GLFramebuffer::readPixels() const

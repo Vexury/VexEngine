@@ -4,7 +4,9 @@
 #include <stb_image.h>
 #include <filesystem>
 #include <unordered_map>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <functional>
 
 namespace vex
@@ -99,21 +101,31 @@ std::vector<MeshData> MeshData::loadOBJ(const std::string& path)
 
     std::string mtlDir = std::filesystem::path(path).parent_path().string() + "/";
 
+    auto t_parse = std::chrono::steady_clock::now();
     bool ok = tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err,
                                path.c_str(), mtlDir.c_str(), true);
+    float t_parse_ms = std::chrono::duration<float, std::milli>(
+        std::chrono::steady_clock::now() - t_parse).count();
 
     if (!warn.empty()) Log::warn(warn);
     if (!err.empty())  Log::error(err);
     if (!ok) return {};
 
-    Log::info("  Parsed " + std::to_string(shapes.size()) + " shape(s), "
-              + std::to_string(materials.size()) + " material(s)");
+    {
+        char buf[256];
+        std::snprintf(buf, sizeof(buf),
+            "  OBJ parsed in %.0f ms  (%zu shapes, %zu materials, %.1fM verts raw)",
+            t_parse_ms, shapes.size(), materials.size(),
+            static_cast<double>(attrib.vertices.size() / 3) / 1e6);
+        Log::info(buf);
+    }
 
     // Group faces by material ID within each shape so that each named OBJ object
     // (o / g tag) becomes its own submesh rather than being merged with other
     // objects that happen to share the same material.
     std::vector<MeshData> result;
 
+    auto t_verts = std::chrono::steady_clock::now();
     for (size_t si = 0; si < shapes.size(); ++si)
     {
         const auto& shape = shapes[si];
@@ -300,6 +312,9 @@ std::vector<MeshData> MeshData::loadOBJ(const std::string& path)
         }
     }
 
+    float t_verts_ms = std::chrono::duration<float, std::milli>(
+        std::chrono::steady_clock::now() - t_verts).count();
+
     size_t totalVerts = 0;
     size_t totalTris = 0;
     int mirrorCount = 0, dielectricCount = 0, microfacetCount = 0;
@@ -312,9 +327,13 @@ std::vector<MeshData> MeshData::loadOBJ(const std::string& path)
         else ++microfacetCount;
     }
 
-    Log::info("  " + std::to_string(totalVerts) + " vertices, "
-              + std::to_string(totalTris) + " triangles, "
-              + std::to_string(result.size()) + " submesh(es)");
+    {
+        char buf[256];
+        std::snprintf(buf, sizeof(buf),
+            "  Vertex/material processing: %.0f ms  (%zu verts, %zu tris, %zu submeshes)",
+            t_verts_ms, totalVerts, totalTris, result.size());
+        Log::info(buf);
+    }
 
     std::string matInfo = "  Materials: " + std::to_string(microfacetCount) + " microfacet";
     if (mirrorCount > 0)

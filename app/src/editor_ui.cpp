@@ -1208,18 +1208,30 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
 
     // 2x2 render mode tile picker
     {
-        const char* tileLabels[4] = {
+#ifdef VEX_BACKEND_VULKAN
+        const char* tileLabels[] = {
             "Rasterization",
             "CPU Path Tracing",
             "GPU Path Tracing (HW RT)",
             "GPU Path Tracing (Compute)",
         };
+        const int tileModes[] = { 0, 1, 2, 3 };
+        const int tileCount = 4;
+#else
+        const char* tileLabels[] = {
+            "Rasterization",
+            "CPU Path Tracing",
+            "GPU Path Tracing (Compute)",
+        };
+        const int tileModes[] = { 0, 1, 2 };
+        const int tileCount = 3;
+#endif
         const float tileW = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
         const float tileH = 48.0f;
-        for (int i = 0; i < 4; ++i)
+        for (int i = 0; i < tileCount; ++i)
         {
             if (i % 2 != 0) ImGui::SameLine();
-            bool active = (m_renderModeIndex == i);
+            bool active = (m_renderModeIndex == tileModes[i]);
             if (active)
             {
                 ImGui::PushStyleColor(ImGuiCol_Button,        ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
@@ -1227,7 +1239,7 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
             }
             ImGui::PushID(i);
             if (ImGui::Button(tileLabels[i], ImVec2(tileW, tileH)))
-                m_renderModeIndex = i;
+                m_renderModeIndex = tileModes[i];
             ImGui::PopID();
             if (active)
                 ImGui::PopStyleColor(2);

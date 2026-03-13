@@ -27,12 +27,35 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <limits>
 #include <unordered_map>
 #include <vector>
 
 static constexpr float GEOMETRY_EPSILON = 1e-8f;
+static constexpr int   RT_TEX_MAX       = 1024; // max per-axis for RT SSBO textures
+
+// Nearest-neighbour downsample — good enough for software RT texture lookups.
+static std::vector<uint8_t> downsampleNearest(
+    const uint8_t* src, int sw, int sh, int dw, int dh)
+{
+    std::vector<uint8_t> out(static_cast<size_t>(dw) * dh * 4);
+    float invX = static_cast<float>(sw) / dw;
+    float invY = static_cast<float>(sh) / dh;
+    for (int y = 0; y < dh; ++y)
+    {
+        int sy = std::min(static_cast<int>(y * invY), sh - 1);
+        for (int x = 0; x < dw; ++x)
+        {
+            int sx = std::min(static_cast<int>(x * invX), sw - 1);
+            const uint8_t* s = src  + (sy * sw + sx) * 4;
+            uint8_t*       d = out.data() + (y  * dw + x)  * 4;
+            d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = s[3];
+        }
+    }
+    return out;
+}
 
 static void toneMapToRGBA8(const float* rgb, uint8_t* out, uint32_t count,
                             float exposure, float gamma, bool aces)
@@ -428,6 +451,7 @@ void SceneRenderer::setRenderMode(RenderMode mode)
     if (m_renderMode == mode)
         return;
 
+    const RenderMode prevMode = m_renderMode;
     m_renderMode = mode;
 
     const char* modeName = (mode == RenderMode::Rasterize)       ? "Rasterize"
@@ -458,10 +482,12 @@ void SceneRenderer::setRenderMode(RenderMode mode)
 
     m_showDenoisedResult = false;
 
-    // When entering any path tracing mode, force a full geometry rebuild so that
-    // any model matrix changes made via gizmos during rasterization are applied.
-    if (mode == RenderMode::CPURaytrace || mode == RenderMode::GPURaytrace ||
-        mode == RenderMode::ComputeRaytrace)
+    // Force a geometry rebuild only when leaving rasterizer mode — gizmo edits
+    // in rasterizer mode defer their rebuild, so it must fire on the next RT frame.
+    // When switching between RT modes the data is already current; m_cpuBVHDirty
+    // handles the case where the new mode needs the CPU BVH for the first time
+    // (e.g. HW RT → CPU/Compute RT).
+    if (mode != RenderMode::Rasterize && prevMode == RenderMode::Rasterize)
         m_pendingGeomRebuild = true;
 
     m_samplesPerSec = 0.0f;
@@ -938,12 +964,39 @@ void SceneRenderer::buildGeometry(Scene& scene, ProgressFn progress)
 
 void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
 {
+    auto t_total = std::chrono::steady_clock::now();
 
     std::vector<vex::CPURaytracer::Triangle> triangles;
     std::vector<vex::CPURaytracer::TextureData> textures;
 
     // Deduplicate textures by path; each unique path is loaded from disk at most once.
     std::unordered_map<std::string, int> textureMap;
+    int resolvedTexCount = 0;
+    int texFromCache     = 0;
+    int texFromDisk      = 0;
+
+    // Helper: add pixels to the textures array with RT_TEX_MAX resolution cap.
+    auto addTextureData = [&](const uint8_t* pixels, int tw, int th) -> int
+    {
+        int dw = tw, dh = th;
+        if (tw > RT_TEX_MAX || th > RT_TEX_MAX)
+        {
+            float scale = std::min(static_cast<float>(RT_TEX_MAX) / tw,
+                                   static_cast<float>(RT_TEX_MAX) / th);
+            dw = std::max(1, static_cast<int>(tw * scale));
+            dh = std::max(1, static_cast<int>(th * scale));
+        }
+        int idx = static_cast<int>(textures.size());
+        vex::CPURaytracer::TextureData td;
+        td.width  = dw;
+        td.height = dh;
+        if (dw == tw && dh == th)
+            td.pixels.assign(pixels, pixels + static_cast<size_t>(tw) * th * 4);
+        else
+            td.pixels = downsampleNearest(pixels, tw, th, dw, dh);
+        textures.push_back(std::move(td));
+        return idx;
+    };
 
     auto resolveTexture = [&](const std::string& path) -> int
     {
@@ -952,8 +1005,16 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
         if (it != textureMap.end()) return it->second;
         int idx = -1;
 
-        // EXR path (no vertical flip — raytracer UV space matches stbi no-flip convention)
-        if (path.size() >= 4 &&
+        // Fast path: reuse pixels already loaded by scene.cpp::loadTex — no disk I/O.
+        auto cacheIt = scene.importedTexPixels.find(path);
+        if (cacheIt != scene.importedTexPixels.end())
+        {
+            const auto& cached = cacheIt->second;
+            idx = addTextureData(cached.pixels.data(), cached.width, cached.height);
+            ++texFromCache;
+        }
+        // EXR fallback (not cached — rare in practice)
+        else if (path.size() >= 4 &&
             (path.compare(path.size() - 4, 4, ".exr") == 0 ||
              path.compare(path.size() - 4, 4, ".EXR") == 0))
         {
@@ -962,16 +1023,13 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
             const char* err = nullptr;
             if (LoadEXR(&exrRGBA, &tw, &th, path.c_str(), &err) == TINYEXR_SUCCESS)
             {
-                idx = static_cast<int>(textures.size());
-                vex::CPURaytracer::TextureData td;
-                td.width  = tw;
-                td.height = th;
-                td.pixels.resize(static_cast<size_t>(tw) * th * 4);
-                for (size_t i = 0; i < td.pixels.size(); ++i)
-                    td.pixels[i] = static_cast<unsigned char>(
+                std::vector<uint8_t> px(static_cast<size_t>(tw) * th * 4);
+                for (size_t i = 0; i < px.size(); ++i)
+                    px[i] = static_cast<unsigned char>(
                         std::clamp(exrRGBA[i], 0.0f, 1.0f) * 255.0f + 0.5f);
-                textures.push_back(std::move(td));
                 free(exrRGBA);
+                idx = addTextureData(px.data(), tw, th);
+                ++texFromDisk;
             }
             else
             {
@@ -983,6 +1041,7 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
                 FreeEXRErrorMessage(err);
             }
         }
+        // Disk fallback (texture not in pixel cache — e.g. added by addNodeFromSave after import)
         else
         {
             int tw, th, tch;
@@ -990,17 +1049,14 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
             unsigned char* texData = stbi_load(path.c_str(), &tw, &th, &tch, 4);
             if (texData)
             {
-                idx = static_cast<int>(textures.size());
-                vex::CPURaytracer::TextureData td;
-                td.width  = tw;
-                td.height = th;
-                td.pixels.assign(texData, texData + tw * th * 4);
-                textures.push_back(std::move(td));
+                idx = addTextureData(texData, tw, th);
                 stbi_image_free(texData);
+                ++texFromDisk;
             }
         }
 
         textureMap[path] = idx;
+        if (idx >= 0) ++resolvedTexCount;
         return idx;
     };
 
@@ -1020,6 +1076,13 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
         for (const auto& sm : scene.nodes[ni].submeshes)
             for (const auto& v : sm.meshData.vertices)
                 m_nodeLocalAABBs[ni].grow(v.position);
+
+    // If importedTexPixels was cleared by a previous rebuild (e.g. render-mode switch),
+    // re-fill it via parallel decode so resolveTexture hits the cache instead of disk.
+    if (scene.importedTexPixels.empty())
+        scene.prefetchTextures();
+
+    auto t_flatten = std::chrono::steady_clock::now();
 
     for (int ni = 0; ni < (int)scene.nodes.size(); ++ni)
     {
@@ -1096,6 +1159,16 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
         }
     }
 
+    {
+        float t_flatten_ms = std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - t_flatten).count();
+        char buf[256];
+        std::snprintf(buf, sizeof(buf),
+            "  CPU triangle flatten + texture resolve: %.0f ms  (%zu tris, %d cached / %d disk)",
+            t_flatten_ms, triangles.size(), texFromCache, texFromDisk);
+        vex::Log::info(buf);
+    }
+
     // Always keep a CPU-side copy of textures — needed for the VK RT texture atlas SSBO.
     m_rtTextures = textures;
 
@@ -1110,10 +1183,21 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
 #endif
     if (needsCpuBvh)
     {
+        auto t_cpu_bvh = std::chrono::steady_clock::now();
         m_cpuRaytracer->setGeometry(std::move(triangles), std::move(textures));
-
-        // Build ordering BVH for CPU RT triangle data
         {
+            float ms = std::chrono::duration<float, std::milli>(
+                std::chrono::steady_clock::now() - t_cpu_bvh).count();
+            char buf[128];
+            std::snprintf(buf, sizeof(buf),
+                "  CPURaytracer::setGeometry (BVH build + reorder): %.0f ms", ms);
+            vex::Log::info(buf);
+        }
+
+        // Build ordering BVH for CPU RT triangle data (second BVH on identical geometry,
+        // needed for the GPU compute path tri ordering / m_rtTriangles SSBO).
+        {
+            auto t_rt_bvh = std::chrono::steady_clock::now();
             std::vector<vex::CPURaytracer::Triangle> gpuTriangles;
             std::vector<std::pair<int,int>> gpuTriangleSrc;
             std::vector<int> gpuTriangleSrcIdx; // triangle index within submesh
@@ -1192,14 +1276,11 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
             }
 
             uint32_t count = static_cast<uint32_t>(gpuTriangles.size());
-            std::vector<vex::AABB> triBounds(count);
-            for (uint32_t i = 0; i < count; ++i)
-            {
-                triBounds[i].grow(gpuTriangles[i].v0);
-                triBounds[i].grow(gpuTriangles[i].v1);
-                triBounds[i].grow(gpuTriangles[i].v2);
-            }
-            m_rtBVH.build(triBounds);
+
+            // Both loops traverse scene.nodes in identical order with identical world matrices,
+            // so the BVH built internally by CPURaytracer::setGeometry is identical to what
+            // m_rtBVH.build() would produce. Copy it directly — saves ~2 s on large scenes.
+            m_rtBVH = m_cpuRaytracer->getBVH();
 
             const auto& bvhIndices = m_rtBVH.indices();
             std::vector<vex::CPURaytracer::Triangle> reordered(count);
@@ -1229,6 +1310,13 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
             }
             if (m_rtTotalLightArea > 0.0f)
                 for (float& c : m_rtLightCDF) c /= m_rtTotalLightArea;
+
+            float t_rt_bvh_ms = std::chrono::duration<float, std::milli>(
+                std::chrono::steady_clock::now() - t_rt_bvh).count();
+            char rtbuf[128];
+            std::snprintf(rtbuf, sizeof(rtbuf),
+                "  GPU-tri reorder (shared CPU BVH): %.0f ms  (%u tris)", t_rt_bvh_ms, count);
+            vex::Log::info(rtbuf);
         }
 
         char sahBuf[32];
@@ -1257,6 +1345,7 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
         m_vkTriShading.clear();
         m_vkInstanceOffsets.clear();
 
+        auto t_vk_shading = std::chrono::steady_clock::now();
         std::vector<uint32_t>  vkLightIndices;
         std::vector<float>     vkLightCDF;
         std::vector<glm::mat4> blasTransforms;
@@ -1384,6 +1473,16 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
         if (vkTotalLightArea > 0.0f)
             for (float& c : vkLightCDF) c /= vkTotalLightArea;
 
+        {
+            float ms = std::chrono::duration<float, std::milli>(
+                std::chrono::steady_clock::now() - t_vk_shading).count();
+            char buf[128];
+            std::snprintf(buf, sizeof(buf),
+                "  VK triShading SSBO pack: %.0f ms  (%zu tris, %zu emissive)",
+                ms, m_vkTriShading.size() / 52, vkLightIndices.size());
+            vex::Log::info(buf);
+        }
+
         // ── Build lights SSBO ─────────────────────────────────────────────────
         // std430 layout: [lightCount uint][totalLightArea float][pad][pad]
         //   + lightRawData[]: [0..N-1]=tri indices, [N..2N-1]=CDF (float bits via uintBitsToFloat in GLSL)
@@ -1397,34 +1496,64 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
 
         // ── Build texData SSBO ────────────────────────────────────────────────
         // Layout: [texCount][{offset, w, h, pad} per tex...][packed RGBA8 pixels as uint...]
-        m_vkTexData.clear();
-        uint32_t texCount = static_cast<uint32_t>(m_rtTextures.size());
-        m_vkTexData.push_back(texCount);
-        uint32_t headerSize = 1u + texCount * 4u;
-        m_vkTexData.resize(headerSize, 0u);
-        uint32_t pixelBase = headerSize;
-        for (uint32_t ti = 0; ti < texCount; ++ti)
         {
-            const auto& td = m_rtTextures[ti];
-            uint32_t hBase = 1u + ti * 4u;
-            m_vkTexData[hBase + 0] = pixelBase;
-            m_vkTexData[hBase + 1] = static_cast<uint32_t>(td.width);
-            m_vkTexData[hBase + 2] = static_cast<uint32_t>(td.height);
-            m_vkTexData[hBase + 3] = 0u;
-            uint32_t pixelCount = static_cast<uint32_t>(td.width * td.height);
-            for (uint32_t pi = 0; pi < pixelCount; ++pi)
+            auto t_tex_pack = std::chrono::steady_clock::now();
+            m_vkTexData.clear();
+            uint32_t texCount = static_cast<uint32_t>(m_rtTextures.size());
+            m_vkTexData.push_back(texCount);
+            uint32_t headerSize = 1u + texCount * 4u;
+            m_vkTexData.resize(headerSize, 0u);
+            uint32_t pixelBase = headerSize;
+            size_t totalPixels = 0;
+            for (uint32_t ti = 0; ti < texCount; ++ti)
             {
-                uint8_t r = td.pixels[pi * 4 + 0], g = td.pixels[pi * 4 + 1];
-                uint8_t b = td.pixels[pi * 4 + 2], a = td.pixels[pi * 4 + 3];
-                m_vkTexData.push_back(r | (uint32_t(g) << 8) | (uint32_t(b) << 16) | (uint32_t(a) << 24));
+                const auto& td = m_rtTextures[ti];
+                uint32_t hBase = 1u + ti * 4u;
+                m_vkTexData[hBase + 0] = pixelBase;
+                m_vkTexData[hBase + 1] = static_cast<uint32_t>(td.width);
+                m_vkTexData[hBase + 2] = static_cast<uint32_t>(td.height);
+                m_vkTexData[hBase + 3] = 0u;
+                uint32_t pixelCount = static_cast<uint32_t>(td.width * td.height);
+                for (uint32_t pi = 0; pi < pixelCount; ++pi)
+                {
+                    uint8_t r = td.pixels[pi * 4 + 0], g = td.pixels[pi * 4 + 1];
+                    uint8_t b = td.pixels[pi * 4 + 2], a = td.pixels[pi * 4 + 3];
+                    m_vkTexData.push_back(r | (uint32_t(g) << 8) | (uint32_t(b) << 16) | (uint32_t(a) << 24));
+                }
+                pixelBase += pixelCount;
+                totalPixels += pixelCount;
             }
-            pixelBase += pixelCount;
+            float t_tex_ms = std::chrono::duration<float, std::milli>(
+                std::chrono::steady_clock::now() - t_tex_pack).count();
+            char buf[192];
+            std::snprintf(buf, sizeof(buf),
+                "  VK texData SSBO pack: %.0f ms  (%u textures, %.1f MB)",
+                t_tex_ms, texCount, static_cast<double>(totalPixels * 4) / (1024.0 * 1024.0));
+            vex::Log::info(buf);
         }
 
         if (progress) progress("Building BLASes...", 0.7f);
-        m_vkRaytracer->commitBlasBuild(); // single GPU submission for all BLASes
+        {
+            auto t_blas = std::chrono::steady_clock::now();
+            m_vkRaytracer->commitBlasBuild(); // single GPU submission for all BLASes
+            float ms = std::chrono::duration<float, std::milli>(
+                std::chrono::steady_clock::now() - t_blas).count();
+            char buf[128];
+            std::snprintf(buf, sizeof(buf),
+                "  VK BLAS build (GPU): %.0f ms  (%zu BLASes)",
+                ms, m_vkInstanceOffsets.size());
+            vex::Log::info(buf);
+        }
         if (progress) progress("Building TLAS...", 0.9f);
-        m_vkRaytracer->buildTlas(blasTransforms);
+        {
+            auto t_tlas = std::chrono::steady_clock::now();
+            m_vkRaytracer->buildTlas(blasTransforms);
+            float ms = std::chrono::duration<float, std::milli>(
+                std::chrono::steady_clock::now() - t_tlas).count();
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "  VK TLAS build (GPU): %.0f ms", ms);
+            vex::Log::info(buf);
+        }
         m_vkGeomDirty = true;  // uploadSceneData + createOutputImage deferred to renderVKRaytrace
         m_vkSampleCount = 0;
         m_vkComputeGeomDirty   = true;  // compute path tracer also needs re-upload
@@ -1437,6 +1566,18 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
 #endif
 
     m_gpuGeometryDirty = true;
+
+    // Pixel cache was populated by scene.cpp::loadTex; consume and free it now.
+    scene.importedTexPixels.clear();
+
+    {
+        float t_total_ms = std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - t_total).count();
+        char buf[128];
+        std::snprintf(buf, sizeof(buf),
+            "  rebuildRaytraceGeometry total: %.0f ms  (%.1f s)", t_total_ms, t_total_ms / 1000.0f);
+        vex::Log::info(buf);
+    }
 }
 
 void SceneRenderer::rebuildMaterials(Scene& scene)
