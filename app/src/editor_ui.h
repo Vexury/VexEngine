@@ -65,6 +65,9 @@ public:
     // the current frame. App::run() calls consumePendingImport() between frames.
     bool consumePendingImport(std::string& outPath, std::string& outName);
 
+    // Deferred GLTF import (same pattern as OBJ)
+    bool consumePendingGltfImport(std::string& outPath, std::string& outName);
+
     // Deferred primitive creation
     enum class PrimitiveType { None, Plane, Cube, Sphere, Cylinder };
     bool consumePendingPrimitive(PrimitiveType& outType);
@@ -128,6 +131,10 @@ private:
     // Pending import (set by Import OBJ button, consumed by App between frames)
     std::string m_pendingImportPath;
     std::string m_pendingImportName;
+
+    // Pending GLTF import (set by Import GLTF button, consumed by App between frames)
+    std::string m_pendingGltfImportPath;
+    std::string m_pendingGltfImportName;
 
     // Pending deferred actions
     PrimitiveType m_pendingPrimitive  = PrimitiveType::None;

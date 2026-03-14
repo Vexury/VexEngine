@@ -104,6 +104,8 @@ void VKShader::buildUniformMap()
     m_uniformOffsets["u_shadowViewProj"]     = offsetof(MeshUBO, sunShadowVP);
     m_uniformOffsets["u_enableShadows"]      = offsetof(MeshUBO, enableShadows);
     m_uniformOffsets["u_shadowNormalBias"]   = offsetof(MeshUBO, shadowNormalBias);
+    m_uniformOffsets["u_shadowStrength"]     = offsetof(MeshUBO, shadowStrength);
+    m_uniformOffsets["u_shadowColor"]        = offsetof(MeshUBO, shadowColor);
     // u_model is handled as a vertex-stage push constant — not in the UBO
 }
 
@@ -155,13 +157,13 @@ bool VKShader::loadFromFiles(const std::string& vertexPath, const std::string& f
         return false;
     }
 
-    // Pipeline layout with 8 set layouts + push constant
+    // Pipeline layout with 9 set layouts + push constant
     // Set 0: UBO, Set 1: diffuse, Set 2: normal, Set 3: roughness, Set 4: metallic,
-    // Set 5: emissive, Set 6: env map, Set 7: shadow map
+    // Set 5: emissive, Set 6: env map, Set 7: shadow map, Set 8: AO map
     VkDescriptorSetLayout setLayouts[] = {
         m_descriptorSetLayout, m_textureSetLayout, m_textureSetLayout,
         m_textureSetLayout, m_textureSetLayout, m_textureSetLayout,
-        m_textureSetLayout, m_textureSetLayout
+        m_textureSetLayout, m_textureSetLayout, m_textureSetLayout
     };
 
     // Two push constant ranges:
@@ -177,7 +179,7 @@ bool VKShader::loadFromFiles(const std::string& vertexPath, const std::string& f
 
     VkPipelineLayoutCreateInfo plInfo{};
     plInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    plInfo.setLayoutCount = 8;
+    plInfo.setLayoutCount = 9;
     plInfo.pSetLayouts = setLayouts;
     plInfo.pushConstantRangeCount = 2;
     plInfo.pPushConstantRanges = pushRanges;
@@ -596,6 +598,13 @@ void VKShader::setBool(const std::string& name, bool value)
     else if (name == "u_hasEmissiveMap")
     {
         m_pushData.hasEmissiveMap = value ? 1u : 0u;
+        auto cmd = VKContext::get().getCurrentCommandBuffer();
+        vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+                           sizeof(glm::mat4), sizeof(MeshPushConstant), &m_pushData);
+    }
+    else if (name == "u_hasAOMap")
+    {
+        m_pushData.hasAOMap = value ? 1u : 0u;
         auto cmd = VKContext::get().getCurrentCommandBuffer();
         vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                            sizeof(glm::mat4), sizeof(MeshPushConstant), &m_pushData);

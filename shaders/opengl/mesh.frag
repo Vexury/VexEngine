@@ -29,10 +29,15 @@ uniform bool u_enableEnvLighting;
 uniform vec3  u_envColor;
 uniform float u_envLightMultiplier;
 
+uniform sampler2D       u_aoMap;
+uniform bool            u_hasAOMap;
+
 uniform mat4            u_shadowViewProj;
 uniform sampler2DShadow u_shadowMap;
 uniform bool            u_enableShadows;
 uniform float           u_shadowNormalBias;
+uniform float           u_shadowStrength;
+uniform vec3            u_shadowColor;
 
 uniform int   u_debugMode;
 uniform float u_nearPlane;
@@ -168,22 +173,29 @@ void main()
     // --- Cook-Torrance GGX shading ---
 
     vec3 V = normalize(u_cameraPos - vWorldPos);
-    float roughness = u_hasRoughnessMap ? texture(u_roughnessMap, vUV).r : u_roughness;
-    float metallic  = u_hasMetallicMap  ? texture(u_metallicMap,  vUV).r : u_metallic;
+    float roughness = u_hasRoughnessMap ? texture(u_roughnessMap, vUV).g : u_roughness;
+    float metallic  = u_hasMetallicMap  ? texture(u_metallicMap,  vUV).b : u_metallic;
     float alpha = roughness * roughness;
+    float ao = u_hasAOMap ? texture(u_aoMap, vUV).r : 1.0;
+
+    if (u_debugMode == 8) { FragColor = vec4(vec3(roughness), 1.0); return; }
+    if (u_debugMode == 9) { FragColor = vec4(vec3(metallic),  1.0); return; }
+    if (u_debugMode == 10){ FragColor = vec4(vec3(ao),        1.0); return; }
 
     // Ambient (env-driven or fallback)
-    vec3 envAmbient = u_enableEnvLighting ? u_envColor * u_envLightMultiplier : vec3(0.03);
-    vec3 ambient = envAmbient * (1.0 - metallic) * baseColor;
+    vec3 envAmbient = u_enableEnvLighting ? u_envColor * u_envLightMultiplier : vec3(0.0);
+    vec3 F0 = mix(vec3(0.04), baseColor, metallic);
+    vec3 F  = F_Schlick(max(dot(N, V), 0.0), F0);
+    vec3 ambient = envAmbient * (1.0 - F) * (1.0 - metallic) * baseColor * ao;
 
     if (u_enableEnvLighting && u_hasEnvMap)
     {
         vec3 R = reflect(-V, N);
         float eu = atan(R.z, R.x) / (2.0 * PI) + 0.5;
         float ev = asin(clamp(R.y, -1.0, 1.0)) / PI + 0.5;
-        vec3 F0 = mix(vec3(0.04), baseColor, metallic);
-        vec3 F  = F_Schlick(max(dot(N, V), 0.0), F0);
-        ambient += F * texture(u_envMap, vec2(eu, ev)).rgb * u_envLightMultiplier;
+        float mip = roughness * float(textureQueryLevels(u_envMap) - 1);
+        float horizonFade = clamp(dot(N, R) * 8.0, 0.0, 1.0);
+        ambient += F * textureLod(u_envMap, vec2(eu, ev), mip).rgb * u_envLightMultiplier * horizonFade;
     }
 
     // Point light
@@ -236,7 +248,8 @@ void main()
                 shadow += texture(u_shadowMap, vec3(shadowCoord.xy + tapOffset, tapZ));
             }
         shadow /= 9.0;
-        sunContrib *= shadow;
+        vec3 inShadowFactor = mix(vec3(1.0), u_shadowColor, u_shadowStrength);
+        sunContrib *= mix(inShadowFactor, vec3(1.0), shadow);
     }
 
     vec3 result = ambient

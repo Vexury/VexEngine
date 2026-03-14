@@ -16,6 +16,20 @@ std::string openObjFileDialog()
     return {};
 }
 
+std::string openGltfFileDialog()
+{
+    nfdu8char_t* outPath = nullptr;
+    nfdu8filteritem_t filter = { "GLTF Files", "gltf" };
+    nfdresult_t result = NFD_OpenDialogU8(&outPath, &filter, 1, nullptr);
+    if (result == NFD_OKAY)
+    {
+        std::string path(outPath);
+        NFD_FreePathU8(outPath);
+        return path;
+    }
+    return {};
+}
+
 std::string openHdrFileDialog()
 {
     nfdu8char_t* outPath = nullptr;

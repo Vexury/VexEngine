@@ -40,6 +40,9 @@ enum class DebugMode : int {
     Albedo     = 5,  // Unlit base color (vertex color * texture)
     Emission   = 6,  // Emissive channel only
     MaterialType = 7,  // Material type as distinct flat colors (Microfacet/Mirror/Dielectric)
+    Roughness  = 8,  // Roughness value (texture .g or scalar)
+    Metallic   = 9,  // Metallic value (texture .b or scalar)
+    AO         = 10, // Ambient occlusion value (texture .r or 1.0)
 };
 
 class SceneRenderer
@@ -68,6 +71,11 @@ public:
 
     bool  getRasterEnableShadows() const { return m_rasterEnableShadows; }
     void  setRasterEnableShadows(bool v) { m_rasterEnableShadows = v; }
+
+    float      getShadowStrength() const { return m_shadowStrength; }
+    void       setShadowStrength(float v) { m_shadowStrength = v; }
+    glm::vec3  getShadowColor() const { return m_shadowColor; }
+    void       setShadowColor(glm::vec3 v) { m_shadowColor = v; }
 
     uint32_t getCPUMaxSamples() const { return m_cpuMaxSamples; }
     void     setCPUMaxSamples(uint32_t v) { m_cpuMaxSamples = v; }
@@ -234,6 +242,8 @@ private:
     bool      m_shadowMapEverRendered  = false;
     float     m_shadowNormalBiasTexels = 1.5f;
     bool      m_rasterEnableShadows    = true;
+    float     m_shadowStrength         = 1.0f;
+    glm::vec3 m_shadowColor            = {0.0f, 0.0f, 0.0f};
 
     uint32_t  m_cpuMaxSamples = 0; // 0 = unlimited
     uint32_t  m_gpuMaxSamples = 0; // 0 = unlimited (shared by GL and VK GPU RT)

@@ -316,7 +316,7 @@ void App::processPicking()
         m_ui.clearSelection();
 }
 
-void App::runImport(const std::string& path, const std::string& name)
+void App::runImport(const std::string& path, const std::string& name, bool isGltf)
 {
     auto t_import_total = std::chrono::steady_clock::now();
 
@@ -329,13 +329,25 @@ void App::runImport(const std::string& path, const std::string& name)
         m_engine.endFrame();
     };
 
-    pumpFrame("Parsing OBJ...", 0.05f);
-
-    if (!m_scene.importOBJ(path, name, pumpFrame))
+    if (isGltf)
     {
-        vex::Log::error("Failed to load: " + path);
-        m_ui.clearLoadingState();
-        return;
+        pumpFrame("Parsing GLTF...", 0.05f);
+        if (!m_scene.importGLTF(path, name, pumpFrame))
+        {
+            vex::Log::error("Failed to load: " + path);
+            m_ui.clearLoadingState();
+            return;
+        }
+    }
+    else
+    {
+        pumpFrame("Parsing OBJ...", 0.05f);
+        if (!m_scene.importOBJ(path, name, pumpFrame))
+        {
+            vex::Log::error("Failed to load: " + path);
+            m_ui.clearLoadingState();
+            return;
+        }
     }
     vex::Log::info("Imported: " + name);
 
@@ -432,16 +444,30 @@ void App::run()
             }
         }
 
-        // Handle any deferred import between frames so we can pump the loading overlay.
+        // Handle any deferred OBJ import between frames so we can pump the loading overlay.
         std::string importPath, importName;
         if (m_ui.consumePendingImport(importPath, importName))
         {
             int prevCount = static_cast<int>(m_scene.nodes.size());
-            runImport(importPath, importName);
+            runImport(importPath, importName, false);
             if (static_cast<int>(m_scene.nodes.size()) > prevCount)
             {
                 // Root was inserted at prevCount; CmdImportUndo captures the full
                 // subtree (root + any objectName children) for correct undo/redo.
+                m_cmdStack.pushUndoOnly(
+                    std::make_unique<CmdImportUndo>(CmdDeleteNode(m_scene, prevCount)));
+                m_ui.setSelection(Selection::Mesh, prevCount);
+            }
+        }
+
+        // Handle any deferred GLTF import between frames.
+        std::string gltfPath, gltfName;
+        if (m_ui.consumePendingGltfImport(gltfPath, gltfName))
+        {
+            int prevCount = static_cast<int>(m_scene.nodes.size());
+            runImport(gltfPath, gltfName, true);
+            if (static_cast<int>(m_scene.nodes.size()) > prevCount)
+            {
                 m_cmdStack.pushUndoOnly(
                     std::make_unique<CmdImportUndo>(CmdDeleteNode(m_scene, prevCount)));
                 m_ui.setSelection(Selection::Mesh, prevCount);

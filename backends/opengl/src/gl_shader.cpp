@@ -146,6 +146,7 @@ void GLShader::setTexture(uint32_t slot, Texture2D* tex)
         case 2: setInt("u_roughnessMap", 2); break;
         case 3: setInt("u_metallicMap",  3); break;
         case 4: setInt("u_emissiveMap",  4); break;
+        case 7: setInt("u_aoMap",        7); break;
         // slot 5 (envMap) is bound manually via glActiveTexture in the renderer
         default: break;
     }

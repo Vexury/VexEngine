@@ -40,8 +40,10 @@ struct MeshUBO
     glm::mat4 sunShadowVP;           // light view-projection for shadow mapping
     uint32_t  enableShadows     = 0;
     float     shadowNormalBias  = 0.0f; // world-space normal offset scale (texel-sized)
-    float     _pad7a            = 0;
+    float     shadowStrength    = 1.0f; // 0=no shadow, 1=full black shadow
     float     _pad7b            = 0;
+    glm::vec3 shadowColor       = {0.0f, 0.0f, 0.0f}; // tint of the shadowed region
+    float     _pad8             = 0;
     // model matrix moved to vertex-stage push constants (offset 0, 64 bytes)
 };
 
@@ -148,7 +150,8 @@ private:
         float    baseColorG      = 1.0f;   // offset 88
         float    baseColorB      = 1.0f;   // offset 92
         float    emissiveStrength= 1.0f;   // offset 96
-    };                                     // total: 100 bytes
+        uint32_t hasAOMap        = 0;      // offset 100
+    };                                     // total: 104 bytes
     MeshPushConstant m_pushData{};
 
     // Wireframe pipeline

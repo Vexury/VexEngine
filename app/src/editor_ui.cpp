@@ -77,6 +77,15 @@ bool EditorUI::consumePendingImport(std::string& outPath, std::string& outName)
     return true;
 }
 
+bool EditorUI::consumePendingGltfImport(std::string& outPath, std::string& outName)
+{
+    if (m_pendingGltfImportPath.empty()) return false;
+    outPath = std::move(m_pendingGltfImportPath);
+    outName = std::move(m_pendingGltfImportName);
+    m_pendingGltfImportPath.clear();
+    return true;
+}
+
 bool EditorUI::consumePendingPrimitive(PrimitiveType& outType)
 {
     if (m_pendingPrimitive == PrimitiveType::None) return false;
@@ -693,6 +702,76 @@ void EditorUI::renderHierarchy(Scene& scene, SceneRenderer& renderer)
 {
     ImGui::Begin("Hierarchy");
 
+    // ── Toolbar ───────────────────────────────────────────────────────────────
+    if (ImGui::Button("Create..."))
+        ImGui::OpenPopup("##create_prim");
+    if (ImGui::BeginPopup("##create_prim"))
+    {
+        if (ImGui::MenuItem("Plane"))    m_pendingPrimitive = PrimitiveType::Plane;
+        if (ImGui::MenuItem("Cube"))     m_pendingPrimitive = PrimitiveType::Cube;
+        if (ImGui::MenuItem("Sphere"))   m_pendingPrimitive = PrimitiveType::Sphere;
+        if (ImGui::MenuItem("Cylinder")) m_pendingPrimitive = PrimitiveType::Cylinder;
+        ImGui::EndPopup();
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Import..."))
+        ImGui::OpenPopup("##import_menu");
+    if (ImGui::BeginPopup("##import_menu"))
+    {
+        if (ImGui::MenuItem("OBJ..."))
+        {
+            ImGui::CloseCurrentPopup();
+            vex::Log::info("File dialog opened");
+            std::string path = openObjFileDialog();
+            vex::Log::info(path.empty() ? "File dialog cancelled" : "File dialog closed: " + path);
+            if (!path.empty())
+            {
+                std::string baseName = path;
+                auto slash = baseName.find_last_of("/\\");
+                if (slash != std::string::npos) baseName = baseName.substr(slash + 1);
+                auto dot = baseName.rfind('.');
+                if (dot != std::string::npos)   baseName = baseName.substr(0, dot);
+                m_pendingImportPath = path;
+                m_pendingImportName = baseName;
+            }
+        }
+        if (ImGui::MenuItem("GLTF..."))
+        {
+            ImGui::CloseCurrentPopup();
+            vex::Log::info("File dialog opened");
+            std::string path = openGltfFileDialog();
+            vex::Log::info(path.empty() ? "File dialog cancelled" : "File dialog closed: " + path);
+            if (!path.empty())
+            {
+                std::string baseName = path;
+                auto slash = baseName.find_last_of("/\\");
+                if (slash != std::string::npos) baseName = baseName.substr(slash + 1);
+                auto dot = baseName.rfind('.');
+                if (dot != std::string::npos)   baseName = baseName.substr(0, dot);
+                m_pendingGltfImportPath = path;
+                m_pendingGltfImportName = baseName;
+            }
+        }
+        ImGui::EndPopup();
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Save Image..."))
+    {
+        std::string path = saveImageFileDialog();
+        if (!path.empty())
+        {
+            if (renderer.saveImage(path))
+                vex::Log::info("Saved: " + path);
+            else
+                vex::Log::error("Failed to save: " + path);
+        }
+    }
+
+    ImGui::Separator();
+    // ─────────────────────────────────────────────────────────────────────────
+
     ImGui::TextUnformatted("Scene");
     ImGui::Indent();
 
@@ -766,56 +845,6 @@ void EditorUI::renderHierarchy(Scene& scene, SceneRenderer& renderer)
     }
 
     ImGui::Unindent();
-    ImGui::Separator();
-
-    // Create primitive popup
-    if (ImGui::Button("Create..."))
-        ImGui::OpenPopup("##create_prim");
-    if (ImGui::BeginPopup("##create_prim"))
-    {
-        if (ImGui::MenuItem("Plane"))    m_pendingPrimitive = PrimitiveType::Plane;
-        if (ImGui::MenuItem("Cube"))     m_pendingPrimitive = PrimitiveType::Cube;
-        if (ImGui::MenuItem("Sphere"))   m_pendingPrimitive = PrimitiveType::Sphere;
-        if (ImGui::MenuItem("Cylinder")) m_pendingPrimitive = PrimitiveType::Cylinder;
-        ImGui::EndPopup();
-    }
-    ImGui::SameLine();
-
-    // Import button
-    if (ImGui::Button("Import OBJ..."))
-    {
-        vex::Log::info("File dialog opened");
-        std::string path = openObjFileDialog();
-        vex::Log::info(path.empty() ? "File dialog cancelled" : "File dialog closed: " + path);
-        if (!path.empty())
-        {
-            // Extract filename without extension for display name
-            std::string baseName = path;
-            auto slash = baseName.find_last_of("/\\");
-            if (slash != std::string::npos)
-                baseName = baseName.substr(slash + 1);
-            auto dot = baseName.rfind('.');
-            if (dot != std::string::npos)
-                baseName = baseName.substr(0, dot);
-
-            // Defer the actual import to between frames so we can pump a loading overlay.
-            m_pendingImportPath = path;
-            m_pendingImportName = baseName;
-        }
-    }
-
-    ImGui::SameLine();
-    if (ImGui::Button("Save Image..."))
-    {
-        std::string path = saveImageFileDialog();
-        if (!path.empty())
-        {
-            if (renderer.saveImage(path))
-                vex::Log::info("Saved: " + path);
-            else
-                vex::Log::error("Failed to save: " + path);
-        }
-    }
 
     ImGui::End();
 }
@@ -923,6 +952,7 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                                 float ph = kPreviewSize;
                                 if (pw > kPreviewSize) { ph = kPreviewSize / aspect; pw = kPreviewSize; }
                                 ImGui::Image(tid, {pw, ph}, {0.f, 1.f}, {1.f, 0.f});
+                                ImGui::Text("%ux%u", tex->getWidth(), tex->getHeight());
                                 ImGui::EndTooltip();
                             }
                         }
@@ -940,6 +970,7 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
 
                     texRow("Diffuse",   sm.meshData.diffuseTexturePath,    sm.diffuseTexture);
                     texRow("Normal",    sm.meshData.normalTexturePath,     sm.normalTexture);
+                    texRow("AO",        sm.meshData.aoTexturePath,         sm.aoTexture);
                     texRow("Roughness", sm.meshData.roughnessTexturePath,  sm.roughnessTexture);
                     texRow("Metallic",  sm.meshData.metallicTexturePath,   sm.metallicTexture);
                     texRow("Emissive",  sm.meshData.emissiveTexturePath,   sm.emissiveTexture);
@@ -1249,7 +1280,8 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
     if (m_renderModeIndex == 0)
     {
         const char* debugModes[] = { "None", "Wireframe", "Depth", "Normals",
-                                      "UVs", "Albedo", "Emission", "Material Type" };
+                                      "UVs", "Albedo", "Emission", "Material Type",
+                                      "Roughness", "Metallic", "AO" };
         ImGui::Combo("Debug Mode", &m_debugModeIndex, debugModes, static_cast<int>(std::size(debugModes)));
 
         bool normalMap = renderer.getEnableNormalMapping();
@@ -1260,6 +1292,12 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
         bool shadows = renderer.getRasterEnableShadows();
         if (ImGui::Checkbox("Shadow Mapping", &shadows))
             renderer.setRasterEnableShadows(shadows);
+        float shadowStrength = renderer.getShadowStrength();
+        if (ImGui::SliderFloat("Shadow Strength##raster", &shadowStrength, 0.0f, 1.0f, "%.2f"))
+            renderer.setShadowStrength(shadowStrength);
+        glm::vec3 shadowColor = renderer.getShadowColor();
+        if (ImGui::ColorEdit3("Shadow Color##raster", &shadowColor.x))
+            renderer.setShadowColor(shadowColor);
 
         ImGui::SeparatorText("Environment");
         bool rEnv = renderer.getRasterEnableEnvLighting();

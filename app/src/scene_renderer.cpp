@@ -1777,10 +1777,25 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedNodeIdx, [[maybe_u
         // corners through the current node's world matrix, so gizmo transforms are
         // reflected immediately without a full geometry rebuild.
         // Fall back to a unit cube around the camera target if no geometry is loaded yet.
+
+        // m_nodeLocalAABBs is normally populated by rebuildRaytraceGeometry, which only
+        // runs when switching into an RT mode. In pure rasterize mode (first launch or
+        // scene load without an RT switch) the array is stale/empty, so rebuild it here.
+        if (m_nodeLocalAABBs.size() != scene.nodes.size())
+        {
+            m_nodeLocalAABBs.clear();
+            m_nodeLocalAABBs.resize(scene.nodes.size());
+            for (size_t ni = 0; ni < scene.nodes.size(); ++ni)
+                for (const auto& sm : scene.nodes[ni].submeshes)
+                    for (const auto& v : sm.meshData.vertices)
+                        m_nodeLocalAABBs[ni].grow(v.position);
+        }
+
         vex::AABB worldAABB;
         for (int ni = 0; ni < (int)scene.nodes.size() && ni < (int)m_nodeLocalAABBs.size(); ++ni)
         {
             const vex::AABB& local = m_nodeLocalAABBs[ni];
+            if (local.min.x > local.max.x) continue; // skip empty AABBs (nodes with no submeshes)
             const glm::mat4  M     = scene.getWorldMatrix(ni);
             for (int c = 0; c < 8; ++c)
             {
@@ -1973,6 +1988,8 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedNodeIdx, [[maybe_u
             m_meshShader->setMat4("u_shadowViewProj", lightVP);
             m_meshShader->setBool("u_enableShadows", scene.showSun && m_rasterEnableShadows);
             m_meshShader->setFloat("u_shadowNormalBias", shadowNormalBias);
+            m_meshShader->setFloat("u_shadowStrength", m_shadowStrength);
+            m_meshShader->setVec3("u_shadowColor", m_shadowColor);
         }
     }
 #endif
@@ -1992,6 +2009,8 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedNodeIdx, [[maybe_u
         m_meshShader->setMat4("u_shadowViewProj", lightVP);
         m_meshShader->setBool("u_enableShadows", scene.showSun && m_rasterEnableShadows);
         m_meshShader->setFloat("u_shadowNormalBias", shadowNormalBias);
+        m_meshShader->setFloat("u_shadowStrength", m_shadowStrength);
+        m_meshShader->setVec3("u_shadowColor", m_shadowColor);
         if (m_shadowFB)
         {
             auto* vkShadowFB    = static_cast<vex::VKFramebuffer*>(m_shadowFB.get());
@@ -2048,6 +2067,10 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedNodeIdx, [[maybe_u
             bool hasEmissive = sm.emissiveTexture != nullptr;
             m_meshShader->setTexture(4, hasEmissive ? sm.emissiveTexture.get() : m_whiteTexture.get());
             m_meshShader->setBool("u_hasEmissiveMap", hasEmissive);
+
+            bool hasAO = sm.aoTexture != nullptr;
+            m_meshShader->setTexture(7, hasAO ? sm.aoTexture.get() : m_whiteTexture.get());
+            m_meshShader->setBool("u_hasAOMap", hasAO);
 
             m_meshShader->setVec3("u_baseColor", sm.meshData.baseColor);
             m_meshShader->setFloat("u_emissiveStrength", sm.meshData.emissiveStrength);

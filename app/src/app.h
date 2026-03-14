@@ -16,7 +16,7 @@ struct App
 private:
     void handleInput();
     void processPicking();
-    void runImport(const std::string& path, const std::string& name);
+    void runImport(const std::string& path, const std::string& name, bool isGltf = false);
     void duplicateSelected();
     NodeSave saveNode(int nodeIndex) const;
 

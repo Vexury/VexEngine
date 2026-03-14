@@ -198,6 +198,7 @@ bool Scene::importOBJ(const std::string& path, const std::string& name,
                 addPath(md.roughnessTexturePath);
                 addPath(md.metallicTexturePath);
                 addPath(md.emissiveTexturePath);
+                addPath(md.aoTexturePath);
             }
         }
 
@@ -283,6 +284,7 @@ bool Scene::importOBJ(const std::string& path, const std::string& name,
         sm.roughnessTexture = loadTex(submeshes[i].roughnessTexturePath,  texCache, texCount, importedTexPixels);
         sm.metallicTexture  = loadTex(submeshes[i].metallicTexturePath,   texCache, texCount, importedTexPixels);
         sm.emissiveTexture  = loadTex(submeshes[i].emissiveTexturePath,   texCache, texCount, importedTexPixels);
+        sm.aoTexture        = loadTex(submeshes[i].aoTexturePath,         texCache, texCount, importedTexPixels);
         sm.meshData         = submeshes[i];
         sm.vertexCount      = static_cast<uint32_t>(submeshes[i].vertices.size());
         sm.indexCount       = static_cast<uint32_t>(submeshes[i].indices.size());
@@ -393,6 +395,225 @@ bool Scene::importOBJ(const std::string& path, const std::string& name,
     return true;
 }
 
+// ── importGLTF ────────────────────────────────────────────────────────────────
+
+bool Scene::importGLTF(const std::string& path, const std::string& name,
+                       ProgressFn onProgress)
+{
+    std::vector<vex::GLTFNodeInfo> nodeInfos;
+    auto submeshes = vex::MeshData::loadGLTF(path, nodeInfos);
+    if (submeshes.empty())
+        return false;
+
+    vex::Log::info("Uploading " + std::to_string(submeshes.size()) + " submesh(es) to GPU...");
+
+    TexCache texCache;
+    int texCount = 0;
+
+    if (onProgress) onProgress("Uploading meshes and textures...", 0.3f);
+
+    // ── Parallel texture decode ───────────────────────────────────────────────
+    {
+        std::vector<std::string> uniquePaths;
+        {
+            std::unordered_map<std::string, bool> seen;
+            auto addPath = [&](const std::string& p)
+            {
+                if (p.empty() || seen.count(p)) return;
+                if (p.size() >= 4 &&
+                    (p.compare(p.size()-4, 4, ".exr") == 0 ||
+                     p.compare(p.size()-4, 4, ".EXR") == 0)) return;
+                seen[p] = true;
+                uniquePaths.push_back(p);
+            };
+            for (const auto& md : submeshes)
+            {
+                addPath(md.diffuseTexturePath);
+                addPath(md.normalTexturePath);
+                addPath(md.roughnessTexturePath);
+                addPath(md.metallicTexturePath);
+                addPath(md.emissiveTexturePath);
+                addPath(md.aoTexturePath);
+            }
+        }
+
+        if (!uniquePaths.empty())
+        {
+            struct Slot { std::string path; TexPixels pixels; };
+            std::vector<Slot> slots(uniquePaths.size());
+            for (size_t i = 0; i < uniquePaths.size(); ++i)
+                slots[i].path = uniquePaths[i];
+
+            stbi_set_flip_vertically_on_load(false);
+
+            const unsigned int hw = std::thread::hardware_concurrency();
+            const int nThreads = static_cast<int>(
+                std::min(static_cast<size_t>(hw ? hw : 4), uniquePaths.size()));
+
+            auto t_decode = std::chrono::steady_clock::now();
+
+            std::atomic<int> nextSlot{0};
+            auto workerFn = [&]()
+            {
+                for (int idx = nextSlot.fetch_add(1, std::memory_order_relaxed);
+                     idx < static_cast<int>(slots.size());
+                     idx = nextSlot.fetch_add(1, std::memory_order_relaxed))
+                {
+                    int w, h, c;
+                    unsigned char* data = stbi_load(slots[idx].path.c_str(), &w, &h, &c, 4);
+                    if (data)
+                    {
+                        slots[idx].pixels.width  = w;
+                        slots[idx].pixels.height = h;
+                        slots[idx].pixels.pixels.assign(
+                            data, data + static_cast<size_t>(w) * h * 4);
+                        stbi_image_free(data);
+                    }
+                }
+            };
+
+            std::vector<std::thread> workers;
+            workers.reserve(nThreads);
+            for (int t = 0; t < nThreads; ++t)
+                workers.emplace_back(workerFn);
+            for (auto& t : workers)
+                t.join();
+
+            float t_decode_ms = std::chrono::duration<float, std::milli>(
+                std::chrono::steady_clock::now() - t_decode).count();
+
+            int decoded = 0;
+            for (auto& slot : slots)
+                if (!slot.pixels.pixels.empty())
+                {
+                    importedTexPixels[slot.path] = std::move(slot.pixels);
+                    ++decoded;
+                }
+
+            char buf[256];
+            std::snprintf(buf, sizeof(buf),
+                "  Parallel texture decode: %.0f ms  (%d/%zu textures, %d threads)",
+                t_decode_ms, decoded, uniquePaths.size(), nThreads);
+            vex::Log::info(buf);
+        }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    auto t_gpu_upload = std::chrono::steady_clock::now();
+
+    auto makeSM = [&](size_t i) -> SceneMesh
+    {
+        auto mesh = vex::Mesh::create();
+        mesh->upload(submeshes[i]);
+        SceneMesh sm;
+        sm.name = submeshes[i].name.empty()
+            ? "Submesh " + std::to_string(i)
+            : submeshes[i].name;
+        sm.mesh             = std::move(mesh);
+        sm.diffuseTexture   = loadTex(submeshes[i].diffuseTexturePath,   texCache, texCount, importedTexPixels);
+        sm.normalTexture    = loadTex(submeshes[i].normalTexturePath,     texCache, texCount, importedTexPixels);
+        sm.roughnessTexture = loadTex(submeshes[i].roughnessTexturePath,  texCache, texCount, importedTexPixels);
+        sm.metallicTexture  = loadTex(submeshes[i].metallicTexturePath,   texCache, texCount, importedTexPixels);
+        sm.emissiveTexture  = loadTex(submeshes[i].emissiveTexturePath,   texCache, texCount, importedTexPixels);
+        sm.aoTexture        = loadTex(submeshes[i].aoTexturePath,         texCache, texCount, importedTexPixels);
+        sm.meshData         = submeshes[i];
+        sm.vertexCount      = static_cast<uint32_t>(submeshes[i].vertices.size());
+        sm.indexCount       = static_cast<uint32_t>(submeshes[i].indices.size());
+        return sm;
+    };
+
+    vex::Mesh::beginBatchUpload();
+
+    int rootIdx = static_cast<int>(nodes.size());
+
+    // Root node for this import
+    SceneNode root;
+    root.name        = name;
+    root.parentIndex = -1;
+
+    glm::vec3 rootBBoxMin( FLT_MAX), rootBBoxMax(-FLT_MAX);
+
+    // Create one SceneNode per GLTFNodeInfo (offset by rootIdx+1)
+    std::vector<SceneNode> gltfNodes(nodeInfos.size());
+    std::vector<glm::vec3> childBBoxMin(nodeInfos.size(), glm::vec3( FLT_MAX));
+    std::vector<glm::vec3> childBBoxMax(nodeInfos.size(), glm::vec3(-FLT_MAX));
+
+    for (size_t ni = 0; ni < nodeInfos.size(); ++ni)
+    {
+        const auto& info = nodeInfos[ni];
+        gltfNodes[ni].name        = info.nodeName.empty()
+            ? ("Node" + std::to_string(ni)) : info.nodeName;
+        gltfNodes[ni].localMatrix = info.localTransform;
+
+        // Parent: -1 means child of root; otherwise offset into the new nodes block
+        if (info.parentIndex < 0)
+        {
+            gltfNodes[ni].parentIndex = rootIdx;
+            root.childIndices.push_back(rootIdx + 1 + static_cast<int>(ni));
+        }
+        else
+        {
+            gltfNodes[ni].parentIndex = rootIdx + 1 + info.parentIndex;
+            gltfNodes[info.parentIndex].childIndices.push_back(rootIdx + 1 + static_cast<int>(ni));
+        }
+
+        // Upload submeshes belonging to this node
+        for (int meshIdx : info.meshDataIndices)
+        {
+            for (const auto& v : submeshes[meshIdx].vertices)
+            {
+                childBBoxMin[ni] = glm::min(childBBoxMin[ni], v.position);
+                childBBoxMax[ni] = glm::max(childBBoxMax[ni], v.position);
+                rootBBoxMin      = glm::min(rootBBoxMin,      v.position);
+                rootBBoxMax      = glm::max(rootBBoxMax,      v.position);
+            }
+            gltfNodes[ni].submeshes.push_back(makeSM(static_cast<size_t>(meshIdx)));
+        }
+    }
+
+    vex::Mesh::endBatchUpload();
+
+    // Finalize bboxes
+    for (size_t ni = 0; ni < nodeInfos.size(); ++ni)
+    {
+        if (childBBoxMin[ni].x <= childBBoxMax[ni].x)
+        {
+            gltfNodes[ni].center = (childBBoxMin[ni] + childBBoxMax[ni]) * 0.5f;
+            gltfNodes[ni].radius = glm::length(childBBoxMax[ni] - childBBoxMin[ni]) * 0.5f;
+        }
+    }
+
+    if (rootBBoxMin.x <= rootBBoxMax.x)
+    {
+        root.center = (rootBBoxMin + rootBBoxMax) * 0.5f;
+        root.radius = glm::length(rootBBoxMax - rootBBoxMin) * 0.5f;
+    }
+
+    nodes.push_back(std::move(root));
+    for (auto& n : gltfNodes)
+        nodes.push_back(std::move(n));
+
+    geometryDirty = true;
+
+    {
+        float t_gpu_ms = std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - t_gpu_upload).count();
+        size_t totalVerts = 0;
+        for (const auto& md : submeshes) totalVerts += md.vertices.size();
+        char buf[256];
+        std::snprintf(buf, sizeof(buf),
+            "  GPU mesh upload: %.0f ms  (%zu submeshes, %zu verts, %d textures)",
+            t_gpu_ms, submeshes.size(), totalVerts, texCount);
+        vex::Log::info(buf);
+    }
+
+    if (texCount > 0)
+        vex::Log::info("  Loaded " + std::to_string(texCount) + " unique texture(s)"
+                       + " (shared across " + std::to_string(submeshes.size()) + " submeshes)");
+
+    return true;
+}
+
 // ── addNodeFromSave ───────────────────────────────────────────────────────────
 
 void Scene::addNodeFromSave(const NodeSave& save, int insertAt)
@@ -424,6 +645,7 @@ void Scene::addNodeFromSave(const NodeSave& save, int insertAt)
         sm.roughnessTexture = loadTex(ss.meshData.roughnessTexturePath,  texCache, texCount, importedTexPixels);
         sm.metallicTexture  = loadTex(ss.meshData.metallicTexturePath,   texCache, texCount, importedTexPixels);
         sm.emissiveTexture  = loadTex(ss.meshData.emissiveTexturePath,   texCache, texCount, importedTexPixels);
+        sm.aoTexture        = loadTex(ss.meshData.aoTexturePath,         texCache, texCount, importedTexPixels);
         sm.meshData         = ss.meshData;
         sm.modelMatrix      = ss.modelMatrix;
         sm.vertexCount      = static_cast<uint32_t>(ss.meshData.vertices.size());

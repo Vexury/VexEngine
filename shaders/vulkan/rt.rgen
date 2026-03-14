@@ -297,8 +297,10 @@ vec3 pathTrace(vec3 rayOrigin, vec3 rayDirection) {
         }
 
         // ── Roughness / metallic textures ─────────────────────────────────
-        if (roughTexIdx >= 0) roughness = sampleTexture(roughTexIdx, hitUV).x;
-        if (metalTexIdx >= 0) metallic  = sampleTexture(metalTexIdx, hitUV).x;
+        // G channel = roughness, B channel = metallic (ARM packing).
+        // Safe for OBJ separate grayscale textures too since R=G=B there.
+        if (roughTexIdx >= 0) roughness = sampleTexture(roughTexIdx, hitUV).y;
+        if (metalTexIdx >= 0) metallic  = sampleTexture(metalTexIdx, hitUV).z;
 
         // ── Material dispatch ─────────────────────────────────────────────
         vec3 wo = -direction;
