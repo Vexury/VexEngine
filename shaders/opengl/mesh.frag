@@ -186,7 +186,7 @@ void main()
     vec3 envAmbient = u_enableEnvLighting ? u_envColor * u_envLightMultiplier : vec3(0.0);
     vec3 F0 = mix(vec3(0.04), baseColor, metallic);
     vec3 F  = F_Schlick(max(dot(N, V), 0.0), F0);
-    vec3 ambient = envAmbient * (1.0 - F) * (1.0 - metallic) * baseColor * ao;
+    vec3 ambient = envAmbient * (1.0 - metallic) * baseColor * ao;
 
     if (u_enableEnvLighting && u_hasEnvMap)
     {
