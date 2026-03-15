@@ -16,7 +16,7 @@ namespace vex
 
 // ── VKComputeUniforms ─────────────────────────────────────────────────────────
 // Must exactly match the 'Uniforms' block in pathtracer.comp (std140, 304 bytes).
-// Fields 0-284 are identical to RTUniforms; 288-300 are compute-only additions.
+// Fields 0-284 are identical to RTUniforms; 288-292 are compute-only additions.
 struct VKComputeUniforms
 {
     float    inverseVP[16];           // mat4,  offset   0
@@ -65,7 +65,7 @@ struct VKComputeUniforms
     uint32_t bvhNodeCount;            //        offset 292
     uint32_t _pad3a;                  //        offset 296
     uint32_t _pad3b;                  //        offset 300
-                                      // total: 304
+                                      //        total: 304
 };
 static_assert(sizeof(VKComputeUniforms) == 304, "VKComputeUniforms layout mismatch");
 

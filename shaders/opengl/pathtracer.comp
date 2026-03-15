@@ -90,7 +90,6 @@ uniform uint  u_bvhNodeCount;
 uniform float u_rayEps;
 uniform bool  u_enableRR;
 uniform bool  u_bilinearFiltering;
-
 uniform float u_aperture;
 uniform float u_focusDistance;
 uniform vec3  u_cameraRight;
@@ -342,16 +341,20 @@ bool intersectTriangle(vec3 rayOrig, vec3 rayDir, uint triIdx,
     vec3 h = cross(rayDir, edge2);
     float a = dot(edge1, h);
 
-    if (a > -1e-7 && a < 1e-7) return false;
+    if (a > -1e-9 && a < 1e-9) return false;
+
+    // Back-face culling: matches Vulkan RT default (gl_RayFlagsOpaqueEXT).
+    // Dielectrics (materialType==2) still receive back-face hits for refraction.
+    if (a < 0.0 && triMaterialType(triIdx) != 2) return false;
 
     float f = 1.0 / a;
     vec3 s = rayOrig - v0;
     float u = f * dot(s, h);
-    if (u < 0.0 || u > 1.0) return false;
+    if (u < -1e-5 || u > 1.0 + 1e-5) return false;
 
     vec3 q = cross(s, edge1);
     float v = f * dot(rayDir, q);
-    if (v < 0.0 || u + v > 1.0) return false;
+    if (v < -1e-5 || u + v > 1.0 + 1e-5) return false;
 
     float t = f * dot(edge2, q);
     if (t <= 1e-7) return false;
@@ -805,10 +808,6 @@ vec3 pathTrace(vec3 rayOrigin, vec3 rayDirection) {
                     radiance += throughput * emission;
             }
 
-            // Textured emitters continue to scatter via their base material;
-            // solid emitters (actual light sources in the CDF) terminate.
-            if (!isTexturedEmitter)
-                break;
         }
 
         // Albedo (with texture)

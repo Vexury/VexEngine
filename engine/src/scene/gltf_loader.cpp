@@ -228,13 +228,14 @@ static MeshData buildPrimitive(const tinygltf::Model& model,
         // Alpha clip
         md.alphaClip = (mat.alphaMode == "MASK");
 
-        // Emissive strength from emissiveFactor (max channel)
+        // Emissive color from emissiveFactor
         if (mat.emissiveFactor.size() == 3)
         {
-            float maxE = static_cast<float>(
-                std::max({ mat.emissiveFactor[0], mat.emissiveFactor[1], mat.emissiveFactor[2] }));
-            if (maxE > 1e-5f)
-                md.emissiveStrength = maxE;
+            md.emissiveColor = {
+                static_cast<float>(mat.emissiveFactor[0]),
+                static_cast<float>(mat.emissiveFactor[1]),
+                static_cast<float>(mat.emissiveFactor[2])
+            };
         }
 
         // Texture paths

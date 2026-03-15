@@ -277,7 +277,6 @@ vec3 pathTrace(vec3 rayOrigin, vec3 rayDirection) {
                 radiance += throughput * emission;
             }
 
-            if (!isTexturedEmitter) break;
         }
 
         // ── Albedo ────────────────────────────────────────────────────────

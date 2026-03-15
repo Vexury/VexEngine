@@ -69,6 +69,9 @@ layout(push_constant) uniform PC {
     layout(offset = 156) float baseColorB;
     layout(offset = 160) float emissiveStrength;
     layout(offset = 164) uint  hasAOMap;
+    layout(offset = 168) float emissiveColorR;
+    layout(offset = 172) float emissiveColorG;
+    layout(offset = 176) float emissiveColorB;
 } pc;
 
 layout(location = 0) out vec4 FragColor;
@@ -293,7 +296,7 @@ void main()
     vec3 result = ambient
                 + pointContrib * attenuation
                 + sunContrib;
-    result += vEmissive * pc.emissiveStrength;
+    result += vec3(pc.emissiveColorR, pc.emissiveColorG, pc.emissiveColorB) * pc.emissiveStrength;
     if (pc.hasEmissiveMap != 0u)
         result += texture(u_emissiveMap, vUV).rgb * pc.emissiveStrength;
     FragColor = vec4(result, 1.0);

@@ -47,6 +47,7 @@ uniform float u_roughness;
 uniform float u_metallic;
 uniform vec3  u_baseColor;
 uniform float u_emissiveStrength;
+uniform vec3  u_emissiveColor;
 
 // --- Cook-Torrance GGX helpers ---
 const float PI = 3.14159265358979323846;
@@ -255,7 +256,7 @@ void main()
     vec3 result = ambient
                 + pointContrib * attenuation
                 + sunContrib;
-    result += vEmissive * u_emissiveStrength;
+    result += u_emissiveColor * u_emissiveStrength;
     if (u_hasEmissiveMap)
         result += texture(u_emissiveMap, vUV).rgb * u_emissiveStrength;
     FragColor = vec4(result, 1.0);

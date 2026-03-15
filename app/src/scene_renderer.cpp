@@ -1127,7 +1127,7 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
                 tri.uv1 = v1.uv;
                 tri.uv2 = v2.uv;
                 tri.color             = v0.color * sm.meshData.baseColor;
-                tri.emissive          = v0.emissive * sm.meshData.emissiveStrength;
+                tri.emissive          = sm.meshData.emissiveColor * sm.meshData.emissiveStrength;
                 tri.emissiveStrength  = sm.meshData.emissiveStrength;
                 tri.geometricNormal = (len > GEOMETRY_EPSILON) ? (cross / len) : glm::vec3(0, 1, 0);
                 tri.area = len * 0.5f;
@@ -1432,9 +1432,9 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
                     m_vkTriShading.push_back(v0.color.z * sm.meshData.baseColor.z);
                     m_vkTriShading.push_back(iBF(texIdx));
                     // [6] emissive.xyz (scaled by emissiveStrength) + area
-                    m_vkTriShading.push_back(v0.emissive.x * sm.meshData.emissiveStrength);
-                    m_vkTriShading.push_back(v0.emissive.y * sm.meshData.emissiveStrength);
-                    m_vkTriShading.push_back(v0.emissive.z * sm.meshData.emissiveStrength);
+                    m_vkTriShading.push_back(sm.meshData.emissiveColor.x * sm.meshData.emissiveStrength);
+                    m_vkTriShading.push_back(sm.meshData.emissiveColor.y * sm.meshData.emissiveStrength);
+                    m_vkTriShading.push_back(sm.meshData.emissiveColor.z * sm.meshData.emissiveStrength);
                     m_vkTriShading.push_back(area);
                     // [7] geoNormal.xyz + normalMapTexIdx (as int bits)
                     m_vkTriShading.push_back(geoN.x); m_vkTriShading.push_back(geoN.y);
@@ -1458,7 +1458,7 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
                     m_vkTriShading.push_back(p2.z); m_vkTriShading.push_back(0.0f);
 
                     // Track emissive triangles for lights SSBO (per-submesh global index)
-                    if (glm::length(v0.emissive) > 0.001f)
+                    if (glm::length(sm.meshData.emissiveColor) > 0.001f)
                     {
                         vkLightIndices.push_back(globalTriOffset + static_cast<uint32_t>(i / 3));
                         vkTotalLightArea += area;
@@ -1591,13 +1591,30 @@ void SceneRenderer::rebuildMaterials(Scene& scene)
         const auto& md = sm.meshData;
         const auto& v0 = md.vertices[md.indices[triIdx * 3]];
         m_rtTriangles[i].color            = v0.color   * md.baseColor;
-        m_rtTriangles[i].emissive         = v0.emissive * md.emissiveStrength;
+        m_rtTriangles[i].emissive         = md.emissiveColor * md.emissiveStrength;
         m_rtTriangles[i].emissiveStrength = md.emissiveStrength;
         m_rtTriangles[i].materialType     = md.materialType;
         m_rtTriangles[i].ior              = md.ior;
         m_rtTriangles[i].roughness        = md.roughness;
         m_rtTriangles[i].metallic         = md.metallic;
     }
+
+    // Rebuild scene-renderer light list from updated triangle emissive values.
+    // This feeds m_rtLightIndices into VK/GL RT UBOs (lightCount, totalLightArea).
+    m_rtLightIndices.clear();
+    m_rtLightCDF.clear();
+    m_rtTotalLightArea = 0.0f;
+    for (uint32_t i = 0; i < static_cast<uint32_t>(m_rtTriangles.size()); ++i)
+    {
+        if (glm::length(m_rtTriangles[i].emissive) > 0.001f)
+        {
+            m_rtLightIndices.push_back(i);
+            m_rtTotalLightArea += m_rtTriangles[i].area;
+            m_rtLightCDF.push_back(m_rtTotalLightArea);
+        }
+    }
+    if (m_rtTotalLightArea > 0.0f)
+        for (float& c : m_rtLightCDF) c /= m_rtTotalLightArea;
 
     // CPU raytracer: patch m_triData in-place, reset accumulation (no BVH rebuild)
     if (m_cpuRaytracer)
@@ -1640,9 +1657,9 @@ void SceneRenderer::rebuildMaterials(Scene& scene)
                     m_vkTriShading[base + 21] = v0.color.y * sm.meshData.baseColor.y;
                     m_vkTriShading[base + 22] = v0.color.z * sm.meshData.baseColor.z;
                     // [6].xyz = emissive scaled by emissiveStrength
-                    m_vkTriShading[base + 24] = v0.emissive.x * sm.meshData.emissiveStrength;
-                    m_vkTriShading[base + 25] = v0.emissive.y * sm.meshData.emissiveStrength;
-                    m_vkTriShading[base + 26] = v0.emissive.z * sm.meshData.emissiveStrength;
+                    m_vkTriShading[base + 24] = sm.meshData.emissiveColor.x * sm.meshData.emissiveStrength;
+                    m_vkTriShading[base + 25] = sm.meshData.emissiveColor.y * sm.meshData.emissiveStrength;
+                    m_vkTriShading[base + 26] = sm.meshData.emissiveColor.z * sm.meshData.emissiveStrength;
                     // [8].x/.y/.z = alphaClip/materialType/ior
                     m_vkTriShading[base + 32] = sm.meshData.alphaClip ? 1.0f : 0.0f;
                     m_vkTriShading[base + 33] = static_cast<float>(sm.meshData.materialType);
@@ -2073,6 +2090,7 @@ void SceneRenderer::renderRasterize(Scene& scene, int selectedNodeIdx, [[maybe_u
             m_meshShader->setBool("u_hasAOMap", hasAO);
 
             m_meshShader->setVec3("u_baseColor", sm.meshData.baseColor);
+            m_meshShader->setVec3("u_emissiveColor", sm.meshData.emissiveColor);
             m_meshShader->setFloat("u_emissiveStrength", sm.meshData.emissiveStrength);
             m_meshShader->setInt("u_materialType", sm.meshData.materialType);
             m_meshShader->setFloat("u_roughness", sm.meshData.roughness);

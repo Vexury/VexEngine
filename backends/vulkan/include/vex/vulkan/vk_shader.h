@@ -151,7 +151,10 @@ private:
         float    baseColorB      = 1.0f;   // offset 92
         float    emissiveStrength= 1.0f;   // offset 96
         uint32_t hasAOMap        = 0;      // offset 100
-    };                                     // total: 104 bytes
+        float    emissiveColorR  = 0.0f;   // offset 104
+        float    emissiveColorG  = 0.0f;   // offset 108
+        float    emissiveColorB  = 0.0f;   // offset 112
+    };                                     // total: 116 bytes
     MeshPushConstant m_pushData{};
 
     // Wireframe pipeline

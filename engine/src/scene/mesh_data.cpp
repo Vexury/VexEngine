@@ -149,6 +149,7 @@ std::vector<MeshData> MeshData::loadOBJ(const std::string& path)
                     group.name = m.name;
                 color    = { m.diffuse[0],  m.diffuse[1],  m.diffuse[2] };
                 emissive = { m.emission[0], m.emission[1], m.emission[2] };
+                group.emissiveColor = emissive;
 
                 // Material type from illum model
                 if (m.illum == 3 || m.illum == 5)
@@ -184,14 +185,20 @@ std::vector<MeshData> MeshData::loadOBJ(const std::string& path)
                 if (!m.diffuse_texname.empty())
                     color = glm::vec3(1.0f);
 
-                // Ns - roughness: sqrt(2 / (Ns + 2)) maps Blinn-Phong exponent to GGX roughness.
-                // Roughness textures (map_Ns) are expected in the 0-1 PBR range, not as Ns exponents.
-                group.roughness = glm::clamp(
-                    std::sqrt(2.0f / (std::max(m.shininess, 0.0f) + 2.0f)), 0.0f, 1.0f);
+                // Roughness: prefer Pr scalar (PBR extension), otherwise invert Blender's
+                // Ns formula: Ns = (1 - roughness)^2 * 1000  =>  roughness = 1 - sqrt(Ns/1000).
+                // This correctly round-trips roughness through Blender's OBJ exporter.
+                if (m.roughness > 0.0f)
+                    group.roughness = glm::clamp(m.roughness, 0.0f, 1.0f);
+                else
+                    group.roughness = glm::clamp(
+                        1.0f - std::sqrt(std::max(m.shininess, 0.0f) / 1000.0f), 0.0f, 1.0f);
 
-                // illum - metallic (mirror materials are metallic)
+                // Metallic: prefer Pm scalar (PBR extension), override to 1 for mirror illum.
                 if (m.illum == 3 || m.illum == 5)
                     group.metallic = 1.0f;
+                else
+                    group.metallic = glm::clamp(m.metallic, 0.0f, 1.0f);
 
                 // d/Tr: constant dissolve < 1 without illum-based transparency or texture alpha clip.
                 // Treat as Dielectric so the path tracer transmits through it.
@@ -201,6 +208,12 @@ std::vector<MeshData> MeshData::loadOBJ(const std::string& path)
                     group.materialType = 2; // Dielectric
                     group.ior = m.ior > 0.0f ? m.ior : 1.5f;
                 }
+
+                // Dielectric materials transmit light — alpha clip would punch holes instead of
+                // refracting. Clear it unconditionally, regardless of how Dielectric was detected
+                // (illum 4/6/7 or dissolve).
+                if (group.materialType == 2)
+                    group.alphaClip = false;
 
                 if (group.emissiveTexturePath.empty() && !m.emissive_texname.empty())
                 {
@@ -217,6 +230,9 @@ std::vector<MeshData> MeshData::loadOBJ(const std::string& path)
                             (std::filesystem::path(mtlDir) / normTex).string();
                 }
 
+                // map_Pr (PBR roughness) takes priority; fall back to map_Ns (Blinn-Phong highlight).
+                if (group.roughnessTexturePath.empty() && !m.roughness_texname.empty())
+                    group.roughnessTexturePath = (std::filesystem::path(mtlDir) / m.roughness_texname).string();
                 if (group.roughnessTexturePath.empty() && !m.specular_highlight_texname.empty())
                     group.roughnessTexturePath = (std::filesystem::path(mtlDir) / m.specular_highlight_texname).string();
 

@@ -922,11 +922,38 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                     if (ImGui::Checkbox("Alpha Clip", &sm.meshData.alphaClip))
                         scene.materialDirty = true;
 
+                    if (ImGui::ColorEdit3("Emissive Color", &sm.meshData.emissiveColor.x))
+                        scene.materialDirty = true;
                     ImGui::DragFloat("Emissive Strength", &sm.meshData.emissiveStrength, 0.05f, 0.f, 100.f, "%.2f");
                     if (ImGui::IsItemDeactivatedAfterEdit()) scene.materialDirty = true;
 
                     if (isRasterize && sm.meshData.materialType != 0)
                         ImGui::TextDisabled("Rendered as Microfacet in rasterizer.\nSwitch to a path tracer to see this material.");
+
+                    if (!sm.meshData.name.empty())
+                    {
+                        ImGui::Spacing();
+                        ImGui::TextDisabled("Material: %s", sm.meshData.name.c_str());
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("Apply to all"))
+                        {
+                            const std::string& matName = sm.meshData.name;
+                            for (auto& n : scene.nodes)
+                                for (auto& other : n.submeshes)
+                                    if (other.meshData.name == matName && &other != &sm)
+                                    {
+                                        other.meshData.materialType     = sm.meshData.materialType;
+                                        other.meshData.roughness        = sm.meshData.roughness;
+                                        other.meshData.metallic         = sm.meshData.metallic;
+                                        other.meshData.ior              = sm.meshData.ior;
+                                        other.meshData.alphaClip        = sm.meshData.alphaClip;
+                                        other.meshData.emissiveStrength = sm.meshData.emissiveStrength;
+                                        other.meshData.emissiveColor    = sm.meshData.emissiveColor;
+                                        other.meshData.baseColor        = sm.meshData.baseColor;
+                                    }
+                            scene.materialDirty = true;
+                        }
+                    }
 
                     ImGui::SeparatorText("Textures");
 
@@ -1395,6 +1422,7 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
             bool firefly = renderer.getEnableFireflyClamping();
             if (ImGui::Checkbox("Firefly Clamping", &firefly))
                 renderer.setEnableFireflyClamping(firefly);
+
         }
 
         // ── Lighting ──────────────────────────────────────────────────────────

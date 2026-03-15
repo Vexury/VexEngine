@@ -649,6 +649,12 @@ void VKShader::setVec3(const std::string& name, const glm::vec3& value)
         m_pushData.baseColorG = value.g;
         m_pushData.baseColorB = value.b;
     }
+    else if (name == "u_emissiveColor")
+    {
+        m_pushData.emissiveColorR = value.r;
+        m_pushData.emissiveColorG = value.g;
+        m_pushData.emissiveColorB = value.b;
+    }
     else
     {
         auto it = m_uniformOffsets.find(name);

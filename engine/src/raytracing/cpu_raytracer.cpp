@@ -534,31 +534,29 @@ Ray CPURaytracer::generateRay(int x, int y, float jitterX, float jitterY, RNG& r
 bool CPURaytracer::intersectTriangle(const Ray& ray, const TriVerts& verts,
                                      float& t, float& u, float& v) const
 {
-    constexpr float EPSILON = 1e-7f;
-
     glm::vec3 edge1 = verts.v1 - verts.v0;
     glm::vec3 edge2 = verts.v2 - verts.v0;
     glm::vec3 h = glm::cross(ray.direction, edge2);
     float a = glm::dot(edge1, h);
 
-    if (a > -EPSILON && a < EPSILON)
+    if (a > -1e-9f && a < 1e-9f)
         return false;
 
     float f = 1.0f / a;
     glm::vec3 s = ray.origin - verts.v0;
     u = f * glm::dot(s, h);
 
-    if (u < 0.0f || u > 1.0f)
+    if (u < -1e-5f || u > 1.0f + 1e-5f)
         return false;
 
     glm::vec3 q = glm::cross(s, edge1);
     v = f * glm::dot(ray.direction, q);
 
-    if (v < 0.0f || u + v > 1.0f)
+    if (v < -1e-5f || u + v > 1.0f + 1e-5f)
         return false;
 
     t = f * glm::dot(edge2, q);
-    return t > EPSILON;
+    return t > 1e-7f;
 }
 
 HitRecord CPURaytracer::traceRay(const Ray& ray) const
@@ -590,6 +588,13 @@ HitRecord CPURaytracer::traceRay(const Ray& ray) const
                 if (intersectTriangle(ray, m_triVerts[i], t, u, v) && t < closest.t)
                 {
                     const auto& data = m_triData[i];
+
+                    // Back-face culling: matches Vulkan RT default behavior.
+                    // Dielectrics (materialType==2) allow back-face hits for refraction.
+                    if (glm::dot(data.geometricNormal, -ray.direction) <= 0.0f &&
+                        data.materialType != 2)
+                        continue;
+
                     float w = 1.0f - u - v;
 
                     // Alpha clip: skip transparent intersections
@@ -662,8 +667,14 @@ bool CPURaytracer::traceShadowRay(const Ray& ray, float maxDist) const
                 float t, u, v;
                 if (intersectTriangle(ray, m_triVerts[i], t, u, v) && t < maxDist)
                 {
-                    // Alpha clip: transparent surfaces don't occlude
                     const auto& data = m_triData[i];
+
+                    // Back-face culling: back-facing surfaces don't cast shadows.
+                    if (glm::dot(data.geometricNormal, -ray.direction) <= 0.0f &&
+                        data.materialType != 2)
+                        continue;
+
+                    // Alpha clip: transparent surfaces don't occlude
                     if (data.alphaClip && data.textureIndex >= 0)
                     {
                         float w = 1.0f - u - v;
@@ -816,10 +827,6 @@ glm::vec3 CPURaytracer::pathTrace(const Ray& initialRay, RNG& rng) const
                     radiance += throughput * emission;
             }
 
-            // Textured emitters continue to scatter via their base material;
-            // solid emitters (actual light sources in the CDF) terminate.
-            if (!isTexturedEmitter)
-                break;
         }
 
         glm::vec3 albedo = hit.color;
