@@ -323,8 +323,7 @@ vec3 pathTrace(vec3 rayOrigin, vec3 rayDirection) {
                 newDir = refract(-wo, shadingN, eta);
                 if (length(newDir) < 0.001)
                     newDir = reflect(-wo, shadingN);
-                else
-                    throughput *= albedo;
+                // else: no albedo tint on refraction — clear glass
             }
 
             prevBsdfPdf  = 1.0;

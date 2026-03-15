@@ -75,7 +75,7 @@ struct DielectricBSDF
                 wi = glm::reflect(-wo, normal);
                 return { wi, glm::vec3(1.0f), 1.0f };
             }
-            return { wi, color, 1.0f };
+            return { wi, glm::vec3(1.0f), 1.0f };
         }
     }
 };

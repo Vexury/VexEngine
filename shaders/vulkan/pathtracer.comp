@@ -860,7 +860,7 @@ vec3 pathTrace(vec3 rayOrigin, vec3 rayDirection) {
                     newDir = reflect(-wo, hit.normal);
                     throughput *= vec3(1.0);
                 } else {
-                    throughput *= albedo;
+                    // No albedo tint on refraction — clear glass
                 }
             }
 
