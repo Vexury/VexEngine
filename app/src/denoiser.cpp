@@ -55,4 +55,30 @@ bool Denoiser::denoise(float* rgb, uint32_t width, uint32_t height)
 #endif
 }
 
+bool Denoiser::denoiseAux(float* rgb, float* albedo, float* normal, uint32_t width, uint32_t height)
+{
+#ifdef VEX_HAS_OIDN
+    if (!m_device) return false;
+    OIDNDevice dev = static_cast<OIDNDevice>(m_device);
+
+    OIDNFilter filter = oidnNewFilter(dev, "RT");
+    oidnSetSharedFilterImage(filter, "color",  rgb,    OIDN_FORMAT_FLOAT3, width, height, 0, 0, 0);
+    oidnSetSharedFilterImage(filter, "albedo", albedo, OIDN_FORMAT_FLOAT3, width, height, 0, 0, 0);
+    oidnSetSharedFilterImage(filter, "normal", normal, OIDN_FORMAT_FLOAT3, width, height, 0, 0, 0);
+    oidnSetSharedFilterImage(filter, "output", rgb,    OIDN_FORMAT_FLOAT3, width, height, 0, 0, 0);
+    oidnSetFilterBool(filter, "hdr", true);
+    oidnCommitFilter(filter);
+    oidnExecuteFilter(filter);
+    oidnReleaseFilter(filter);
+
+    const char* err = nullptr;
+    if (oidnGetDeviceError(dev, &err) != OIDN_ERROR_NONE)
+        return false;
+    return true;
+#else
+    (void)rgb; (void)albedo; (void)normal; (void)width; (void)height;
+    return false;
+#endif
+}
+
 } // namespace vex

@@ -195,6 +195,7 @@ public:
 
     // Denoising
     void triggerDenoise();
+    void triggerDenoiseAux(); // Denoise+ with albedo/normal feature inputs
     bool isDenoiserReady() const { return m_denoiser && m_denoiser->isReady(); }
     bool getShowDenoisedResult() const { return m_showDenoisedResult; }
 
@@ -417,6 +418,8 @@ private:
     // Denoising
     std::unique_ptr<vex::Denoiser> m_denoiser;
     std::vector<float>   m_denoiseLinearHDR; // scratch buffer for HDR readback
+    std::vector<float>   m_denoiseAlbedo;    // first-hit albedo (Denoise+)
+    std::vector<float>   m_denoiseNormal;    // first-hit normal  (Denoise+)
     std::vector<uint8_t> m_denoisedRGBA8;    // tone-mapped denoised result
     bool m_showDenoisedResult = false;
 

@@ -114,7 +114,7 @@ public:
     // Insert a COMPUTE→FRAGMENT pipeline barrier on the output image.
     void postTraceBarrier(VkCommandBuffer cmd);
 
-    // Create (or recreate) the rgba32f accumulation image and write all 9 descriptors.
+    // Create (or recreate) the rgba32f accumulation + aux images and write all 11 descriptors.
     // Must be called after uploadGeometry() and (optionally) uploadEnvironmentMap().
     bool createOutputImage(uint32_t w, uint32_t h);
 
@@ -123,6 +123,9 @@ public:
 
     // Read back the accumulation image as linear HDR float RGB (3 floats per pixel).
     void readbackLinearHDR(std::vector<float>& outRGB);
+
+    // Read back first-hit albedo and world-space normal aux buffers (3 floats per pixel each).
+    void readbackAuxBuffers(std::vector<float>& outAlbedo, std::vector<float>& outNormal);
 
     // Accessors
     VkImage     getOutputImage()     const { return m_outputImage; }
@@ -186,6 +189,14 @@ private:
     VmaAllocation m_outputAlloc     = VK_NULL_HANDLE;
     uint32_t      m_width           = 0;
     uint32_t      m_height          = 0;
+
+    // ── Aux images (bindings 9-10, rgba32f, first-hit albedo + normal) ───────
+    VkImage       m_albedoImage     = VK_NULL_HANDLE;
+    VkImageView   m_albedoImageView = VK_NULL_HANDLE;
+    VmaAllocation m_albedoAlloc     = VK_NULL_HANDLE;
+    VkImage       m_normalImage     = VK_NULL_HANDLE;
+    VkImageView   m_normalImageView = VK_NULL_HANDLE;
+    VmaAllocation m_normalAlloc     = VK_NULL_HANDLE;
 
     // ── Readback staging buffer ──────────────────────────────────────────────
     VkBuffer      m_readbackBuffer = VK_NULL_HANDLE;

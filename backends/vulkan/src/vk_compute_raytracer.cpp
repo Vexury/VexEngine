@@ -139,6 +139,12 @@ void VKComputeRaytracer::shutdown()
     if (m_outputImageView) { vkDestroyImageView(device, m_outputImageView, nullptr); m_outputImageView = VK_NULL_HANDLE; }
     if (m_outputImage)     { vmaDestroyImage(allocator, m_outputImage, m_outputAlloc); m_outputImage = VK_NULL_HANDLE; }
 
+    // Aux images (albedo, normal)
+    if (m_albedoImageView) { vkDestroyImageView(device, m_albedoImageView, nullptr); m_albedoImageView = VK_NULL_HANDLE; }
+    if (m_albedoImage)     { vmaDestroyImage(allocator, m_albedoImage, m_albedoAlloc); m_albedoImage = VK_NULL_HANDLE; }
+    if (m_normalImageView) { vkDestroyImageView(device, m_normalImageView, nullptr); m_normalImageView = VK_NULL_HANDLE; }
+    if (m_normalImage)     { vmaDestroyImage(allocator, m_normalImage, m_normalAlloc); m_normalImage = VK_NULL_HANDLE; }
+
     // Scene SSBOs
     destroyBuffer(m_envCdfBuffer,    m_envCdfAlloc);
     destroyBuffer(m_envMapBuffer,    m_envMapAlloc);
@@ -175,19 +181,22 @@ bool VKComputeRaytracer::createPipeline()
     VkShaderModule compMod = loadShader("shaders/vulkan/pathtracer.comp.spv");
     if (!compMod) return false;
 
-    // ── Descriptor set layout (9 bindings, all COMPUTE) ─────────────────────
-    VkDescriptorSetLayoutBinding bindings[9]{};
+    // ── Descriptor set layout (11 bindings, all COMPUTE) ────────────────────
+    VkDescriptorSetLayoutBinding bindings[11]{};
     // binding 0: UBO
     bindings[0] = { 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
     // bindings 1-7: SSBOs
     for (uint32_t i = 1; i <= 7; ++i)
         bindings[i] = { i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
-    // binding 8: storage image
+    // binding 8: accumulation storage image
     bindings[8] = { 8, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
+    // binding 9: albedo aux image; binding 10: normal aux image
+    bindings[9]  = { 9,  VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
+    bindings[10] = { 10, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
 
     VkDescriptorSetLayoutCreateInfo setLayoutInfo{};
     setLayoutInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    setLayoutInfo.bindingCount = 9;
+    setLayoutInfo.bindingCount = 11;
     setLayoutInfo.pBindings    = bindings;
     vkCreateDescriptorSetLayout(device, &setLayoutInfo, nullptr, &m_descSetLayout);
 
@@ -223,7 +232,7 @@ bool VKComputeRaytracer::createPipeline()
     VkDescriptorPoolSize poolSizes[3]{};
     poolSizes[0] = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 };
     poolSizes[1] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 7 };
-    poolSizes[2] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  1 };
+    poolSizes[2] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  3 }; // main + albedo + normal
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -496,6 +505,10 @@ bool VKComputeRaytracer::createOutputImage(uint32_t width, uint32_t height)
     destroyBuffer(m_readbackBuffer, m_readbackAlloc);
     if (m_outputImageView) { vkDestroyImageView(device, m_outputImageView, nullptr); m_outputImageView = VK_NULL_HANDLE; }
     if (m_outputImage)     { vmaDestroyImage(allocator, m_outputImage, m_outputAlloc); m_outputImage = VK_NULL_HANDLE; }
+    if (m_albedoImageView) { vkDestroyImageView(device, m_albedoImageView, nullptr); m_albedoImageView = VK_NULL_HANDLE; }
+    if (m_albedoImage)     { vmaDestroyImage(allocator, m_albedoImage, m_albedoAlloc); m_albedoImage = VK_NULL_HANDLE; }
+    if (m_normalImageView) { vkDestroyImageView(device, m_normalImageView, nullptr); m_normalImageView = VK_NULL_HANDLE; }
+    if (m_normalImage)     { vmaDestroyImage(allocator, m_normalImage, m_normalAlloc); m_normalImage = VK_NULL_HANDLE; }
 
     m_width  = width;
     m_height = height;
@@ -544,6 +557,62 @@ bool VKComputeRaytracer::createOutputImage(uint32_t width, uint32_t height)
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
             0, 0, nullptr, 0, nullptr, 1, &barrier);
     });
+
+    // Aux images (albedo + normal) — rgba32f, write-only from shader (no SAMPLED bit needed)
+    {
+        VkImageCreateInfo auxInfo{};
+        auxInfo.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        auxInfo.imageType     = VK_IMAGE_TYPE_2D;
+        auxInfo.format        = VK_FORMAT_R32G32B32A32_SFLOAT;
+        auxInfo.extent        = { width, height, 1 };
+        auxInfo.mipLevels     = 1;
+        auxInfo.arrayLayers   = 1;
+        auxInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
+        auxInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        auxInfo.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                                VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        auxInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        VmaAllocationCreateInfo auxAllocInfo{};
+        auxAllocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+        vmaCreateImage(allocator, &auxInfo, &auxAllocInfo, &m_albedoImage, &m_albedoAlloc, nullptr);
+        vmaCreateImage(allocator, &auxInfo, &auxAllocInfo, &m_normalImage, &m_normalAlloc, nullptr);
+
+        VkImageViewCreateInfo auxViewInfo{};
+        auxViewInfo.sType            = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        auxViewInfo.viewType         = VK_IMAGE_VIEW_TYPE_2D;
+        auxViewInfo.format           = VK_FORMAT_R32G32B32A32_SFLOAT;
+        auxViewInfo.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+        auxViewInfo.image = m_albedoImage;
+        vkCreateImageView(device, &auxViewInfo, nullptr, &m_albedoImageView);
+        auxViewInfo.image = m_normalImage;
+        vkCreateImageView(device, &auxViewInfo, nullptr, &m_normalImageView);
+
+        // Transition both aux images UNDEFINED → GENERAL
+        ctx.immediateSubmit([&](VkCommandBuffer cmd)
+        {
+            VkImageMemoryBarrier barriers[2]{};
+            for (auto& b : barriers)
+            {
+                b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                b.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
+                b.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
+                b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.subresourceRange    = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+                b.srcAccessMask       = 0;
+                b.dstAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
+            }
+            barriers[0].image = m_albedoImage;
+            barriers[1].image = m_normalImage;
+            vkCmdPipelineBarrier(cmd,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0, 0, nullptr, 0, nullptr, 2, barriers);
+        });
+    }
 
     // Readback staging buffer (4 floats per pixel)
     {
@@ -599,12 +668,21 @@ void VKComputeRaytracer::writeAllDescriptors()
         ssboInfos[i].range  = VK_WHOLE_SIZE;
     }
 
-    // Binding 8: storage image
+    // Binding 8: accumulation storage image
     VkDescriptorImageInfo imgInfo{};
     imgInfo.imageView   = m_outputImageView;
     imgInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkWriteDescriptorSet writes[9]{};
+    // Binding 9: albedo aux image; binding 10: normal aux image
+    VkDescriptorImageInfo albedoImgInfo{};
+    albedoImgInfo.imageView   = m_albedoImageView;
+    albedoImgInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    VkDescriptorImageInfo normalImgInfo{};
+    normalImgInfo.imageView   = m_normalImageView;
+    normalImgInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    VkWriteDescriptorSet writes[11]{};
     for (auto& w : writes) w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 
     writes[0].dstSet          = m_descSet;
@@ -628,9 +706,21 @@ void VKComputeRaytracer::writeAllDescriptors()
     writes[8].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[8].pImageInfo      = &imgInfo;
 
+    writes[9].dstSet          = m_descSet;
+    writes[9].dstBinding      = 9;
+    writes[9].descriptorCount = 1;
+    writes[9].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[9].pImageInfo      = &albedoImgInfo;
+
+    writes[10].dstSet          = m_descSet;
+    writes[10].dstBinding      = 10;
+    writes[10].descriptorCount = 1;
+    writes[10].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[10].pImageInfo      = &normalImgInfo;
+
     // Only submit writes for non-null resources
     uint32_t writeCount = 0;
-    VkWriteDescriptorSet validWrites[9]{};
+    VkWriteDescriptorSet validWrites[11]{};
 
     if (m_uboBuffer)        validWrites[writeCount++] = writes[0];
     if (m_bvhBuffer)        validWrites[writeCount++] = writes[1];
@@ -641,6 +731,8 @@ void VKComputeRaytracer::writeAllDescriptors()
     if (m_envCdfBuffer)     validWrites[writeCount++] = writes[6];
     if (m_triShadingBuffer) validWrites[writeCount++] = writes[7];
     if (m_outputImageView)  validWrites[writeCount++] = writes[8];
+    if (m_albedoImageView)  validWrites[writeCount++] = writes[9];
+    if (m_normalImageView)  validWrites[writeCount++] = writes[10];
 
     if (writeCount > 0)
         vkUpdateDescriptorSets(device, writeCount, validWrites, 0, nullptr);
@@ -734,6 +826,10 @@ void VKComputeRaytracer::reset()
         VkClearColorValue clear{};
         VkImageSubresourceRange range{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
         vkCmdClearColorImage(cmd, m_outputImage, VK_IMAGE_LAYOUT_GENERAL, &clear, 1, &range);
+        if (m_albedoImage)
+            vkCmdClearColorImage(cmd, m_albedoImage, VK_IMAGE_LAYOUT_GENERAL, &clear, 1, &range);
+        if (m_normalImage)
+            vkCmdClearColorImage(cmd, m_normalImage, VK_IMAGE_LAYOUT_GENERAL, &clear, 1, &range);
     });
 }
 
@@ -789,6 +885,62 @@ void VKComputeRaytracer::readbackLinearHDR(std::vector<float>& outRGB)
         outRGB[i * 3 + 2] = pixels[i * 4 + 2] * inv;
     }
     vmaUnmapMemory(VKContext::get().getAllocator(), m_readbackAlloc);
+}
+
+void VKComputeRaytracer::readbackAuxBuffers(std::vector<float>& outAlbedo, std::vector<float>& outNormal)
+{
+    if (!m_albedoImage || !m_normalImage || !m_readbackBuffer) return;
+
+    auto& ctx = VKContext::get();
+    auto  allocator = ctx.getAllocator();
+
+    auto readbackOne = [&](VkImage img, std::vector<float>& out)
+    {
+        ctx.immediateSubmit([&](VkCommandBuffer cmd)
+        {
+            VkImageMemoryBarrier barrier{};
+            barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            barrier.oldLayout           = VK_IMAGE_LAYOUT_GENERAL;
+            barrier.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.image               = img;
+            barrier.subresourceRange    = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+            barrier.srcAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
+            barrier.dstAccessMask       = VK_ACCESS_TRANSFER_READ_BIT;
+            vkCmdPipelineBarrier(cmd,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+            VkBufferImageCopy copy{};
+            copy.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+            copy.imageExtent      = { m_width, m_height, 1 };
+            vkCmdCopyImageToBuffer(cmd, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   m_readbackBuffer, 1, &copy);
+
+            barrier.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            barrier.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            vkCmdPipelineBarrier(cmd,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0, 0, nullptr, 0, nullptr, 1, &barrier);
+        });
+
+        float* pixels = nullptr;
+        vmaMapMemory(allocator, m_readbackAlloc, reinterpret_cast<void**>(&pixels));
+        out.resize(m_width * m_height * 3);
+        for (uint32_t i = 0; i < m_width * m_height; ++i)
+        {
+            out[i * 3 + 0] = pixels[i * 4 + 0];
+            out[i * 3 + 1] = pixels[i * 4 + 1];
+            out[i * 3 + 2] = pixels[i * 4 + 2];
+        }
+        vmaUnmapMemory(allocator, m_readbackAlloc);
+    };
+
+    readbackOne(m_albedoImage, outAlbedo);
+    readbackOne(m_normalImage, outNormal);
 }
 
 } // namespace vex

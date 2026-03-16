@@ -208,6 +208,12 @@ vec3 pathTrace(vec3 rayOrigin, vec3 rayDirection) {
                     radiance += throughput * scaledEnv;
                 }
             }
+            // Aux: first-bounce miss — no surface, write zeros
+            if (depth == 0) {
+                ivec2 px = ivec2(gl_LaunchIDEXT.xy);
+                imageStore(u_albedoImage, px, vec4(0.0));
+                imageStore(u_normalImage, px, vec4(0.0));
+            }
             break;
         }
 
@@ -293,6 +299,13 @@ vec3 pathTrace(vec3 rayOrigin, vec3 rayDirection) {
             shadingN = normalize(T * mapN.x + B * mapN.y + shadingN * mapN.z);
             if (dot(shadingN, offsetNormal) < 0.0)
                 shadingN = -shadingN;
+        }
+
+        // Aux: capture first-bounce albedo and world-space normal for OIDN
+        if (depth == 0) {
+            ivec2 px = ivec2(gl_LaunchIDEXT.xy);
+            imageStore(u_albedoImage, px, vec4(albedo, 1.0));
+            imageStore(u_normalImage, px, vec4(shadingN, 1.0));
         }
 
         // ── Roughness / metallic textures ─────────────────────────────────

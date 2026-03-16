@@ -4060,6 +4060,97 @@ void SceneRenderer::triggerDenoise()
 }
 
 // ---------------------------------------------------------------------------
+
+void SceneRenderer::triggerDenoiseAux()
+{
+    if (!m_denoiser || !m_denoiser->isReady()) return;
+
+    const auto& spec = m_framebuffer->getSpec();
+    uint32_t w = spec.width;
+    uint32_t h = spec.height;
+
+    float exposure = 0.0f;
+    float gamma    = 2.2f;
+    bool  aces     = true;
+
+#ifdef VEX_BACKEND_VULKAN
+    if (m_renderMode == RenderMode::GPURaytrace && m_vkRaytracer)
+    {
+        m_vkRaytracer->readbackLinearHDR(m_denoiseLinearHDR);
+        m_vkRaytracer->readbackAuxBuffers(m_denoiseAlbedo, m_denoiseNormal);
+        exposure = m_vkExposure;
+        gamma    = m_vkGamma;
+        aces     = m_vkEnableACES;
+
+        if (!m_raytraceTexture || w != m_raytraceTexW || h != m_raytraceTexH)
+        {
+            m_raytraceTexture = vex::Texture2D::create(w, h, 4);
+            m_raytraceTexW = w;
+            m_raytraceTexH = h;
+            if (m_vkFullscreenRTShader)
+                static_cast<vex::VKShader*>(m_vkFullscreenRTShader.get())->clearExternalTextureCache();
+        }
+    }
+    else if (m_renderMode == RenderMode::ComputeRaytrace && m_vkComputeRaytracer)
+    {
+        m_vkComputeRaytracer->readbackLinearHDR(m_denoiseLinearHDR);
+        m_vkComputeRaytracer->readbackAuxBuffers(m_denoiseAlbedo, m_denoiseNormal);
+        exposure = m_vkExposure;
+        gamma    = m_vkGamma;
+        aces     = m_vkEnableACES;
+
+        if (!m_raytraceTexture || w != m_raytraceTexW || h != m_raytraceTexH)
+        {
+            m_raytraceTexture = vex::Texture2D::create(w, h, 4);
+            m_raytraceTexW = w;
+            m_raytraceTexH = h;
+            if (m_vkFullscreenRTShader)
+                static_cast<vex::VKShader*>(m_vkFullscreenRTShader.get())->clearExternalTextureCache();
+        }
+    }
+    else
+#endif
+    if (m_renderMode == RenderMode::CPURaytrace && m_cpuRaytracer)
+    {
+        m_cpuRaytracer->getLinearHDR(m_denoiseLinearHDR);
+        m_cpuRaytracer->getAuxBuffers(m_denoiseAlbedo, m_denoiseNormal);
+        exposure = m_cpuRaytracer->getExposure();
+        gamma    = m_cpuRaytracer->getGamma();
+        aces     = m_cpuRaytracer->getEnableACES();
+    }
+    else
+    {
+        return;
+    }
+
+    if (m_denoiseLinearHDR.empty() || m_denoiseAlbedo.empty() || m_denoiseNormal.empty()) return;
+
+    uint32_t sampleCount = 0;
+#ifdef VEX_BACKEND_VULKAN
+    if (m_renderMode == RenderMode::GPURaytrace)
+        sampleCount = m_vkSampleCount;
+    else
+#endif
+    if (m_cpuRaytracer)
+        sampleCount = m_cpuRaytracer->getSampleCount();
+
+    auto t0 = std::chrono::steady_clock::now();
+    m_denoiser->denoiseAux(m_denoiseLinearHDR.data(), m_denoiseAlbedo.data(), m_denoiseNormal.data(), w, h);
+    float ms = std::chrono::duration<float, std::milli>(
+                   std::chrono::steady_clock::now() - t0).count();
+
+    m_denoisedRGBA8.resize(w * h * 4);
+    toneMapToRGBA8(m_denoiseLinearHDR.data(), m_denoisedRGBA8.data(), w * h, exposure, gamma, aces);
+
+    m_raytraceTexture->setData(m_denoisedRGBA8.data(), w, h, 4);
+    m_showDenoisedResult = true;
+
+    char buf[128];
+    std::snprintf(buf, sizeof(buf), "Denoiser+: %ux%u on %u samples took %.0f ms", w, h, sampleCount, ms);
+    vex::Log::info(buf);
+}
+
+// ---------------------------------------------------------------------------
 // Shadow map debug display
 // ---------------------------------------------------------------------------
 

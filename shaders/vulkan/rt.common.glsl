@@ -97,6 +97,11 @@ layout(std430, set = 0, binding = 8) readonly buffer InstanceOff { uint  instanc
 //   vec4[2]: sigmaS.rgb (albedo * sigmaT per channel), infinite(0/1)
 layout(std430, set = 0, binding = 9) readonly buffer Volumes { vec4 volumeData[]; };
 
+// Aux images: first-hit albedo (binding 10) and world-space normal (binding 11)
+// Written by rgen at depth==0 for use with OIDN auxiliary denoising.
+layout(set = 0, binding = 10, rgba32f) uniform image2D u_albedoImage;
+layout(set = 0, binding = 11, rgba32f) uniform image2D u_normalImage;
+
 // ── Constants ────────────────────────────────────────────────────────────────
 const float PI      = 3.14159265358979323846;
 const float FLT_MAX = 3.402823466e+38;

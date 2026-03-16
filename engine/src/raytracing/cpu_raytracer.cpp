@@ -117,6 +117,8 @@ void CPURaytracer::resize(uint32_t width, uint32_t height)
     m_width = width;
     m_height = height;
     m_accumBuffer.assign(width * height, glm::vec3(0.0f));
+    m_albedoBuffer.assign(width * height, glm::vec3(0.0f));
+    m_normalBuffer.assign(width * height, glm::vec3(0.0f));
     m_pixelBuffer.assign(width * height * 4, 0);
     m_sampleCount = 0;
 
@@ -129,6 +131,8 @@ void CPURaytracer::resize(uint32_t width, uint32_t height)
 void CPURaytracer::reset()
 {
     std::fill(m_accumBuffer.begin(), m_accumBuffer.end(), glm::vec3(0.0f));
+    std::fill(m_albedoBuffer.begin(), m_albedoBuffer.end(), glm::vec3(0.0f));
+    std::fill(m_normalBuffer.begin(), m_normalBuffer.end(), glm::vec3(0.0f));
     std::fill(m_pixelBuffer.begin(), m_pixelBuffer.end(), uint8_t(0));
     m_sampleCount = 0;
 }
@@ -698,7 +702,8 @@ bool CPURaytracer::traceShadowRay(const Ray& ray, float maxDist) const
 
 // --- Path tracing ---
 
-glm::vec3 CPURaytracer::pathTrace(const Ray& initialRay, RNG& rng) const
+glm::vec3 CPURaytracer::pathTrace(const Ray& initialRay, RNG& rng,
+                                    glm::vec3* outAlbedo, glm::vec3* outNormal) const
 {
     glm::vec3 radiance(0.0f);
     glm::vec3 throughput(1.0f);
@@ -833,6 +838,9 @@ glm::vec3 CPURaytracer::pathTrace(const Ray& initialRay, RNG& rng) const
         if (hit.textureIndex >= 0)
             albedo *= glm::vec3(sampleTexture(hit.textureIndex, hit.uv));
 
+        if (depth == 0 && outAlbedo)
+            *outAlbedo = albedo;
+
         // Normal map perturbation
         if (m_enableNormalMapping && hit.normalMapTextureIndex >= 0)
         {
@@ -853,6 +861,9 @@ glm::vec3 CPURaytracer::pathTrace(const Ray& initialRay, RNG& rng) const
             if (glm::dot(hit.normal, offsetNormal) < 0.0f)
                 hit.normal = -hit.normal;
         }
+
+        if (depth == 0 && outNormal)
+            *outNormal = hit.normal; // world-space, after normal mapping
 
         // Sample roughness/metallic textures
         // G channel = roughness, B channel = metallic (ARM packing).
@@ -1066,7 +1077,8 @@ void CPURaytracer::traceRowRange(uint32_t startRow, uint32_t endRow)
             float jy = m_enableAA ? rng.next() : 0.5f;
             Ray ray = generateRay(static_cast<int>(x), static_cast<int>(y), jx, jy, rng);
 
-            glm::vec3 color = pathTrace(ray, rng);
+            glm::vec3 pixAlbedo(0.0f), pixNormal(0.0f);
+            glm::vec3 color = pathTrace(ray, rng, &pixAlbedo, &pixNormal);
 
             // NaN/Inf guard — protect accumulation buffer
             if (std::isnan(color.r) || std::isnan(color.g) || std::isnan(color.b) ||
@@ -1081,6 +1093,8 @@ void CPURaytracer::traceRowRange(uint32_t startRow, uint32_t endRow)
             }
 
             m_accumBuffer[y * m_width + x] += color;
+            m_albedoBuffer[y * m_width + x] = pixAlbedo;
+            m_normalBuffer[y * m_width + x] = pixNormal;
         }
     }
 }
@@ -1220,6 +1234,22 @@ void CPURaytracer::getLinearHDR(std::vector<float>& outRGB) const
         outRGB[i * 3 + 0] = m_accumBuffer[i].r * inv;
         outRGB[i * 3 + 1] = m_accumBuffer[i].g * inv;
         outRGB[i * 3 + 2] = m_accumBuffer[i].b * inv;
+    }
+}
+
+void CPURaytracer::getAuxBuffers(std::vector<float>& outAlbedo, std::vector<float>& outNormal) const
+{
+    uint32_t n = m_width * m_height;
+    outAlbedo.resize(n * 3);
+    outNormal.resize(n * 3);
+    for (uint32_t i = 0; i < n; ++i)
+    {
+        outAlbedo[i * 3 + 0] = m_albedoBuffer[i].r;
+        outAlbedo[i * 3 + 1] = m_albedoBuffer[i].g;
+        outAlbedo[i * 3 + 2] = m_albedoBuffer[i].b;
+        outNormal[i * 3 + 0] = m_normalBuffer[i].r;
+        outNormal[i * 3 + 1] = m_normalBuffer[i].g;
+        outNormal[i * 3 + 2] = m_normalBuffer[i].b;
     }
 }
 

@@ -90,7 +90,11 @@ layout(set = 0, binding = 7, std430) readonly buffer TriShading {
 };
 
 // ── Accumulation image (binding 8) ────────────────────────────────────────
-layout(set = 0, binding = 8, rgba32f) uniform image2D u_accumImage;
+layout(set = 0, binding = 8,  rgba32f) uniform image2D u_accumImage;
+
+// ── Aux images: first-hit albedo (binding 9) and world-space normal (binding 10) ──
+layout(set = 0, binding = 9,  rgba32f) uniform image2D u_albedoImage;
+layout(set = 0, binding = 10, rgba32f) uniform image2D u_normalImage;
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const float PI      = 3.14159265358979323846;
@@ -750,6 +754,12 @@ vec3 pathTrace(vec3 rayOrigin, vec3 rayDirection) {
                     radiance += throughput * scaledEnv;
                 }
             }
+            // Aux: first-bounce miss — no surface, write zeros
+            if (depth == 0) {
+                ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+                imageStore(u_albedoImage, px, vec4(0.0));
+                imageStore(u_normalImage, px, vec4(0.0));
+            }
             break;
         }
 
@@ -816,6 +826,13 @@ vec3 pathTrace(vec3 rayOrigin, vec3 rayDirection) {
             // Re-apply alignment after normal map perturbation.
             if (dot(hit.normal, offsetNormal) < 0.0)
                 hit.normal = -hit.normal;
+        }
+
+        // Aux: capture first-bounce albedo and world-space normal
+        if (depth == 0) {
+            ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+            imageStore(u_albedoImage, px, vec4(albedo, 1.0));
+            imageStore(u_normalImage, px, vec4(hit.normal, 1.0));
         }
 
         // Sample roughness/metallic textures

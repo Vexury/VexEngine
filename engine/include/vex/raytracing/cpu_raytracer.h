@@ -64,6 +64,9 @@ public:
     // Returns averaged linear HDR float RGB (3 floats per pixel, no tone-mapping)
     void getLinearHDR(std::vector<float>& outRGB) const;
 
+    // Returns first-hit albedo and world-space normal buffers (3 floats per pixel each).
+    void getAuxBuffers(std::vector<float>& outAlbedo, std::vector<float>& outNormal) const;
+
     uint32_t getSampleCount() const { return m_sampleCount; }
     uint32_t getWidth()  const { return m_width; }
     uint32_t getHeight() const { return m_height; }
@@ -195,7 +198,9 @@ private:
     HitRecord traceRay(const Ray& ray) const;
     bool traceShadowRay(const Ray& ray, float maxDist) const;
     Ray generateRay(int x, int y, float jitterX, float jitterY, RNG& rng) const;
-    glm::vec3 pathTrace(const Ray& ray, RNG& rng) const;
+    glm::vec3 pathTrace(const Ray& ray, RNG& rng,
+                        glm::vec3* outAlbedo = nullptr,
+                        glm::vec3* outNormal = nullptr) const;
     glm::vec3 sampleEnvironment(const glm::vec3& direction) const;
     glm::vec4 sampleTexture(int textureIndex, const glm::vec2& uv) const;
 
@@ -218,6 +223,8 @@ private:
     uint32_t m_width = 0, m_height = 0;
 
     std::vector<glm::vec3> m_accumBuffer;
+    std::vector<glm::vec3> m_albedoBuffer;  // first-hit albedo (overwritten each sample)
+    std::vector<glm::vec3> m_normalBuffer;  // first-hit world-space normal (overwritten each sample)
     std::vector<uint8_t> m_pixelBuffer;
     uint32_t m_sampleCount = 0;
 

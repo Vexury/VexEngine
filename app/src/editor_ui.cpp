@@ -1391,7 +1391,9 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
             uint32_t sampleCount = renderer.getRaytraceSampleCount();
             bool canDenoise = renderer.isDenoiserReady() && (sampleCount > 0);
             if (!canDenoise) ImGui::BeginDisabled();
-            if (ImGui::Button("Denoise##cpu")) renderer.triggerDenoise();
+            if (ImGui::Button("Denoise##cpu"))  renderer.triggerDenoise();
+            ImGui::SameLine();
+            if (ImGui::Button("Denoise+##cpu")) renderer.triggerDenoiseAux();
             if (!canDenoise) ImGui::EndDisabled();
             if (renderer.getShowDenoisedResult())
             {
@@ -1509,7 +1511,9 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
             uint32_t sampleCount = renderer.getRaytraceSampleCount();
             bool canDenoise = renderer.isDenoiserReady() && (sampleCount > 0);
             if (!canDenoise) ImGui::BeginDisabled();
-            if (ImGui::Button("Denoise##gpu")) renderer.triggerDenoise();
+            if (ImGui::Button("Denoise##gpu"))  renderer.triggerDenoise();
+            ImGui::SameLine();
+            if (ImGui::Button("Denoise+##gpu")) renderer.triggerDenoiseAux();
             if (!canDenoise) ImGui::EndDisabled();
             if (renderer.getShowDenoisedResult())
             {
@@ -1656,7 +1660,9 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
             uint32_t sampleCount = renderer.getRaytraceSampleCount();
             bool canDenoise = renderer.isDenoiserReady() && (sampleCount > 0);
             if (!canDenoise) ImGui::BeginDisabled();
-            if (ImGui::Button("Denoise##compute")) renderer.triggerDenoise();
+            if (ImGui::Button("Denoise##compute"))  renderer.triggerDenoise();
+            ImGui::SameLine();
+            if (ImGui::Button("Denoise+##compute")) renderer.triggerDenoiseAux();
             if (!canDenoise) ImGui::EndDisabled();
             if (renderer.getShowDenoisedResult())
             {
