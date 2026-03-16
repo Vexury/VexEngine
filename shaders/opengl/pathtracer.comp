@@ -129,7 +129,8 @@ vec3  triN0(uint i)        { return triShading[i * 10u + 0u].xyz; }
 int   triRoughnessTexIdx(uint i) { return floatBitsToInt(triShading[i * 10u + 0u].w); }
 vec3  triN1(uint i)        { return triShading[i * 10u + 1u].xyz; }
 int   triMetallicTexIdx(uint i)  { return floatBitsToInt(triShading[i * 10u + 1u].w); }
-vec3  triN2(uint i)        { return triShading[i * 10u + 2u].xyz; }
+vec3  triN2(uint i)             { return triShading[i * 10u + 2u].xyz; }
+float triEmissiveStrength(uint i) { return triShading[i * 10u + 2u].w; }
 vec2  triUV0(uint i)       { return triShading[i * 10u + 3u].xy; }
 vec2  triUV1(uint i)       { return triShading[i * 10u + 3u].zw; }
 vec2  triUV2(uint i)       { return triShading[i * 10u + 4u].xy; }
@@ -788,7 +789,7 @@ vec3 pathTrace(vec3 rayOrigin, vec3 rayDirection) {
         if (u_enableEmissive) {
             emission = hit.emissive;
             if (hit.emissiveTextureIndex >= 0)
-                emission = sampleTexture(hit.emissiveTextureIndex, hit.uv).rgb;
+                emission = sampleTexture(hit.emissiveTextureIndex, hit.uv).rgb * triEmissiveStrength(hit.triangleIndex);
         }
 
         if (length(emission) > 0.001) {

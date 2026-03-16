@@ -267,8 +267,8 @@ void GLGPURaytracer::uploadGeometry(
         // vec4 1: n1 + metallicTextureIndex (int bits)
         p[4]  = tri.n1.x; p[5]  = tri.n1.y; p[6]  = tri.n1.z;
         { uint32_t bits; std::memcpy(&bits, &tri.metallicTextureIndex, sizeof(int)); std::memcpy(&p[7], &bits, sizeof(float)); }
-        // vec4 2: n2 + pad
-        p[8]  = tri.n2.x; p[9]  = tri.n2.y; p[10] = tri.n2.z; p[11] = 0.0f;
+        // vec4 2: n2 + emissiveStrength
+        p[8]  = tri.n2.x; p[9]  = tri.n2.y; p[10] = tri.n2.z; p[11] = tri.emissiveStrength;
         // vec4 3: uv0.xy, uv1.xy
         p[12] = tri.uv0.x; p[13] = tri.uv0.y; p[14] = tri.uv1.x; p[15] = tri.uv1.y;
         // vec4 4: uv2.xy, roughness, metallic
