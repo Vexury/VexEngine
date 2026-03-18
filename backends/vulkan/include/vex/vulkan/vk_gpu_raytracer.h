@@ -56,7 +56,7 @@ struct RTUniforms
     uint32_t lightCount;              //        offset 272
     uint32_t bilinearFiltering;       //        offset 276
     uint32_t samplerType;             //        offset 280 — 0=PCG  1=Halton  2=BlueNoise(IGN)
-    uint32_t _pad2c;                  //        offset 284
+    uint32_t useLuminanceCDF;         //        offset 284
                                       // total: 288
 };
 static_assert(sizeof(RTUniforms) == 288, "RTUniforms layout mismatch");

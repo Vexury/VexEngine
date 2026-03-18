@@ -78,6 +78,9 @@ public:
     void setEnableNEE(bool v);
     bool getEnableNEE() const { return m_enableNEE; }
 
+    void setUseLuminanceCDF(bool v);
+    bool getUseLuminanceCDF() const { return m_useLuminanceCDF; }
+
     void setEnableFireflyClamping(bool v);
     bool getEnableFireflyClamping() const { return m_enableFireflyClamping; }
 
@@ -244,6 +247,7 @@ private:
     // Settings
     int  m_maxDepth = 5;
     bool m_enableNEE = true;
+    bool m_useLuminanceCDF = false;
     bool m_enableFireflyClamping = true;
     bool m_enableAA = true;
     bool  m_enableEnvironment = true;

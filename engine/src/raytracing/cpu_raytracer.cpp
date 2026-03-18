@@ -153,6 +153,14 @@ void CPURaytracer::setEnableNEE(bool v)
     reset();
 }
 
+void CPURaytracer::setUseLuminanceCDF(bool v)
+{
+    if (m_useLuminanceCDF == v) return;
+    m_useLuminanceCDF = v;
+    buildLightData();
+    reset();
+}
+
 void CPURaytracer::setEnableFireflyClamping(bool v)
 {
     if (m_enableFireflyClamping == v) return;
@@ -457,7 +465,10 @@ void CPURaytracer::buildLightData()
         if (glm::length(data.emissive) > 0.001f)
         {
             m_lightIndices.push_back(i);
-            m_totalLightArea += data.area;
+            float w = m_useLuminanceCDF
+                ? (0.2126f * data.emissive.r + 0.7152f * data.emissive.g + 0.0722f * data.emissive.b) * data.area
+                : data.area;
+            m_totalLightArea += w;
             m_lightCDF.push_back(m_totalLightArea);
         }
     }
@@ -821,7 +832,10 @@ glm::vec3 CPURaytracer::pathTrace(const Ray& initialRay, RNG& rng,
             else if (m_enableNEE && hasLights && cosLight > 0.0f)
             {
                 // MIS weight for BSDF path hitting a light
-                float pdfLight = (hit.t * hit.t) / (cosLight * m_totalLightArea);
+                float lumFactor = m_useLuminanceCDF
+                    ? (0.2126f * emission.r + 0.7152f * emission.g + 0.0722f * emission.b)
+                    : 1.0f;
+                float pdfLight = (hit.t * hit.t) * lumFactor / (cosLight * m_totalLightArea);
                 float weight = prevBsdfPdf / (prevBsdfPdf + pdfLight);
                 radiance += throughput * emission * weight;
             }

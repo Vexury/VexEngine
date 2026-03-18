@@ -64,7 +64,7 @@ layout(set = 0, binding = 2) uniform Uniforms {
     uint  lightCount;        // offset 272
     uint  bilinearFiltering; // offset 276
     uint  samplerType;       // offset 280 — 0=PCG  1=Halton  2=BlueNoise(IGN)
-    uint  _pad2c;            // offset 284
+    uint  useLuminanceCDF;   // offset 284
 } u_uniforms;
 
 // TriShading: 13 vec4s per triangle (see below for layout)

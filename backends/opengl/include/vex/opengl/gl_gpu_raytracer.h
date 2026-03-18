@@ -48,6 +48,7 @@ public:
     void setEnableNormalMapping(bool v);
     void setEnableEmissive(bool v);
     void setBilinearFiltering(bool v);
+    void setUseLuminanceCDF(bool v);
 
     void setRayEps(float v);
     float getRayEps() const { return m_rayEps; }
@@ -129,6 +130,7 @@ private:
     int32_t m_locEnableNormalMapping = -1;
     int32_t m_locEnableEmissive = -1;
     int32_t m_locBilinearFiltering = -1;
+    int32_t m_locUseLuminanceCDF = -1;
     int32_t m_locTriangleCount = -1;
     int32_t m_locBvhNodeCount = -1;
     int32_t m_locRayEps = -1;
@@ -148,6 +150,7 @@ private:
     bool m_enableNormalMapping = true;
     bool m_enableEmissive = true;
     bool m_bilinearFiltering = true;
+    bool m_useLuminanceCDF = false;
 
     // Camera
     glm::vec3 m_cameraOrigin{0.0f};

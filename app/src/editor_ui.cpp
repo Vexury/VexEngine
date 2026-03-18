@@ -1331,7 +1331,7 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
         if (ImGui::Checkbox("Environment Lighting##raster", &rEnv))
             renderer.setRasterEnableEnvLighting(rEnv);
         float rMult = renderer.getRasterEnvLightMultiplier();
-        if (ImGui::SliderFloat("Env Multiplier##raster", &rMult, 0.0f, 2.0f, "%.2f"))
+        if (ImGui::SliderFloat("Env Multiplier##raster", &rMult, 0.0f, 5.0f, "%.2f"))
             renderer.setRasterEnvLightMultiplier(rMult);
 
         ImGui::SeparatorText("Post Processing");
@@ -1424,6 +1424,12 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
             bool firefly = renderer.getEnableFireflyClamping();
             if (ImGui::Checkbox("Firefly Clamping", &firefly))
                 renderer.setEnableFireflyClamping(firefly);
+
+            bool lumCDF = renderer.getUseLuminanceCDF();
+            if (ImGui::Checkbox("Luminance CDF", &lumCDF))
+                renderer.setUseLuminanceCDF(lumCDF);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Weight emissive triangle sampling by luminance x area\ninstead of area alone. Improves convergence for scenes\nwith bright emitters of varying color/intensity.");
 
         }
 
@@ -1544,6 +1550,12 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
             bool firefly = renderer.getGPUEnableFireflyClamping();
             if (ImGui::Checkbox("Firefly Clamping", &firefly))
                 renderer.setGPUEnableFireflyClamping(firefly);
+
+            bool lumCDF = renderer.getUseLuminanceCDF();
+            if (ImGui::Checkbox("Luminance CDF##hwrt", &lumCDF))
+                renderer.setUseLuminanceCDF(lumCDF);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Weight emissive triangle sampling by luminance x area\ninstead of area alone. Improves convergence for scenes\nwith bright emitters of varying color/intensity.");
 
             const char* samplerItems[] = { "PCG (Default)", "Halton", "Blue Noise (IGN)" };
             int samplerType = renderer.getVKSamplerType();
@@ -1692,6 +1704,12 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
             bool firefly = renderer.getGPUEnableFireflyClamping();
             if (ImGui::Checkbox("Firefly Clamping##compute", &firefly))
                 renderer.setGPUEnableFireflyClamping(firefly);
+
+            bool lumCDF = renderer.getUseLuminanceCDF();
+            if (ImGui::Checkbox("Luminance CDF##compute", &lumCDF))
+                renderer.setUseLuminanceCDF(lumCDF);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Weight emissive triangle sampling by luminance x area\ninstead of area alone. Improves convergence for scenes\nwith bright emitters of varying color/intensity.");
 
             const char* samplerItems[] = { "PCG (Default)", "Halton", "Blue Noise (IGN)" };
             int samplerType = renderer.getVKSamplerType();

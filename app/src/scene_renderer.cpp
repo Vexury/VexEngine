@@ -560,6 +560,81 @@ int SceneRenderer::getMaxDepth() const
 void SceneRenderer::setEnableNEE(bool v)             { if (m_cpuRaytracer) m_cpuRaytracer->setEnableNEE(v); }
 bool SceneRenderer::getEnableNEE() const              { return m_cpuRaytracer ? m_cpuRaytracer->getEnableNEE() : true; }
 
+void SceneRenderer::setUseLuminanceCDF(bool v)
+{
+    if (m_luminanceCDF == v) return;
+    m_luminanceCDF = v;
+
+    // Rebuild CPU/GL/VK-compute light CDF from existing triangle data
+    m_rtLightIndices.clear();
+    m_rtLightCDF.clear();
+    m_rtTotalLightArea = 0.0f;
+    for (uint32_t i = 0; i < static_cast<uint32_t>(m_rtTriangles.size()); ++i)
+    {
+        if (glm::length(m_rtTriangles[i].emissive) > 0.001f)
+        {
+            m_rtLightIndices.push_back(i);
+            const auto& em = m_rtTriangles[i].emissive;
+            float w = m_luminanceCDF
+                ? (0.2126f * em.r + 0.7152f * em.g + 0.0722f * em.b) * m_rtTriangles[i].area
+                : m_rtTriangles[i].area;
+            m_rtTotalLightArea += w;
+            m_rtLightCDF.push_back(m_rtTotalLightArea);
+        }
+    }
+    if (m_rtTotalLightArea > 0.0f)
+        for (float& c : m_rtLightCDF) c /= m_rtTotalLightArea;
+
+    // Rebuild VK HW RT light SSBO from m_vkTriShading (emissive at [6].xyz, area at [6].w)
+#ifdef VEX_BACKEND_VULKAN
+    if (!m_vkTriShading.empty())
+    {
+        auto fBU = [](float f) -> uint32_t { uint32_t u; std::memcpy(&u, &f, sizeof(u)); return u; };
+        constexpr size_t kFloatsPerTri = 52;
+        std::vector<uint32_t> vkIdx;
+        std::vector<float>    vkCDF;
+        float vkTotal = 0.0f;
+        uint32_t triCount = static_cast<uint32_t>(m_vkTriShading.size() / kFloatsPerTri);
+        for (uint32_t i = 0; i < triCount; ++i)
+        {
+            const float* p = &m_vkTriShading[i * kFloatsPerTri];
+            glm::vec3 em(p[24], p[25], p[26]);
+            float area = p[27];
+            if (glm::length(em) > 0.001f)
+            {
+                vkIdx.push_back(i);
+                float w = m_luminanceCDF
+                    ? (0.2126f * em.r + 0.7152f * em.g + 0.0722f * em.b) * area
+                    : area;
+                vkTotal += w;
+                vkCDF.push_back(vkTotal);
+            }
+        }
+        if (vkTotal > 0.0f)
+            for (float& c : vkCDF) c /= vkTotal;
+        m_vkLights.clear();
+        m_vkLights.push_back(static_cast<uint32_t>(vkIdx.size()));
+        m_vkLights.push_back(fBU(vkTotal));
+        m_vkLights.push_back(0); m_vkLights.push_back(0);
+        for (uint32_t idx : vkIdx)  m_vkLights.push_back(idx);
+        for (float  c   : vkCDF)    m_vkLights.push_back(fBU(c));
+        m_vkGeomDirty = true;
+        m_vkSampleCount = 0;
+    }
+    if (m_vkComputeRaytracer)
+    {
+        m_vkComputeGeomDirty   = true;
+        m_vkComputeSampleCount = 0;
+        m_vkComputeRaytracer->reset();
+    }
+#endif
+
+    if (m_cpuRaytracer) m_cpuRaytracer->setUseLuminanceCDF(v);
+#ifdef VEX_BACKEND_OPENGL
+    if (m_gpuRaytracer) { m_gpuRaytracer->setUseLuminanceCDF(v); m_gpuGeometryDirty = true; }
+#endif
+}
+
 void SceneRenderer::setEnableFireflyClamping(bool v)  { if (m_cpuRaytracer) m_cpuRaytracer->setEnableFireflyClamping(v); }
 bool SceneRenderer::getEnableFireflyClamping() const   { return m_cpuRaytracer ? m_cpuRaytracer->getEnableFireflyClamping() : true; }
 
@@ -1304,7 +1379,11 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
                 if (glm::length(m_rtTriangles[i].emissive) > 0.001f)
                 {
                     m_rtLightIndices.push_back(i);
-                    m_rtTotalLightArea += m_rtTriangles[i].area;
+                    const auto& em = m_rtTriangles[i].emissive;
+                    float w = m_luminanceCDF
+                        ? (0.2126f * em.r + 0.7152f * em.g + 0.0722f * em.b) * m_rtTriangles[i].area
+                        : m_rtTriangles[i].area;
+                    m_rtTotalLightArea += w;
                     m_rtLightCDF.push_back(m_rtTotalLightArea);
                 }
             }
@@ -1461,7 +1540,11 @@ void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
                     if (glm::length(sm.meshData.emissiveColor) > 0.001f)
                     {
                         vkLightIndices.push_back(globalTriOffset + static_cast<uint32_t>(i / 3));
-                        vkTotalLightArea += area;
+                        const auto& ec = sm.meshData.emissiveColor;
+                        float vkW = m_luminanceCDF
+                            ? (0.2126f * ec.r + 0.7152f * ec.g + 0.0722f * ec.b) * sm.meshData.emissiveStrength * area
+                            : area;
+                        vkTotalLightArea += vkW;
                         vkLightCDF.push_back(vkTotalLightArea);
                     }
                 }
@@ -1609,7 +1692,11 @@ void SceneRenderer::rebuildMaterials(Scene& scene)
         if (glm::length(m_rtTriangles[i].emissive) > 0.001f)
         {
             m_rtLightIndices.push_back(i);
-            m_rtTotalLightArea += m_rtTriangles[i].area;
+            const auto& em = m_rtTriangles[i].emissive;
+            float w = m_luminanceCDF
+                ? (0.2126f * em.r + 0.7152f * em.g + 0.0722f * em.b) * m_rtTriangles[i].area
+                : m_rtTriangles[i].area;
+            m_rtTotalLightArea += w;
             m_rtLightCDF.push_back(m_rtTotalLightArea);
         }
     }
@@ -1667,6 +1754,47 @@ void SceneRenderer::rebuildMaterials(Scene& scene)
                 }
                 ++blasIdx;
             }
+        }
+        // Rebuild m_vkLights SSBO from updated emissive data
+        {
+            auto fBU = [](float v) -> uint32_t { uint32_t u; std::memcpy(&u, &v, sizeof(u)); return u; };
+            std::vector<uint32_t> newLightIdx;
+            std::vector<float>    newLightCDF;
+            float newTotal = 0.0f;
+            size_t bIdx = 0;
+            for (const auto& nd : scene.nodes)
+            {
+                for (const auto& sm2 : nd.submeshes)
+                {
+                    if (glm::length(sm2.meshData.emissiveColor) > 0.001f)
+                    {
+                        uint32_t triStart2 = m_vkInstanceOffsets[bIdx];
+                        uint32_t triCount2 = static_cast<uint32_t>(sm2.meshData.indices.size() / 3);
+                        for (uint32_t t = 0; t < triCount2; ++t)
+                        {
+                            uint32_t globalTri = triStart2 + t;
+                            float area = m_vkTriShading[globalTri * FLOATS_PER_TRI + 27];
+                            const auto& ec = sm2.meshData.emissiveColor;
+                            float w = m_luminanceCDF
+                                ? (0.2126f * ec.r + 0.7152f * ec.g + 0.0722f * ec.b)
+                                  * sm2.meshData.emissiveStrength * area
+                                : area;
+                            newLightIdx.push_back(globalTri);
+                            newTotal += w;
+                            newLightCDF.push_back(newTotal);
+                        }
+                    }
+                    ++bIdx;
+                }
+            }
+            if (newTotal > 0.0f)
+                for (float& c : newLightCDF) c /= newTotal;
+            m_vkLights.clear();
+            m_vkLights.push_back(static_cast<uint32_t>(newLightIdx.size()));
+            m_vkLights.push_back(fBU(newTotal));
+            m_vkLights.push_back(0u); m_vkLights.push_back(0u);
+            for (uint32_t idx : newLightIdx) m_vkLights.push_back(idx);
+            for (float c : newLightCDF) m_vkLights.push_back(fBU(c));
         }
         m_vkGeomDirty   = true;
         m_vkSampleCount = 0;
@@ -3341,6 +3469,7 @@ void SceneRenderer::renderVKRaytrace(Scene& scene)
     u.bilinearFiltering     = m_vkBilinearFiltering     ? 1u : 0u;
     u.samplerType           = static_cast<uint32_t>(m_vkSamplerType);
     u.enableRR              = m_vkEnableRR              ? 1u : 0u;
+    u.useLuminanceCDF       = m_luminanceCDF            ? 1u : 0u;
 
     // Point light
     vex::rtUniformsSetVec3(u.pointLightPos,   scene.lightPos);
@@ -3780,6 +3909,7 @@ void SceneRenderer::renderVKComputeRaytrace(Scene& scene)
     u.bilinearFiltering     = m_vkBilinearFiltering     ? 1u : 0u;
     u.samplerType           = static_cast<uint32_t>(m_vkSamplerType);
     u.enableRR              = m_vkEnableRR              ? 1u : 0u;
+    u.useLuminanceCDF       = m_luminanceCDF            ? 1u : 0u;
 
     // Point light
     vex::vkComputeUniformsSetVec3(u.pointLightPos,   scene.lightPos);

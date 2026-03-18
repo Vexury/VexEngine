@@ -276,7 +276,10 @@ vec3 pathTrace(vec3 rayOrigin, vec3 rayDirection) {
                 if (cosLight > 0.0)
                     radiance += throughput * emission;
             } else if (u_uniforms.enableNEE != 0u && hasLights && cosLight > 0.0) {
-                float pdfLight = (hitT * hitT) / (cosLight * u_uniforms.totalLightArea);
+                float lumFactor = (u_uniforms.useLuminanceCDF != 0u)
+                    ? dot(emission, vec3(0.2126, 0.7152, 0.0722))
+                    : 1.0;
+                float pdfLight = (hitT * hitT) * lumFactor / (cosLight * u_uniforms.totalLightArea);
                 float weight   = prevBsdfPdf / (prevBsdfPdf + pdfLight);
                 radiance += throughput * emission * weight;
             } else if (u_uniforms.enableNEE == 0u && cosLight > 0.0) {
@@ -376,11 +379,15 @@ vec3 pathTrace(vec3 rayOrigin, vec3 rayDirection) {
                     bool occ = traceShadowRay(hitPos + offsetNormal * u_uniforms.rayEps,
                                               lightDir, dist - 2.0 * u_uniforms.rayEps);
                     if (!occ) {
-                        float pdfLight  = (dist * dist) / (cosLt * u_uniforms.totalLightArea);
+                        vec3  litEmissive  = triEmissive(lightTriIdx);
+                        float litLumFactor = (u_uniforms.useLuminanceCDF != 0u)
+                            ? dot(litEmissive, vec3(0.2126, 0.7152, 0.0722))
+                            : 1.0;
+                        float pdfLight  = (dist * dist) * litLumFactor / (cosLt * u_uniforms.totalLightArea);
                         float pdfBsdf   = ctPdf(shadingN, wo, lightDir, alpha, metallic);
                         float misWeight = pdfLight / (pdfLight + pdfBsdf);
                         vec3  brdfVal   = ctEvaluate(shadingN, wo, lightDir, albedo, alpha, metallic, ior);
-                        radiance += throughput * brdfVal * triEmissive(lightTriIdx)
+                        radiance += throughput * brdfVal * litEmissive
                                   * cosSurface / pdfLight * misWeight;
                     }
                 }

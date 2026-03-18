@@ -59,7 +59,7 @@ struct VKComputeUniforms
     uint32_t lightCount;              //        offset 272
     uint32_t bilinearFiltering;       //        offset 276
     uint32_t samplerType;             //        offset 280
-    uint32_t _pad2c;                  //        offset 284
+    uint32_t useLuminanceCDF;         //        offset 284
     // Compute-only extensions:
     uint32_t triangleCount;           //        offset 288
     uint32_t bvhNodeCount;            //        offset 292

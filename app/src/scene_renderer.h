@@ -99,6 +99,9 @@ public:
     void setEnableNEE(bool v);
     bool getEnableNEE() const;
 
+    void setUseLuminanceCDF(bool v);
+    bool getUseLuminanceCDF() const { return m_luminanceCDF; }
+
     void setEnableFireflyClamping(bool v);
     bool getEnableFireflyClamping() const;
 
@@ -355,6 +358,7 @@ private:
     // VK RT rendering settings (mirrors GPU raytracer settings for the Vulkan build)
     int   m_vkMaxDepth              = 8;
     bool  m_vkEnableNEE             = true;
+    bool  m_luminanceCDF            = false;
     bool  m_vkEnableAA              = true;
     bool  m_vkEnableFireflyClamping = true;
     bool  m_vkEnableEnvLighting     = true;

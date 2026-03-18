@@ -319,6 +319,7 @@ void App::processPicking()
 void App::runImport(const std::string& path, const std::string& name, bool isGltf)
 {
     auto t_import_total = std::chrono::steady_clock::now();
+    int rootIdx = static_cast<int>(m_scene.nodes.size());
 
     // Pump a single loading frame: update the overlay and present.
     auto pumpFrame = [&](const std::string& stage, float progress)
@@ -356,6 +357,18 @@ void App::runImport(const std::string& path, const std::string& name, bool isGlt
 
     m_ui.clearLoadingState();
 
+    // Focus camera on the newly imported root node (same as pressing F)
+    if (rootIdx < static_cast<int>(m_scene.nodes.size()))
+    {
+        const auto& node = m_scene.nodes[rootIdx];
+        glm::vec3 center = glm::vec3(m_scene.getWorldMatrix(rootIdx) * glm::vec4(node.center, 1.0f));
+        float radius = node.radius;
+        m_scene.camera.getTarget()   = center;
+        m_scene.camera.getDistance() = radius * 2.5f;
+        float needed = m_scene.camera.getDistance() + radius * 2.0f;
+        m_scene.camera.farPlane = std::max(100.0f, needed);
+    }
+
     float t_import_ms = std::chrono::duration<float, std::milli>(
         std::chrono::steady_clock::now() - t_import_total).count();
     char buf[128];
@@ -390,6 +403,17 @@ void App::run()
                 int newIdx = static_cast<int>(m_scene.nodes.size());
                 auto cmd = std::make_unique<CmdAddNode>(std::move(save), newIdx);
                 m_cmdStack.execute(std::move(cmd), m_scene, m_renderer, m_ui);
+
+                if (newIdx < static_cast<int>(m_scene.nodes.size()))
+                {
+                    const auto& node = m_scene.nodes[newIdx];
+                    glm::vec3 center = glm::vec3(m_scene.getWorldMatrix(newIdx) * glm::vec4(node.center, 1.0f));
+                    float radius = node.radius;
+                    m_scene.camera.getTarget()   = center;
+                    m_scene.camera.getDistance() = radius * 2.5f;
+                    float needed = m_scene.camera.getDistance() + radius * 2.0f;
+                    m_scene.camera.farPlane = std::max(100.0f, needed);
+                }
             }
         }
 
