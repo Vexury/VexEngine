@@ -146,7 +146,7 @@ void CmdDeleteNode::redo(Scene& s, SceneRenderer& r, EditorUI& ui)
     ui.clearSelection();
 }
 
-void CmdDeleteNode::undo(Scene& s, SceneRenderer& r, EditorUI& ui)
+void CmdDeleteNode::undo(Scene& s, SceneRenderer& /*r*/, EditorUI& ui)
 {
     // Insert all subtree nodes back in ascending order.
     // After all insertions, re-link parentIndex/childIndices from saves

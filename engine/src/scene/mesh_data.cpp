@@ -18,7 +18,7 @@ namespace vex
 // the diagonal-seam artifact on hard-edged models exported with smooth normals
 // while preserving smooth shading on curved surfaces.
 // ---------------------------------------------------------------------------
-static void autoSmoothNormals(MeshData& mesh, float angleDeg = 80.0f)
+[[maybe_unused]] static void autoSmoothNormals(MeshData& mesh, float angleDeg = 80.0f)
 {
     size_t triCount = mesh.indices.size() / 3;
     if (triCount == 0) return;

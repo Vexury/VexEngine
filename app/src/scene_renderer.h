@@ -358,7 +358,6 @@ private:
     // VK RT rendering settings (mirrors GPU raytracer settings for the Vulkan build)
     int   m_vkMaxDepth              = 8;
     bool  m_vkEnableNEE             = true;
-    bool  m_luminanceCDF            = false;
     bool  m_vkEnableAA              = true;
     bool  m_vkEnableFireflyClamping = true;
     bool  m_vkEnableEnvLighting     = true;
@@ -436,5 +435,6 @@ private:
     std::vector<uint32_t> m_rtLightIndices;
     std::vector<float> m_rtLightCDF;
     float m_rtTotalLightArea = 0.0f;
+    bool  m_luminanceCDF     = false;
     bool m_gpuGeometryDirty = false;
 };

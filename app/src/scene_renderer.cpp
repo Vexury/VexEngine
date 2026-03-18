@@ -1037,7 +1037,7 @@ void SceneRenderer::buildGeometry(Scene& scene, ProgressFn progress)
     scene.materialDirty = false;
 }
 
-void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)
+void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, [[maybe_unused]] ProgressFn progress)
 {
     auto t_total = std::chrono::steady_clock::now();
 
