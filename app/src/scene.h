@@ -6,13 +6,10 @@
 #include <vex/graphics/texture.h>
 #include <vex/scene/mesh_data.h>
 
-#include "mesh_group_save.h"
-
 #include <glm/glm.hpp>
 
 #include <cmath>
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -122,29 +119,13 @@ struct Scene
     bool geometryDirty = false;
     bool materialDirty = false;
 
-    // Pixel cache populated during importOBJ / addNodeFromSave.
-    // Used by SceneRenderer::rebuildRaytraceGeometry to skip the second stbi_load
-    // per texture. Cleared by rebuildRaytraceGeometry after consumption.
+    // Pixel cache populated by SceneImporter during import.
+    // Consumed (then cleared) by SceneGeometryCache::rebuild() to avoid a
+    // second stbi_load per texture. See scene_importer.h for write paths.
     std::unordered_map<std::string, TexPixels> importedTexPixels;
 
     // Returns the accumulated world-space matrix of a node (product of all ancestor localMatrices).
     glm::mat4 getWorldMatrix(int nodeIdx) const;
-
-    using ProgressFn = std::function<void(const std::string& stage, float progress)>;
-    bool importOBJ(const std::string& path, const std::string& name,
-                   ProgressFn onProgress = nullptr);
-    bool importGLTF(const std::string& path, const std::string& name,
-                    ProgressFn onProgress = nullptr);
-
-    // Recreate GPU resources from a CPU save and add the node to the scene.
-    // insertAt = -1 → append; otherwise inserts at that index.
-    // When insertAt >= 0, calls fixRefsAfterInsert first so existing refs stay valid.
-    void addNodeFromSave(const NodeSave& save, int insertAt = -1);
-
-    // Fill importedTexPixels via parallel stbi_load over all unique texture paths in
-    // the current scene nodes. Called by rebuildRaytraceGeometry when the cache is
-    // empty (e.g. after a render-mode switch discarded it).
-    void prefetchTextures();
 };
 
 // ── Index fixup helpers ───────────────────────────────────────────────────────

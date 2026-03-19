@@ -1,0 +1,853 @@
+#include "scene_geometry_cache.h"
+#include "scene.h"
+#include "scene_importer.h"
+
+#include <vex/graphics/mesh.h>
+#include <vex/scene/mesh_data.h>
+#include <vex/core/log.h>
+
+#include <stb_image.h>
+#include <tinyexr.h>
+
+#ifdef VEX_BACKEND_VULKAN
+#include <vex/vulkan/vk_mesh.h>
+#include <vex/vulkan/vk_gpu_raytracer.h>
+#endif
+
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <cstring>
+#include <unordered_map>
+#include <vector>
+
+static constexpr float GEOMETRY_EPSILON = 1e-8f;
+static constexpr int   RT_TEX_MAX       = 1024;
+
+static std::vector<uint8_t> downsampleNearest(
+    const uint8_t* src, int sw, int sh, int dw, int dh)
+{
+    std::vector<uint8_t> out(static_cast<size_t>(dw) * dh * 4);
+    float invX = static_cast<float>(sw) / dw;
+    float invY = static_cast<float>(sh) / dh;
+    for (int y = 0; y < dh; ++y)
+    {
+        int sy = std::min(static_cast<int>(y * invY), sh - 1);
+        for (int x = 0; x < dw; ++x)
+        {
+            int sx = std::min(static_cast<int>(x * invX), sw - 1);
+            const uint8_t* s = src  + (sy * sw + sx) * 4;
+            uint8_t*       d = out.data() + (y  * dw + x)  * 4;
+            d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = s[3];
+        }
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// SceneGeometryCache::rebuild
+// ---------------------------------------------------------------------------
+
+void SceneGeometryCache::rebuild(const Scene& scene, vex::CPURaytracer& cpuRT,
+                                  bool luminanceCDF, ProgressFn progress)
+{
+    m_luminanceCDF = luminanceCDF;
+
+    auto t_total = std::chrono::steady_clock::now();
+
+    std::vector<vex::CPURaytracer::Triangle> triangles;
+    std::vector<vex::CPURaytracer::TextureData> textures;
+
+    std::unordered_map<std::string, int> textureMap;
+    int resolvedTexCount = 0;
+    int texFromCache     = 0;
+    int texFromDisk      = 0;
+
+    auto addTextureData = [&](const uint8_t* pixels, int tw, int th) -> int
+    {
+        int dw = tw, dh = th;
+        if (tw > RT_TEX_MAX || th > RT_TEX_MAX)
+        {
+            float scale = std::min(static_cast<float>(RT_TEX_MAX) / tw,
+                                   static_cast<float>(RT_TEX_MAX) / th);
+            dw = std::max(1, static_cast<int>(tw * scale));
+            dh = std::max(1, static_cast<int>(th * scale));
+        }
+        int idx = static_cast<int>(textures.size());
+        vex::CPURaytracer::TextureData td;
+        td.width  = dw;
+        td.height = dh;
+        if (dw == tw && dh == th)
+            td.pixels.assign(pixels, pixels + static_cast<size_t>(tw) * th * 4);
+        else
+            td.pixels = downsampleNearest(pixels, tw, th, dw, dh);
+        textures.push_back(std::move(td));
+        return idx;
+    };
+
+    auto resolveTexture = [&](const std::string& path) -> int
+    {
+        if (path.empty()) return -1;
+        auto it = textureMap.find(path);
+        if (it != textureMap.end()) return it->second;
+        int idx = -1;
+
+        auto cacheIt = scene.importedTexPixels.find(path);
+        if (cacheIt != scene.importedTexPixels.end())
+        {
+            const auto& cached = cacheIt->second;
+            idx = addTextureData(cached.pixels.data(), cached.width, cached.height);
+            ++texFromCache;
+        }
+        else if (path.size() >= 4 &&
+            (path.compare(path.size() - 4, 4, ".exr") == 0 ||
+             path.compare(path.size() - 4, 4, ".EXR") == 0))
+        {
+            float* exrRGBA = nullptr;
+            int tw = 0, th = 0;
+            const char* err = nullptr;
+            if (LoadEXR(&exrRGBA, &tw, &th, path.c_str(), &err) == TINYEXR_SUCCESS)
+            {
+                std::vector<uint8_t> px(static_cast<size_t>(tw) * th * 4);
+                for (size_t i = 0; i < px.size(); ++i)
+                    px[i] = static_cast<unsigned char>(
+                        std::clamp(exrRGBA[i], 0.0f, 1.0f) * 255.0f + 0.5f);
+                free(exrRGBA);
+                idx = addTextureData(px.data(), tw, th);
+                ++texFromDisk;
+            }
+            else
+            {
+                std::string errMsg = err ? err : "";
+                if (errMsg == "Unknown compression type.")
+                    errMsg += " (DWAA/DWAB not supported, re-export with ZIP or PIZ compression)";
+                vex::Log::error("Failed to load EXR texture: " + path +
+                                (errMsg.empty() ? "" : " (" + errMsg + ")"));
+                FreeEXRErrorMessage(err);
+            }
+        }
+        else
+        {
+            int tw, th, tch;
+            stbi_set_flip_vertically_on_load(false);
+            unsigned char* texData = stbi_load(path.c_str(), &tw, &th, &tch, 4);
+            if (texData)
+            {
+                idx = addTextureData(texData, tw, th);
+                stbi_image_free(texData);
+                ++texFromDisk;
+            }
+        }
+
+        textureMap[path] = idx;
+        if (idx >= 0) ++resolvedTexCount;
+        return idx;
+    };
+
+    auto lookupTexture = [&](const std::string& path) -> int
+    {
+        if (path.empty()) return -1;
+        auto it = textureMap.find(path);
+        return it != textureMap.end() ? it->second : -1;
+    };
+
+    // Rebuild per-node local-space AABBs
+    m_nodeLocalAABBs.clear();
+    m_nodeLocalAABBs.resize(scene.nodes.size());
+    for (size_t ni = 0; ni < scene.nodes.size(); ++ni)
+        for (const auto& sm : scene.nodes[ni].submeshes)
+            for (const auto& v : sm.meshData.vertices)
+                m_nodeLocalAABBs[ni].grow(v.position);
+
+    if (scene.importedTexPixels.empty())
+        SceneImporter::prefetchTextures(const_cast<Scene&>(scene));
+
+    auto t_flatten = std::chrono::steady_clock::now();
+
+    for (int ni = 0; ni < (int)scene.nodes.size(); ++ni)
+    {
+        const glm::mat4 nodeWorld = scene.getWorldMatrix(ni);
+        for (const auto& sm : scene.nodes[ni].submeshes)
+        {
+            const glm::mat4 combinedMat = nodeWorld * sm.modelMatrix;
+            const glm::mat3 normalMat   = glm::mat3(glm::transpose(glm::inverse(combinedMat)));
+
+            const auto& verts   = sm.meshData.vertices;
+            const auto& indices = sm.meshData.indices;
+
+            int texIdx          = resolveTexture(sm.meshData.diffuseTexturePath);
+            int emissiveTexIdx  = resolveTexture(sm.meshData.emissiveTexturePath);
+            int normalTexIdx    = resolveTexture(sm.meshData.normalTexturePath);
+            int roughnessTexIdx = resolveTexture(sm.meshData.roughnessTexturePath);
+            int metallicTexIdx  = resolveTexture(sm.meshData.metallicTexturePath);
+
+            for (size_t i = 0; i + 2 < indices.size(); i += 3)
+            {
+                const auto& v0 = verts[indices[i + 0]];
+                const auto& v1 = verts[indices[i + 1]];
+                const auto& v2 = verts[indices[i + 2]];
+
+                glm::vec3 p0 = glm::vec3(combinedMat * glm::vec4(v0.position, 1.0f));
+                glm::vec3 p1 = glm::vec3(combinedMat * glm::vec4(v1.position, 1.0f));
+                glm::vec3 p2 = glm::vec3(combinedMat * glm::vec4(v2.position, 1.0f));
+
+                glm::vec3 edge1 = p1 - p0;
+                glm::vec3 edge2 = p2 - p0;
+                glm::vec3 cross = glm::cross(edge1, edge2);
+                float len = glm::length(cross);
+
+                vex::CPURaytracer::Triangle tri;
+                tri.v0 = p0;
+                tri.v1 = p1;
+                tri.v2 = p2;
+                tri.n0 = glm::normalize(normalMat * v0.normal);
+                tri.n1 = glm::normalize(normalMat * v1.normal);
+                tri.n2 = glm::normalize(normalMat * v2.normal);
+                tri.uv0 = v0.uv;
+                tri.uv1 = v1.uv;
+                tri.uv2 = v2.uv;
+                tri.color             = v0.color * sm.meshData.baseColor;
+                tri.emissive          = sm.meshData.emissiveColor * sm.meshData.emissiveStrength;
+                tri.emissiveStrength  = sm.meshData.emissiveStrength;
+                tri.geometricNormal = (len > GEOMETRY_EPSILON) ? (cross / len) : glm::vec3(0, 1, 0);
+                tri.area = len * 0.5f;
+                tri.textureIndex = texIdx;
+                tri.emissiveTextureIndex = emissiveTexIdx;
+                tri.normalMapTextureIndex = normalTexIdx;
+                tri.roughnessTextureIndex = roughnessTexIdx;
+                tri.metallicTextureIndex = metallicTexIdx;
+                tri.alphaClip = sm.meshData.alphaClip;
+                tri.materialType = sm.meshData.materialType;
+                tri.ior = sm.meshData.ior;
+                tri.roughness = sm.meshData.roughness;
+                tri.metallic = sm.meshData.metallic;
+
+                glm::vec2 dUV1 = v1.uv - v0.uv;
+                glm::vec2 dUV2 = v2.uv - v0.uv;
+                float det = dUV1.x * dUV2.y - dUV2.x * dUV1.y;
+                if (std::abs(det) > GEOMETRY_EPSILON)
+                {
+                    float f = 1.0f / det;
+                    tri.tangent = glm::normalize(f * (dUV2.y * edge1 - dUV1.y * edge2));
+                    glm::vec3 B = f * (-dUV2.x * edge1 + dUV1.x * edge2);
+                    tri.bitangentSign = (glm::dot(glm::cross(tri.geometricNormal, tri.tangent), B) < 0.0f) ? -1.0f : 1.0f;
+                }
+
+                triangles.push_back(tri);
+            }
+        }
+    }
+
+    {
+        float t_flatten_ms = std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - t_flatten).count();
+        char buf[256];
+        std::snprintf(buf, sizeof(buf),
+            "  CPU triangle flatten + texture resolve: %.0f ms  (%zu tris, %d cached / %d disk)",
+            t_flatten_ms, triangles.size(), texFromCache, texFromDisk);
+        vex::Log::info(buf);
+    }
+
+    m_rtTextures = textures;
+
+    {
+        auto t_cpu_bvh = std::chrono::steady_clock::now();
+        cpuRT.setGeometry(std::move(triangles), std::move(textures));
+        {
+            float ms = std::chrono::duration<float, std::milli>(
+                std::chrono::steady_clock::now() - t_cpu_bvh).count();
+            char buf[128];
+            std::snprintf(buf, sizeof(buf),
+                "  CPURaytracer::setGeometry (BVH build + reorder): %.0f ms", ms);
+            vex::Log::info(buf);
+        }
+
+        {
+            auto t_rt_bvh = std::chrono::steady_clock::now();
+            std::vector<vex::CPURaytracer::Triangle> gpuTriangles;
+            std::vector<std::pair<int,int>> gpuTriangleSrc;
+            std::vector<int> gpuTriangleSrcIdx;
+            for (int ni = 0; ni < static_cast<int>(scene.nodes.size()); ++ni)
+            {
+                const glm::mat4 nodeWorld2 = scene.getWorldMatrix(ni);
+                for (int si = 0; si < static_cast<int>(scene.nodes[ni].submeshes.size()); ++si)
+                {
+                    const auto& sm = scene.nodes[ni].submeshes[si];
+                    const auto& verts = sm.meshData.vertices;
+                    const auto& idx   = sm.meshData.indices;
+
+                    const glm::mat4 combinedMat2 = nodeWorld2 * sm.modelMatrix;
+                    const glm::mat3 normalMat2   = glm::mat3(glm::transpose(glm::inverse(combinedMat2)));
+
+                    int texIdx2          = lookupTexture(sm.meshData.diffuseTexturePath);
+                    int emissiveTexIdx2  = lookupTexture(sm.meshData.emissiveTexturePath);
+                    int normalTexIdx2    = lookupTexture(sm.meshData.normalTexturePath);
+                    int roughnessTexIdx2 = lookupTexture(sm.meshData.roughnessTexturePath);
+                    int metallicTexIdx2  = lookupTexture(sm.meshData.metallicTexturePath);
+
+                    for (size_t i = 0; i + 2 < idx.size(); i += 3)
+                    {
+                        int triWithinSubmesh = static_cast<int>(i / 3);
+                        const auto& v0 = verts[idx[i + 0]];
+                        const auto& v1 = verts[idx[i + 1]];
+                        const auto& v2 = verts[idx[i + 2]];
+
+                        glm::vec3 p0 = glm::vec3(combinedMat2 * glm::vec4(v0.position, 1.0f));
+                        glm::vec3 p1 = glm::vec3(combinedMat2 * glm::vec4(v1.position, 1.0f));
+                        glm::vec3 p2 = glm::vec3(combinedMat2 * glm::vec4(v2.position, 1.0f));
+
+                        glm::vec3 edge1 = p1 - p0;
+                        glm::vec3 edge2 = p2 - p0;
+                        glm::vec3 cr = glm::cross(edge1, edge2);
+                        float len = glm::length(cr);
+
+                        vex::CPURaytracer::Triangle tri;
+                        tri.v0 = p0; tri.v1 = p1; tri.v2 = p2;
+                        tri.n0 = glm::normalize(normalMat2 * v0.normal);
+                        tri.n1 = glm::normalize(normalMat2 * v1.normal);
+                        tri.n2 = glm::normalize(normalMat2 * v2.normal);
+                        tri.uv0 = v0.uv;      tri.uv1 = v1.uv;      tri.uv2 = v2.uv;
+                        tri.color            = v0.color * sm.meshData.baseColor;
+                        tri.emissive         = v0.emissive * sm.meshData.emissiveStrength;
+                        tri.emissiveStrength = sm.meshData.emissiveStrength;
+                        tri.geometricNormal = (len > GEOMETRY_EPSILON) ? (cr / len) : glm::vec3(0, 1, 0);
+                        tri.area = len * 0.5f;
+                        tri.textureIndex = texIdx2;
+                        tri.emissiveTextureIndex = emissiveTexIdx2;
+                        tri.normalMapTextureIndex = normalTexIdx2;
+                        tri.roughnessTextureIndex = roughnessTexIdx2;
+                        tri.metallicTextureIndex = metallicTexIdx2;
+                        tri.alphaClip = sm.meshData.alphaClip;
+                        tri.materialType = sm.meshData.materialType;
+                        tri.ior = sm.meshData.ior;
+                        tri.roughness = sm.meshData.roughness;
+                        tri.metallic = sm.meshData.metallic;
+
+                        glm::vec2 dUV1 = v1.uv - v0.uv;
+                        glm::vec2 dUV2 = v2.uv - v0.uv;
+                        float det = dUV1.x * dUV2.y - dUV2.x * dUV1.y;
+                        if (std::abs(det) > GEOMETRY_EPSILON)
+                        {
+                            float f = 1.0f / det;
+                            tri.tangent = glm::normalize(f * (dUV2.y * edge1 - dUV1.y * edge2));
+                            glm::vec3 B = f * (-dUV2.x * edge1 + dUV1.x * edge2);
+                            tri.bitangentSign = (glm::dot(glm::cross(tri.geometricNormal, tri.tangent), B) < 0.0f) ? -1.0f : 1.0f;
+                        }
+
+                        gpuTriangles.push_back(tri);
+                        gpuTriangleSrc.push_back({ni, si});
+                        gpuTriangleSrcIdx.push_back(triWithinSubmesh);
+                    }
+                }
+            }
+
+            uint32_t count = static_cast<uint32_t>(gpuTriangles.size());
+
+            m_rtBVH = cpuRT.getBVH();
+
+            const auto& bvhIndices = m_rtBVH.indices();
+            std::vector<vex::CPURaytracer::Triangle> reordered(count);
+            std::vector<std::pair<int,int>> reorderedSrc(count);
+            std::vector<int> reorderedSrcIdx(count);
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                reordered[i]       = gpuTriangles[bvhIndices[i]];
+                reorderedSrc[i]    = gpuTriangleSrc[bvhIndices[i]];
+                reorderedSrcIdx[i] = gpuTriangleSrcIdx[bvhIndices[i]];
+            }
+            m_rtTriangles          = std::move(reordered);
+            m_rtTriangleSrcSubmesh = std::move(reorderedSrc);
+            m_rtTriangleSrcTriIdx  = std::move(reorderedSrcIdx);
+
+            m_rtLightIndices.clear();
+            m_rtLightCDF.clear();
+            m_rtTotalLightArea = 0.0f;
+            for (uint32_t i = 0; i < static_cast<uint32_t>(m_rtTriangles.size()); ++i)
+            {
+                if (glm::length(m_rtTriangles[i].emissive) > 0.001f)
+                {
+                    m_rtLightIndices.push_back(i);
+                    const auto& em = m_rtTriangles[i].emissive;
+                    float w = m_luminanceCDF
+                        ? (0.2126f * em.r + 0.7152f * em.g + 0.0722f * em.b) * m_rtTriangles[i].area
+                        : m_rtTriangles[i].area;
+                    m_rtTotalLightArea += w;
+                    m_rtLightCDF.push_back(m_rtTotalLightArea);
+                }
+            }
+            if (m_rtTotalLightArea > 0.0f)
+                for (float& c : m_rtLightCDF) c /= m_rtTotalLightArea;
+
+            float t_rt_bvh_ms = std::chrono::duration<float, std::milli>(
+                std::chrono::steady_clock::now() - t_rt_bvh).count();
+            char rtbuf[128];
+            std::snprintf(rtbuf, sizeof(rtbuf),
+                "  GPU-tri reorder (shared CPU BVH): %.0f ms  (%u tris)", t_rt_bvh_ms, count);
+            vex::Log::info(rtbuf);
+        }
+
+        char sahBuf[32];
+        std::snprintf(sahBuf, sizeof(sahBuf), "%.1f", cpuRT.getBVHSAHCost());
+        std::string emissiveStr = m_rtLightIndices.empty() ? ""
+            : ", " + std::to_string(m_rtLightIndices.size()) + " emissive";
+        vex::Log::info("  CPU BVH: " + std::to_string(cpuRT.getBVHNodeCount()) + " nodes, "
+                      + std::to_string(m_rtTriangles.size()) + " triangles, SAH " + sahBuf + emissiveStr);
+    }
+
+#ifdef VEX_BACKEND_VULKAN
+    {
+        auto iBF = [](int   v) -> float    { float    f; std::memcpy(&f, &v, sizeof(f)); return f; };
+        auto fBU = [](float v) -> uint32_t { uint32_t u; std::memcpy(&u, &v, sizeof(u)); return u; };
+
+        m_vkTriShading.clear();
+        m_vkInstanceOffsets.clear();
+
+        auto t_vk_shading = std::chrono::steady_clock::now();
+        std::vector<uint32_t>  vkLightIndices;
+        std::vector<float>     vkLightCDF;
+        float vkTotalLightArea = 0.0f;
+        uint32_t globalTriOffset = 0;
+
+        for (int ni = 0; ni < (int)scene.nodes.size(); ++ni)
+        {
+            const glm::mat4 nodeWorld = scene.getWorldMatrix(ni);
+            for (const auto& sm : scene.nodes[ni].submeshes)
+            {
+                const glm::mat4 combinedMat  = nodeWorld * sm.modelMatrix;
+                const glm::mat3 vkNormalMat  = glm::mat3(glm::transpose(glm::inverse(combinedMat)));
+
+                m_vkInstanceOffsets.push_back(globalTriOffset);
+
+                const auto& verts   = sm.meshData.vertices;
+                const auto& indices = sm.meshData.indices;
+
+                int texIdx2          = lookupTexture(sm.meshData.diffuseTexturePath);
+                int emissiveTexIdx2  = lookupTexture(sm.meshData.emissiveTexturePath);
+                int normalTexIdx2    = lookupTexture(sm.meshData.normalTexturePath);
+                int roughnessTexIdx2 = lookupTexture(sm.meshData.roughnessTexturePath);
+                int metallicTexIdx2  = lookupTexture(sm.meshData.metallicTexturePath);
+
+                for (size_t i = 0; i + 2 < indices.size(); i += 3)
+                {
+                    const auto& v0 = verts[indices[i + 0]];
+                    const auto& v1 = verts[indices[i + 1]];
+                    const auto& v2 = verts[indices[i + 2]];
+
+                    glm::vec3 p0 = glm::vec3(combinedMat * glm::vec4(v0.position, 1.0f));
+                    glm::vec3 p1 = glm::vec3(combinedMat * glm::vec4(v1.position, 1.0f));
+                    glm::vec3 p2 = glm::vec3(combinedMat * glm::vec4(v2.position, 1.0f));
+                    glm::vec3 n0 = glm::normalize(vkNormalMat * v0.normal);
+                    glm::vec3 n1 = glm::normalize(vkNormalMat * v1.normal);
+                    glm::vec3 n2 = glm::normalize(vkNormalMat * v2.normal);
+
+                    glm::vec3 e1 = p1 - p0;
+                    glm::vec3 e2 = p2 - p0;
+                    glm::vec3 cr = glm::cross(e1, e2);
+                    float len = glm::length(cr);
+                    glm::vec3 geoN = (len > GEOMETRY_EPSILON) ? (cr / len) : glm::vec3(0, 1, 0);
+                    float area = len * 0.5f;
+
+                    glm::vec2 dUV1 = v1.uv - v0.uv;
+                    glm::vec2 dUV2 = v2.uv - v0.uv;
+                    float det = dUV1.x * dUV2.y - dUV2.x * dUV1.y;
+                    glm::vec3 tangent(1, 0, 0);
+                    float bitangentSign = 1.0f;
+                    if (std::abs(det) > GEOMETRY_EPSILON)
+                    {
+                        float f = 1.0f / det;
+                        tangent = glm::normalize(f * (dUV2.y * e1 - dUV1.y * e2));
+                        glm::vec3 B = f * (-dUV2.x * e1 + dUV1.x * e2);
+                        bitangentSign = (glm::dot(glm::cross(geoN, tangent), B) < 0.0f) ? -1.0f : 1.0f;
+                    }
+
+                    // [0] n0.xyz + roughnessTexIdx
+                    m_vkTriShading.push_back(n0.x); m_vkTriShading.push_back(n0.y);
+                    m_vkTriShading.push_back(n0.z); m_vkTriShading.push_back(iBF(roughnessTexIdx2));
+                    // [1] n1.xyz + metallicTexIdx
+                    m_vkTriShading.push_back(n1.x); m_vkTriShading.push_back(n1.y);
+                    m_vkTriShading.push_back(n1.z); m_vkTriShading.push_back(iBF(metallicTexIdx2));
+                    // [2] n2.xyz + emissiveStrength
+                    m_vkTriShading.push_back(n2.x); m_vkTriShading.push_back(n2.y);
+                    m_vkTriShading.push_back(n2.z); m_vkTriShading.push_back(sm.meshData.emissiveStrength);
+                    // [3] uv0.xy + uv1.zw
+                    m_vkTriShading.push_back(v0.uv.x); m_vkTriShading.push_back(v0.uv.y);
+                    m_vkTriShading.push_back(v1.uv.x); m_vkTriShading.push_back(v1.uv.y);
+                    // [4] uv2.xy + roughness + metallic
+                    m_vkTriShading.push_back(v2.uv.x); m_vkTriShading.push_back(v2.uv.y);
+                    m_vkTriShading.push_back(sm.meshData.roughness); m_vkTriShading.push_back(sm.meshData.metallic);
+                    // [5] color.xyz (tinted) + texIdx
+                    m_vkTriShading.push_back(v0.color.x * sm.meshData.baseColor.x);
+                    m_vkTriShading.push_back(v0.color.y * sm.meshData.baseColor.y);
+                    m_vkTriShading.push_back(v0.color.z * sm.meshData.baseColor.z);
+                    m_vkTriShading.push_back(iBF(texIdx2));
+                    // [6] emissive.xyz (scaled) + area
+                    m_vkTriShading.push_back(sm.meshData.emissiveColor.x * sm.meshData.emissiveStrength);
+                    m_vkTriShading.push_back(sm.meshData.emissiveColor.y * sm.meshData.emissiveStrength);
+                    m_vkTriShading.push_back(sm.meshData.emissiveColor.z * sm.meshData.emissiveStrength);
+                    m_vkTriShading.push_back(area);
+                    // [7] geoNormal.xyz + normalMapTexIdx
+                    m_vkTriShading.push_back(geoN.x); m_vkTriShading.push_back(geoN.y);
+                    m_vkTriShading.push_back(geoN.z); m_vkTriShading.push_back(iBF(normalTexIdx2));
+                    // [8] alphaClip + materialType + ior + emissiveTexIdx
+                    m_vkTriShading.push_back(sm.meshData.alphaClip ? 1.0f : 0.0f);
+                    m_vkTriShading.push_back(static_cast<float>(sm.meshData.materialType));
+                    m_vkTriShading.push_back(sm.meshData.ior);
+                    m_vkTriShading.push_back(iBF(emissiveTexIdx2));
+                    // [9] tangent.xyz + bitangentSign
+                    m_vkTriShading.push_back(tangent.x); m_vkTriShading.push_back(tangent.y);
+                    m_vkTriShading.push_back(tangent.z); m_vkTriShading.push_back(bitangentSign);
+                    // [10] v0.xyz + pad
+                    m_vkTriShading.push_back(p0.x); m_vkTriShading.push_back(p0.y);
+                    m_vkTriShading.push_back(p0.z); m_vkTriShading.push_back(0.0f);
+                    // [11] v1.xyz + pad
+                    m_vkTriShading.push_back(p1.x); m_vkTriShading.push_back(p1.y);
+                    m_vkTriShading.push_back(p1.z); m_vkTriShading.push_back(0.0f);
+                    // [12] v2.xyz + pad
+                    m_vkTriShading.push_back(p2.x); m_vkTriShading.push_back(p2.y);
+                    m_vkTriShading.push_back(p2.z); m_vkTriShading.push_back(0.0f);
+
+                    if (glm::length(sm.meshData.emissiveColor) > 0.001f)
+                    {
+                        vkLightIndices.push_back(globalTriOffset + static_cast<uint32_t>(i / 3));
+                        const auto& ec = sm.meshData.emissiveColor;
+                        float vkW = m_luminanceCDF
+                            ? (0.2126f * ec.r + 0.7152f * ec.g + 0.0722f * ec.b) * sm.meshData.emissiveStrength * area
+                            : area;
+                        vkTotalLightArea += vkW;
+                        vkLightCDF.push_back(vkTotalLightArea);
+                    }
+                }
+                globalTriOffset += static_cast<uint32_t>(indices.size() / 3);
+            }
+        }
+
+        if (vkTotalLightArea > 0.0f)
+            for (float& c : vkLightCDF) c /= vkTotalLightArea;
+
+        {
+            float ms = std::chrono::duration<float, std::milli>(
+                std::chrono::steady_clock::now() - t_vk_shading).count();
+            char buf[128];
+            std::snprintf(buf, sizeof(buf),
+                "  VK triShading SSBO pack: %.0f ms  (%zu tris, %zu emissive)",
+                ms, m_vkTriShading.size() / 52, vkLightIndices.size());
+            vex::Log::info(buf);
+        }
+
+        m_vkLights.clear();
+        uint32_t lightCount = static_cast<uint32_t>(vkLightIndices.size());
+        m_vkLights.push_back(lightCount);
+        m_vkLights.push_back(fBU(vkTotalLightArea));
+        m_vkLights.push_back(0); m_vkLights.push_back(0);
+        for (uint32_t idx : vkLightIndices) m_vkLights.push_back(idx);
+        for (float c : vkLightCDF) m_vkLights.push_back(fBU(c));
+
+        {
+            auto t_tex_pack = std::chrono::steady_clock::now();
+            m_vkTexData.clear();
+            uint32_t texCount = static_cast<uint32_t>(m_rtTextures.size());
+            m_vkTexData.push_back(texCount);
+            uint32_t headerSize = 1u + texCount * 4u;
+            m_vkTexData.resize(headerSize, 0u);
+            uint32_t pixelBase = headerSize;
+            size_t totalPixels = 0;
+            for (uint32_t ti = 0; ti < texCount; ++ti)
+            {
+                const auto& td = m_rtTextures[ti];
+                uint32_t hBase = 1u + ti * 4u;
+                m_vkTexData[hBase + 0] = pixelBase;
+                m_vkTexData[hBase + 1] = static_cast<uint32_t>(td.width);
+                m_vkTexData[hBase + 2] = static_cast<uint32_t>(td.height);
+                m_vkTexData[hBase + 3] = 0u;
+                uint32_t pixelCount = static_cast<uint32_t>(td.width * td.height);
+                for (uint32_t pi = 0; pi < pixelCount; ++pi)
+                {
+                    uint8_t r = td.pixels[pi * 4 + 0], g = td.pixels[pi * 4 + 1];
+                    uint8_t b = td.pixels[pi * 4 + 2], a = td.pixels[pi * 4 + 3];
+                    m_vkTexData.push_back(r | (uint32_t(g) << 8) | (uint32_t(b) << 16) | (uint32_t(a) << 24));
+                }
+                pixelBase += pixelCount;
+                totalPixels += pixelCount;
+            }
+            float t_tex_ms = std::chrono::duration<float, std::milli>(
+                std::chrono::steady_clock::now() - t_tex_pack).count();
+            char buf[192];
+            std::snprintf(buf, sizeof(buf),
+                "  VK texData SSBO pack: %.0f ms  (%u textures, %.1f MB)",
+                t_tex_ms, texCount, static_cast<double>(totalPixels * 4) / (1024.0 * 1024.0));
+            vex::Log::info(buf);
+        }
+
+        vex::Log::info("  VK CPU pack done: " + std::to_string(m_vkInstanceOffsets.size()) + " submeshes, "
+                      + std::to_string(m_vkTriShading.size() / 52) + " tris, "
+                      + std::to_string(lightCount) + " emissive - call buildAccelerationStructures() to commit GPU");
+    }
+#endif // VEX_BACKEND_VULKAN
+
+    const_cast<Scene&>(scene).importedTexPixels.clear();
+
+    {
+        float t_total_ms = std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - t_total).count();
+        char buf[128];
+        std::snprintf(buf, sizeof(buf),
+            "  rebuildRaytraceGeometry total: %.0f ms  (%.1f s)", t_total_ms, t_total_ms / 1000.0f);
+        vex::Log::info(buf);
+    }
+
+    m_ready = true;
+}
+
+// ---------------------------------------------------------------------------
+// SceneGeometryCache::buildAccelerationStructures  (VK only)
+// ---------------------------------------------------------------------------
+
+#ifdef VEX_BACKEND_VULKAN
+void SceneGeometryCache::buildAccelerationStructures(const Scene& scene,
+                                                      vex::VKGpuRaytracer* vkRaytracer,
+                                                      ProgressFn progress)
+{
+    if (!vkRaytracer) return;
+
+    vkRaytracer->clearAccelerationStructures();
+
+    std::vector<glm::mat4> blasTransforms;
+    blasTransforms.reserve(m_vkInstanceOffsets.size());
+
+    for (int ni = 0; ni < (int)scene.nodes.size(); ++ni)
+    {
+        const glm::mat4 nodeWorld = scene.getWorldMatrix(ni);
+        for (const auto& sm : scene.nodes[ni].submeshes)
+        {
+            const glm::mat4 combinedMat = nodeWorld * sm.modelMatrix;
+            auto* vkMesh = static_cast<vex::VKMesh*>(sm.mesh.get());
+            vkRaytracer->addBlas(
+                vkMesh->getVertexBuffer(), vkMesh->getVertexCount(), sizeof(vex::Vertex),
+                vkMesh->getIndexBuffer(),  vkMesh->getIndexCount());
+            blasTransforms.push_back(combinedMat);
+        }
+    }
+
+    if (progress) progress("Building BLASes...", 0.7f);
+    {
+        auto t_blas = std::chrono::steady_clock::now();
+        vkRaytracer->commitBlasBuild();
+        float ms = std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - t_blas).count();
+        char buf[128];
+        std::snprintf(buf, sizeof(buf),
+            "  VK BLAS build (GPU): %.0f ms  (%zu BLASes)",
+            ms, blasTransforms.size());
+        vex::Log::info(buf);
+    }
+
+    if (progress) progress("Building TLAS...", 0.9f);
+    {
+        auto t_tlas = std::chrono::steady_clock::now();
+        vkRaytracer->buildTlas(blasTransforms);
+        float ms = std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - t_tlas).count();
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "  VK TLAS build (GPU): %.0f ms", ms);
+        vex::Log::info(buf);
+    }
+
+    vex::Log::info("  VK GPU: " + std::to_string(blasTransforms.size()) + " BLASes + TLAS built");
+}
+#endif // VEX_BACKEND_VULKAN
+
+// ---------------------------------------------------------------------------
+// SceneGeometryCache::rebuildMaterials
+// ---------------------------------------------------------------------------
+
+void SceneGeometryCache::rebuildMaterials(const Scene& scene, vex::CPURaytracer* cpuRT,
+                                           bool luminanceCDF)
+{
+    m_luminanceCDF = luminanceCDF;
+
+    for (size_t i = 0; i < m_rtTriangles.size(); ++i)
+    {
+        auto [gi, si] = m_rtTriangleSrcSubmesh[i];
+        int triIdx    = m_rtTriangleSrcTriIdx[i];
+        const auto& sm = scene.nodes[gi].submeshes[si];
+        const auto& md = sm.meshData;
+        const auto& v0 = md.vertices[md.indices[triIdx * 3]];
+        m_rtTriangles[i].color            = v0.color   * md.baseColor;
+        m_rtTriangles[i].emissive         = md.emissiveColor * md.emissiveStrength;
+        m_rtTriangles[i].emissiveStrength = md.emissiveStrength;
+        m_rtTriangles[i].materialType     = md.materialType;
+        m_rtTriangles[i].ior              = md.ior;
+        m_rtTriangles[i].roughness        = md.roughness;
+        m_rtTriangles[i].metallic         = md.metallic;
+    }
+
+    m_rtLightIndices.clear();
+    m_rtLightCDF.clear();
+    m_rtTotalLightArea = 0.0f;
+    for (uint32_t i = 0; i < static_cast<uint32_t>(m_rtTriangles.size()); ++i)
+    {
+        if (glm::length(m_rtTriangles[i].emissive) > 0.001f)
+        {
+            m_rtLightIndices.push_back(i);
+            const auto& em = m_rtTriangles[i].emissive;
+            float w = m_luminanceCDF
+                ? (0.2126f * em.r + 0.7152f * em.g + 0.0722f * em.b) * m_rtTriangles[i].area
+                : m_rtTriangles[i].area;
+            m_rtTotalLightArea += w;
+            m_rtLightCDF.push_back(m_rtTotalLightArea);
+        }
+    }
+    if (m_rtTotalLightArea > 0.0f)
+        for (float& c : m_rtLightCDF) c /= m_rtTotalLightArea;
+
+    if (cpuRT)
+        cpuRT->updateMaterials(m_rtTriangles);
+
+#ifdef VEX_BACKEND_VULKAN
+    if (!m_vkTriShading.empty())
+    {
+        static constexpr size_t FLOATS_PER_TRI = 52;
+        auto fBU = [](float v) -> uint32_t { uint32_t u; std::memcpy(&u, &v, sizeof(u)); return u; };
+
+        size_t blasIdx = 0;
+        for (const auto& node : scene.nodes)
+        {
+            for (const auto& sm : node.submeshes)
+            {
+                uint32_t triStart = m_vkInstanceOffsets[blasIdx];
+                size_t   triCount = sm.meshData.indices.size() / 3;
+                for (size_t t = 0; t < triCount; ++t)
+                {
+                    size_t base = (triStart + t) * FLOATS_PER_TRI;
+                    // [2].w = emissiveStrength
+                    m_vkTriShading[base + 11] = sm.meshData.emissiveStrength;
+                    // [4].z/.w = roughness/metallic
+                    m_vkTriShading[base + 18] = sm.meshData.roughness;
+                    m_vkTriShading[base + 19] = sm.meshData.metallic;
+                    // [5].xyz = color tinted by baseColor
+                    const auto& v0 = sm.meshData.vertices[sm.meshData.indices[t * 3]];
+                    m_vkTriShading[base + 20] = v0.color.x * sm.meshData.baseColor.x;
+                    m_vkTriShading[base + 21] = v0.color.y * sm.meshData.baseColor.y;
+                    m_vkTriShading[base + 22] = v0.color.z * sm.meshData.baseColor.z;
+                    // [6].xyz = emissive scaled by emissiveStrength
+                    m_vkTriShading[base + 24] = sm.meshData.emissiveColor.x * sm.meshData.emissiveStrength;
+                    m_vkTriShading[base + 25] = sm.meshData.emissiveColor.y * sm.meshData.emissiveStrength;
+                    m_vkTriShading[base + 26] = sm.meshData.emissiveColor.z * sm.meshData.emissiveStrength;
+                    // [8].x/.y/.z = alphaClip/materialType/ior
+                    m_vkTriShading[base + 32] = sm.meshData.alphaClip ? 1.0f : 0.0f;
+                    m_vkTriShading[base + 33] = static_cast<float>(sm.meshData.materialType);
+                    m_vkTriShading[base + 34] = sm.meshData.ior;
+                }
+                ++blasIdx;
+            }
+        }
+
+        // Rebuild m_vkLights SSBO from updated emissive data
+        std::vector<uint32_t> newLightIdx;
+        std::vector<float>    newLightCDF;
+        float newTotal = 0.0f;
+        size_t bIdx = 0;
+        for (const auto& nd : scene.nodes)
+        {
+            for (const auto& sm2 : nd.submeshes)
+            {
+                if (glm::length(sm2.meshData.emissiveColor) > 0.001f)
+                {
+                    uint32_t triStart2 = m_vkInstanceOffsets[bIdx];
+                    uint32_t triCount2 = static_cast<uint32_t>(sm2.meshData.indices.size() / 3);
+                    for (uint32_t t = 0; t < triCount2; ++t)
+                    {
+                        uint32_t globalTri = triStart2 + t;
+                        float area = m_vkTriShading[globalTri * FLOATS_PER_TRI + 27];
+                        const auto& ec = sm2.meshData.emissiveColor;
+                        float w = m_luminanceCDF
+                            ? (0.2126f * ec.r + 0.7152f * ec.g + 0.0722f * ec.b)
+                              * sm2.meshData.emissiveStrength * area
+                            : area;
+                        newLightIdx.push_back(globalTri);
+                        newTotal += w;
+                        newLightCDF.push_back(newTotal);
+                    }
+                }
+                ++bIdx;
+            }
+        }
+        if (newTotal > 0.0f)
+            for (float& c : newLightCDF) c /= newTotal;
+        m_vkLights.clear();
+        m_vkLights.push_back(static_cast<uint32_t>(newLightIdx.size()));
+        m_vkLights.push_back(fBU(newTotal));
+        m_vkLights.push_back(0u); m_vkLights.push_back(0u);
+        for (uint32_t idx : newLightIdx) m_vkLights.push_back(idx);
+        for (float c : newLightCDF) m_vkLights.push_back(fBU(c));
+    }
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// SceneGeometryCache::rebuildLightCDF
+// ---------------------------------------------------------------------------
+
+void SceneGeometryCache::rebuildLightCDF(bool luminanceCDF)
+{
+    m_luminanceCDF = luminanceCDF;
+
+    // Rebuild CPU/compute light CDF from existing triangle data
+    m_rtLightIndices.clear();
+    m_rtLightCDF.clear();
+    m_rtTotalLightArea = 0.0f;
+    for (uint32_t i = 0; i < static_cast<uint32_t>(m_rtTriangles.size()); ++i)
+    {
+        if (glm::length(m_rtTriangles[i].emissive) > 0.001f)
+        {
+            m_rtLightIndices.push_back(i);
+            const auto& em = m_rtTriangles[i].emissive;
+            float w = m_luminanceCDF
+                ? (0.2126f * em.r + 0.7152f * em.g + 0.0722f * em.b) * m_rtTriangles[i].area
+                : m_rtTriangles[i].area;
+            m_rtTotalLightArea += w;
+            m_rtLightCDF.push_back(m_rtTotalLightArea);
+        }
+    }
+    if (m_rtTotalLightArea > 0.0f)
+        for (float& c : m_rtLightCDF) c /= m_rtTotalLightArea;
+
+#ifdef VEX_BACKEND_VULKAN
+    // Rebuild VK HW RT light SSBO from m_vkTriShading (emissive at [6].xyz, area at [6].w)
+    if (!m_vkTriShading.empty())
+    {
+        auto fBU = [](float f) -> uint32_t { uint32_t u; std::memcpy(&u, &f, sizeof(u)); return u; };
+        constexpr size_t kFloatsPerTri = 52;
+        std::vector<uint32_t> vkIdx;
+        std::vector<float>    vkCDF;
+        float vkTotal = 0.0f;
+        uint32_t triCount = static_cast<uint32_t>(m_vkTriShading.size() / kFloatsPerTri);
+        for (uint32_t i = 0; i < triCount; ++i)
+        {
+            const float* p = &m_vkTriShading[i * kFloatsPerTri];
+            glm::vec3 em(p[24], p[25], p[26]);
+            float area = p[27];
+            if (glm::length(em) > 0.001f)
+            {
+                vkIdx.push_back(i);
+                float w = m_luminanceCDF
+                    ? (0.2126f * em.r + 0.7152f * em.g + 0.0722f * em.b) * area
+                    : area;
+                vkTotal += w;
+                vkCDF.push_back(vkTotal);
+            }
+        }
+        if (vkTotal > 0.0f)
+            for (float& c : vkCDF) c /= vkTotal;
+        m_vkLights.clear();
+        m_vkLights.push_back(static_cast<uint32_t>(vkIdx.size()));
+        m_vkLights.push_back(fBU(vkTotal));
+        m_vkLights.push_back(0); m_vkLights.push_back(0);
+        for (uint32_t idx : vkIdx)  m_vkLights.push_back(idx);
+        for (float  c   : vkCDF)    m_vkLights.push_back(fBU(c));
+    }
+#endif
+}

@@ -2,6 +2,7 @@
 
 #include "mesh_group_save.h"
 #include "scene.h"  // SceneVolume is defined here
+#include "selection.h"
 
 #include <glm/glm.hpp>
 #include <deque>
@@ -11,15 +12,14 @@
 
 struct Scene;
 class SceneRenderer;
-class EditorUI;
 
 // ── Command interface ────────────────────────────────────────────────────────
 
 struct ICommand
 {
     virtual ~ICommand() = default;
-    virtual void undo(Scene& s, SceneRenderer& r, EditorUI& ui) = 0;
-    virtual void redo(Scene& s, SceneRenderer& r, EditorUI& ui) = 0;
+    virtual void undo(Scene& s, SceneRenderer& r, SelectionState& sel) = 0;
+    virtual void redo(Scene& s, SceneRenderer& r, SelectionState& sel) = 0;
 };
 
 // ── Concrete commands ────────────────────────────────────────────────────────
@@ -34,8 +34,8 @@ struct CmdAddNode : ICommand
 
     CmdAddNode(NodeSave s, int idx, int parent = -1, int sibPos = -1)
         : save(std::move(s)), insertionIndex(idx), parentIndex(parent), siblingPos(sibPos) {}
-    void undo(Scene& s, SceneRenderer& r, EditorUI& ui) override;
-    void redo(Scene& s, SceneRenderer& r, EditorUI& ui) override;
+    void undo(Scene& s, SceneRenderer& r, SelectionState& sel) override;
+    void redo(Scene& s, SceneRenderer& r, SelectionState& sel) override;
 };
 
 // Deletes a subtree rooted at a node. Saves entire subtree for undo.
@@ -47,8 +47,8 @@ struct CmdDeleteNode : ICommand
     int                   rootSiblingPos;    // position of root in parent's childIndices
 
     CmdDeleteNode(const Scene& scene, int rootNodeIdx);
-    void undo(Scene& s, SceneRenderer& r, EditorUI& ui) override;
-    void redo(Scene& s, SceneRenderer& r, EditorUI& ui) override;
+    void undo(Scene& s, SceneRenderer& r, SelectionState& sel) override;
+    void redo(Scene& s, SceneRenderer& r, SelectionState& sel) override;
 
 private:
     static NodeSave captureNode(const Scene& scene, int nodeIdx);
@@ -68,8 +68,8 @@ struct CmdReparent : ICommand
                 glm::mat4 oldLocal, glm::mat4 newLocal)
         : nodeIdx(node), oldParentIdx(oldPar), newParentIdx(newPar),
           oldSiblingPos(oldSibPos), oldLocalMatrix(oldLocal), newLocalMatrix(newLocal) {}
-    void undo(Scene& s, SceneRenderer& r, EditorUI& ui) override;
-    void redo(Scene& s, SceneRenderer& r, EditorUI& ui) override;
+    void undo(Scene& s, SceneRenderer& r, SelectionState& sel) override;
+    void redo(Scene& s, SceneRenderer& r, SelectionState& sel) override;
 };
 
 struct CmdAddVolume : ICommand
@@ -78,8 +78,8 @@ struct CmdAddVolume : ICommand
     int         index;
 
     CmdAddVolume(SceneVolume v, int idx) : vol(std::move(v)), index(idx) {}
-    void undo(Scene& s, SceneRenderer& r, EditorUI& ui) override;
-    void redo(Scene& s, SceneRenderer& r, EditorUI& ui) override;
+    void undo(Scene& s, SceneRenderer& r, SelectionState& sel) override;
+    void redo(Scene& s, SceneRenderer& r, SelectionState& sel) override;
 };
 
 struct CmdDeleteVolume : ICommand
@@ -88,8 +88,8 @@ struct CmdDeleteVolume : ICommand
     int         index;
 
     CmdDeleteVolume(SceneVolume v, int idx) : vol(std::move(v)), index(idx) {}
-    void undo(Scene& s, SceneRenderer& r, EditorUI& ui) override;
-    void redo(Scene& s, SceneRenderer& r, EditorUI& ui) override;
+    void undo(Scene& s, SceneRenderer& r, SelectionState& sel) override;
+    void redo(Scene& s, SceneRenderer& r, SelectionState& sel) override;
 };
 
 // Undo/redo wrapper for OBJ import: swaps CmdDeleteNode's undo/redo so that
@@ -98,8 +98,8 @@ struct CmdImportUndo : ICommand
 {
     CmdDeleteNode delCmd;
     explicit CmdImportUndo(CmdDeleteNode d) : delCmd(std::move(d)) {}
-    void undo(Scene& s, SceneRenderer& r, EditorUI& ui) override { delCmd.redo(s, r, ui); }
-    void redo(Scene& s, SceneRenderer& r, EditorUI& ui) override { delCmd.undo(s, r, ui); }
+    void undo(Scene& s, SceneRenderer& r, SelectionState& sel) override { delCmd.redo(s, r, sel); }
+    void redo(Scene& s, SceneRenderer& r, SelectionState& sel) override { delCmd.undo(s, r, sel); }
 };
 
 // Simplified transform command: stores nodeIdx + local matrix before/after.
@@ -111,8 +111,8 @@ struct CmdSetTransform : ICommand
 
     CmdSetTransform(int idx, glm::mat4 b, glm::mat4 a)
         : nodeIdx(idx), before(b), after(a) {}
-    void undo(Scene& s, SceneRenderer& r, EditorUI& ui) override;
-    void redo(Scene& s, SceneRenderer& r, EditorUI& ui) override;
+    void undo(Scene& s, SceneRenderer& r, SelectionState& sel) override;
+    void redo(Scene& s, SceneRenderer& r, SelectionState& sel) override;
 };
 
 // ── Command stack ────────────────────────────────────────────────────────────
@@ -123,9 +123,9 @@ public:
     static constexpr int MAX_UNDO = 50;
 
     // Execute cmd immediately (calls redo), push to undo stack, clear redo stack.
-    void execute(std::unique_ptr<ICommand> cmd, Scene& s, SceneRenderer& r, EditorUI& ui)
+    void execute(std::unique_ptr<ICommand> cmd, Scene& s, SceneRenderer& r, SelectionState& sel)
     {
-        cmd->redo(s, r, ui);
+        cmd->redo(s, r, sel);
         push(std::move(cmd));
     }
 
@@ -135,21 +135,21 @@ public:
         push(std::move(cmd));
     }
 
-    void undo(Scene& s, SceneRenderer& r, EditorUI& ui)
+    void undo(Scene& s, SceneRenderer& r, SelectionState& sel)
     {
         if (m_undoStack.empty()) return;
         auto cmd = std::move(m_undoStack.back());
         m_undoStack.pop_back();
-        cmd->undo(s, r, ui);
+        cmd->undo(s, r, sel);
         m_redoStack.push_back(std::move(cmd));
     }
 
-    void redo(Scene& s, SceneRenderer& r, EditorUI& ui)
+    void redo(Scene& s, SceneRenderer& r, SelectionState& sel)
     {
         if (m_redoStack.empty()) return;
         auto cmd = std::move(m_redoStack.back());
         m_redoStack.pop_back();
-        cmd->redo(s, r, ui);
+        cmd->redo(s, r, sel);
         m_undoStack.push_back(std::move(cmd));
     }
 

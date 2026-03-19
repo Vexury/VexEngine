@@ -1,7 +1,7 @@
 #include "command.h"
 #include "scene.h"
+#include "scene_importer.h"
 #include "scene_renderer.h"
-#include "editor_ui.h"
 
 #include <vex/core/log.h>
 #include <vex/raytracing/bvh.h>
@@ -34,9 +34,9 @@ static void attachToParent(Scene& s, int nodeIdx, int parentIdx, int siblingPos)
 
 // ── CmdAddNode ────────────────────────────────────────────────────────────────
 
-void CmdAddNode::redo(Scene& s, SceneRenderer& /*r*/, EditorUI& ui)
+void CmdAddNode::redo(Scene& s, SceneRenderer& /*r*/, SelectionState& sel)
 {
-    s.addNodeFromSave(save, insertionIndex);
+    SceneImporter::addNodeFromSave(s,save, insertionIndex);
     // addNodeFromSave inserts at insertionIndex (or appends if out of range).
     // Update insertionIndex to reflect actual position.
     insertionIndex = (insertionIndex >= 0 && insertionIndex < (int)s.nodes.size() - 1)
@@ -54,14 +54,14 @@ void CmdAddNode::redo(Scene& s, SceneRenderer& /*r*/, EditorUI& ui)
         s.nodes[insertionIndex].parentIndex = parentIndex;
     }
 
-    ui.setSelection(Selection::Mesh, insertionIndex);
+    sel.set(Selection::Mesh, insertionIndex);
 }
 
-void CmdAddNode::undo(Scene& s, SceneRenderer& r, EditorUI& ui)
+void CmdAddNode::undo(Scene& s, SceneRenderer& r, SelectionState& sel)
 {
     if (insertionIndex < 0 || insertionIndex >= (int)s.nodes.size())
     {
-        ui.clearSelection();
+        sel.clear();
         return;
     }
     r.waitIdle();
@@ -73,7 +73,7 @@ void CmdAddNode::undo(Scene& s, SceneRenderer& r, EditorUI& ui)
     s.nodes.erase(s.nodes.begin() + insertionIndex);
     fixRefsAfterRemove(s, insertionIndex);
     s.geometryDirty = true;
-    ui.clearSelection();
+    sel.clear();
 }
 
 // ── CmdDeleteNode ─────────────────────────────────────────────────────────────
@@ -122,9 +122,9 @@ CmdDeleteNode::CmdDeleteNode(const Scene& scene, int rootNodeIdx)
     }
 }
 
-void CmdDeleteNode::redo(Scene& s, SceneRenderer& r, EditorUI& ui)
+void CmdDeleteNode::redo(Scene& s, SceneRenderer& r, SelectionState& sel)
 {
-    if (originalIndices.empty()) { ui.clearSelection(); return; }
+    if (originalIndices.empty()) { sel.clear(); return; }
     r.waitIdle();
 
     int rootNodeIdx = originalIndices[0];  // ascending: first = lowest = root
@@ -143,17 +143,17 @@ void CmdDeleteNode::redo(Scene& s, SceneRenderer& r, EditorUI& ui)
     }
 
     s.geometryDirty = true;
-    ui.clearSelection();
+    sel.clear();
 }
 
-void CmdDeleteNode::undo(Scene& s, SceneRenderer& /*r*/, EditorUI& ui)
+void CmdDeleteNode::undo(Scene& s, SceneRenderer& /*r*/, SelectionState& sel)
 {
     // Insert all subtree nodes back in ascending order.
     // After all insertions, re-link parentIndex/childIndices from saves
     // (fixRefsAfterInsert inside addNodeFromSave shifts existing nodes' refs,
     //  but the restored nodes' refs need to be set explicitly from saves).
     for (int i = 0; i < (int)originalIndices.size(); ++i)
-        s.addNodeFromSave(subtreeSaves[i], originalIndices[i]);
+        SceneImporter::addNodeFromSave(s,subtreeSaves[i], originalIndices[i]);
 
     // Re-link: overwrite parentIndex/childIndices for all restored nodes from saves
     for (int i = 0; i < (int)originalIndices.size(); ++i)
@@ -183,12 +183,12 @@ void CmdDeleteNode::undo(Scene& s, SceneRenderer& /*r*/, EditorUI& ui)
     }
 
     s.geometryDirty = true;
-    ui.setSelection(Selection::Mesh, rootNodeIdx);
+    sel.set(Selection::Mesh, rootNodeIdx);
 }
 
 // ── CmdReparent ──────────────────────────────────────────────────────────────
 
-void CmdReparent::redo(Scene& s, SceneRenderer& /*r*/, EditorUI& /*ui*/)
+void CmdReparent::redo(Scene& s, SceneRenderer& /*r*/, SelectionState& /*sel*/)
 {
     if (nodeIdx < 0 || nodeIdx >= (int)s.nodes.size()) return;
 
@@ -199,7 +199,7 @@ void CmdReparent::redo(Scene& s, SceneRenderer& /*r*/, EditorUI& /*ui*/)
     s.geometryDirty = true;
 }
 
-void CmdReparent::undo(Scene& s, SceneRenderer& /*r*/, EditorUI& /*ui*/)
+void CmdReparent::undo(Scene& s, SceneRenderer& /*r*/, SelectionState& /*sel*/)
 {
     if (nodeIdx < 0 || nodeIdx >= (int)s.nodes.size()) return;
 
@@ -212,57 +212,57 @@ void CmdReparent::undo(Scene& s, SceneRenderer& /*r*/, EditorUI& /*ui*/)
 
 // ── CmdAddVolume ─────────────────────────────────────────────────────────────
 
-void CmdAddVolume::redo(Scene& s, SceneRenderer& /*r*/, EditorUI& ui)
+void CmdAddVolume::redo(Scene& s, SceneRenderer& /*r*/, SelectionState& sel)
 {
     s.volumes.push_back(vol);
     index = static_cast<int>(s.volumes.size()) - 1;
-    ui.setSelection(Selection::Volume, index);
+    sel.set(Selection::Volume, index);
 }
 
-void CmdAddVolume::undo(Scene& s, SceneRenderer& /*r*/, EditorUI& ui)
+void CmdAddVolume::undo(Scene& s, SceneRenderer& /*r*/, SelectionState& sel)
 {
     if (index < 0 || index >= static_cast<int>(s.volumes.size()))
     {
-        ui.clearSelection();
+        sel.clear();
         return;
     }
     s.volumes.erase(s.volumes.begin() + index);
-    ui.clearSelection();
+    sel.clear();
 }
 
 // ── CmdDeleteVolume ──────────────────────────────────────────────────────────
 
-void CmdDeleteVolume::redo(Scene& s, SceneRenderer& /*r*/, EditorUI& ui)
+void CmdDeleteVolume::redo(Scene& s, SceneRenderer& /*r*/, SelectionState& sel)
 {
     if (index < 0 || index >= static_cast<int>(s.volumes.size()))
     {
-        ui.clearSelection();
+        sel.clear();
         return;
     }
     vex::Log::info("Deleted volume: " + s.volumes[index].name);
     s.volumes.erase(s.volumes.begin() + index);
-    ui.clearSelection();
+    sel.clear();
 }
 
-void CmdDeleteVolume::undo(Scene& s, SceneRenderer& /*r*/, EditorUI& ui)
+void CmdDeleteVolume::undo(Scene& s, SceneRenderer& /*r*/, SelectionState& sel)
 {
     if (index >= 0 && index <= static_cast<int>(s.volumes.size()))
         s.volumes.insert(s.volumes.begin() + index, vol);
     else
         s.volumes.push_back(vol);
-    ui.setSelection(Selection::Volume, index);
+    sel.set(Selection::Volume, index);
 }
 
 // ── CmdSetTransform ──────────────────────────────────────────────────────────
 
-void CmdSetTransform::redo(Scene& s, SceneRenderer& /*r*/, EditorUI& /*ui*/)
+void CmdSetTransform::redo(Scene& s, SceneRenderer& /*r*/, SelectionState& /*sel*/)
 {
     if (nodeIdx < 0 || nodeIdx >= (int)s.nodes.size()) return;
     s.nodes[nodeIdx].localMatrix = after;
     s.geometryDirty = true;
 }
 
-void CmdSetTransform::undo(Scene& s, SceneRenderer& /*r*/, EditorUI& /*ui*/)
+void CmdSetTransform::undo(Scene& s, SceneRenderer& /*r*/, SelectionState& /*sel*/)
 {
     if (nodeIdx < 0 || nodeIdx >= (int)s.nodes.size()) return;
     s.nodes[nodeIdx].localMatrix = before;

@@ -114,9 +114,9 @@ std::vector<MeshData> MeshData::loadOBJ(const std::string& path)
     {
         char buf[256];
         std::snprintf(buf, sizeof(buf),
-            "  OBJ parsed in %.0f ms  (%zu shapes, %zu materials, %.1fM verts raw)",
+            "  OBJ parsed in %.0f ms  (%zu shapes, %zu materials, %zu verts)",
             t_parse_ms, shapes.size(), materials.size(),
-            static_cast<double>(attrib.vertices.size() / 3) / 1e6);
+            attrib.vertices.size() / 3);
         Log::info(buf);
     }
 

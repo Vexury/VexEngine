@@ -749,7 +749,13 @@ void VKShader::clearExternalTextureCache()
 {
     m_externalTextureDescSets.clear();
     if (m_externalTexturePool)
+    {
+        // vkResetDescriptorPool requires all uses of its descriptor sets to have
+        // completed. With MAX_FRAMES_IN_FLIGHT=2 the per-frame fence only guarantees
+        // frame N-2 is done, so stall the device here before resetting.
+        vkDeviceWaitIdle(VKContext::get().getDevice());
         vkResetDescriptorPool(VKContext::get().getDevice(), m_externalTexturePool, 0);
+    }
 }
 
 void VKShader::setExternalTextureVK(uint32_t slot, VkImageView view, VkSampler sampler, VkImageLayout layout)

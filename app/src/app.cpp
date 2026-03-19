@@ -1,4 +1,5 @@
 #include "app.h"
+#include "scene_importer.h"
 
 #include <vex/core/window.h>
 #include <vex/core/log.h>
@@ -55,13 +56,15 @@ bool App::init(const vex::EngineConfig& config)
     if (config.headless)
         return true;
 
-    if (!m_scene.importOBJ("VexAssetsCC0/Scenes/ChessSet/ChessSet.obj", "Chess Set"))
+    if (!SceneImporter::importOBJ(m_scene, "VexAssetsCC0/Scenes/ChessSet/ChessSet.obj", "Chess Set"))
         return false;
 
     m_scene.skybox = vex::Skybox::create();
 
     if (!m_renderer.init(m_scene))
         return false;
+
+    m_ui.init(m_selection);
 
     m_scene.camera.fov = 45.0f;
 
@@ -129,7 +132,7 @@ void App::duplicateSelected()
 
     int newIdx = static_cast<int>(m_scene.nodes.size());
     auto cmd = std::make_unique<CmdAddNode>(std::move(save), newIdx, node.parentIndex, -1);
-    m_cmdStack.execute(std::move(cmd), m_scene, m_renderer, m_ui);
+    m_cmdStack.execute(std::move(cmd), m_scene, m_renderer, m_selection);
 }
 
 void App::handleInput()
@@ -192,9 +195,9 @@ void App::handleInput()
     {
         bool ctrl = ImGui::GetIO().KeyCtrl;
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Z))
-            m_cmdStack.undo(m_scene, m_renderer, m_ui);
+            m_cmdStack.undo(m_scene, m_renderer, m_selection);
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Y))
-            m_cmdStack.redo(m_scene, m_renderer, m_ui);
+            m_cmdStack.redo(m_scene, m_renderer, m_selection);
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_D))
             duplicateSelected();
     }
@@ -228,7 +231,7 @@ void App::handleInput()
                 if (idx >= 0 && idx < static_cast<int>(m_scene.nodes.size()))
                 {
                     auto cmd = std::make_unique<CmdDeleteNode>(m_scene, idx);
-                    m_cmdStack.execute(std::move(cmd), m_scene, m_renderer, m_ui);
+                    m_cmdStack.execute(std::move(cmd), m_scene, m_renderer, m_selection);
                 }
                 else
                 {
@@ -242,7 +245,7 @@ void App::handleInput()
                 if (idx >= 0 && idx < static_cast<int>(m_scene.volumes.size()))
                 {
                     auto cmd = std::make_unique<CmdDeleteVolume>(m_scene.volumes[idx], idx);
-                    m_cmdStack.execute(std::move(cmd), m_scene, m_renderer, m_ui);
+                    m_cmdStack.execute(std::move(cmd), m_scene, m_renderer, m_selection);
                 }
                 else
                 {
@@ -333,7 +336,7 @@ void App::runImport(const std::string& path, const std::string& name, bool isGlt
     if (isGltf)
     {
         pumpFrame("Parsing GLTF...", 0.05f);
-        if (!m_scene.importGLTF(path, name, pumpFrame))
+        if (!SceneImporter::importGLTF(m_scene, path, name, pumpFrame))
         {
             vex::Log::error("Failed to load: " + path);
             m_ui.clearLoadingState();
@@ -343,7 +346,7 @@ void App::runImport(const std::string& path, const std::string& name, bool isGlt
     else
     {
         pumpFrame("Parsing OBJ...", 0.05f);
-        if (!m_scene.importOBJ(path, name, pumpFrame))
+        if (!SceneImporter::importOBJ(m_scene, path, name, pumpFrame))
         {
             vex::Log::error("Failed to load: " + path);
             m_ui.clearLoadingState();
@@ -402,7 +405,7 @@ void App::run()
 
                 int newIdx = static_cast<int>(m_scene.nodes.size());
                 auto cmd = std::make_unique<CmdAddNode>(std::move(save), newIdx);
-                m_cmdStack.execute(std::move(cmd), m_scene, m_renderer, m_ui);
+                m_cmdStack.execute(std::move(cmd), m_scene, m_renderer, m_selection);
 
                 if (newIdx < static_cast<int>(m_scene.nodes.size()))
                 {
@@ -424,7 +427,7 @@ void App::run()
             v.name = "Volume";
             int newIdx = static_cast<int>(m_scene.volumes.size());
             auto cmd = std::make_unique<CmdAddVolume>(v, newIdx);
-            m_cmdStack.execute(std::move(cmd), m_scene, m_renderer, m_ui);
+            m_cmdStack.execute(std::move(cmd), m_scene, m_renderer, m_selection);
         }
 
         // Handle deferred duplicate
@@ -463,7 +466,7 @@ void App::run()
 
                     auto cmd = std::make_unique<CmdReparent>(
                         nodeIdx, oldParent, pr.newParentIdx, oldSibPos, oldLocal, newLocal);
-                    m_cmdStack.execute(std::move(cmd), m_scene, m_renderer, m_ui);
+                    m_cmdStack.execute(std::move(cmd), m_scene, m_renderer, m_selection);
                 }
             }
         }

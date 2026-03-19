@@ -2,8 +2,18 @@ add_executable(vex_app
     src/main.cpp
     src/app.cpp
     src/scene.cpp
+    src/scene_importer.cpp
     src/scene_renderer.cpp
+    src/scene_geometry_cache.cpp
+    src/render_mode_rasterize.cpp
+    src/render_mode_cpu_raytrace.cpp
+    src/render_mode_gpu_raytrace.cpp
+    src/render_mode_compute_raytrace.cpp
     src/editor_ui.cpp
+    src/editor_ui_viewport.cpp
+    src/editor_ui_hierarchy.cpp
+    src/editor_ui_inspector.cpp
+    src/editor_ui_settings.cpp
     src/file_dialog.cpp
     src/denoiser.cpp
     src/command.cpp

@@ -8,14 +8,13 @@
 #include <vex/raytracing/bvh.h>
 
 #include "denoiser.h"
-
-#ifdef VEX_BACKEND_OPENGL
-#include <vex/opengl/gl_gpu_raytracer.h>
-#endif
-
+#include "render_mode.h"
+#include "scene_geometry_cache.h"
+#include "render_mode_rasterize.h"
+#include "render_mode_cpu_raytrace.h"
+#include "render_mode_gpu_raytrace.h"
 #ifdef VEX_BACKEND_VULKAN
-#include <vex/vulkan/vk_gpu_raytracer.h>
-#include <vex/vulkan/vk_compute_raytracer.h>
+#include "render_mode_compute_raytrace.h"
 #endif
 
 #include <glm/glm.hpp>
@@ -66,21 +65,8 @@ public:
     uintptr_t getShadowMapDisplayHandle();
     bool      shadowMapFlipsUV() const; // true on GL (origin bottom-left)
 
-    float getShadowNormalBiasTexels() const { return m_shadowNormalBiasTexels; }
-    void  setShadowNormalBiasTexels(float v) { m_shadowNormalBiasTexels = v; }
-
-    bool  getRasterEnableShadows() const { return m_rasterEnableShadows; }
-    void  setRasterEnableShadows(bool v) { m_rasterEnableShadows = v; }
-
-    float      getShadowStrength() const { return m_shadowStrength; }
-    void       setShadowStrength(float v) { m_shadowStrength = v; }
-    glm::vec3  getShadowColor() const { return m_shadowColor; }
-    void       setShadowColor(glm::vec3 v) { m_shadowColor = v; }
-
-    uint32_t getCPUMaxSamples() const { return m_cpuMaxSamples; }
-    void     setCPUMaxSamples(uint32_t v) { m_cpuMaxSamples = v; }
-    uint32_t getGPUMaxSamples() const { return m_gpuMaxSamples; }
-    void     setGPUMaxSamples(uint32_t v) { m_gpuMaxSamples = v; }
+    uint32_t getMaxSamples() const { return m_maxSamples; }
+    void     setMaxSamples(uint32_t v) { m_maxSamples = v; }
 
     bool saveImage(const std::string& path) const;
     bool saveShadowMap(const std::string& path) const;
@@ -93,106 +79,13 @@ public:
 
     uint32_t getRaytraceSampleCount() const;
 
-    void setMaxDepth(int depth);
-    int  getMaxDepth() const;
-
-    void setEnableNEE(bool v);
-    bool getEnableNEE() const;
-
     void setUseLuminanceCDF(bool v);
     bool getUseLuminanceCDF() const { return m_luminanceCDF; }
-
-    void setEnableFireflyClamping(bool v);
-    bool getEnableFireflyClamping() const;
-
-    void setEnableAA(bool v);
-    bool getEnableAA() const;
-
-    void setEnableEnvironment(bool v);
-    bool getEnableEnvironment() const;
-
-    void  setEnvLightMultiplier(float v);
-    float getEnvLightMultiplier() const;
-
-    void setFlatShading(bool v);
-    bool getFlatShading() const;
-
-    void setEnableNormalMapping(bool v);
-    bool getEnableNormalMapping() const;
-
-    void setEnableEmissive(bool v);
-    bool getEnableEmissive() const;
-
-    void setExposure(float v);
-    float getExposure() const;
-
-    void setGamma(float v);
-    float getGamma() const;
-
-    void setEnableACES(bool v);
-    bool getEnableACES() const;
-
-    void setRayEps(float v);
-    float getRayEps() const;
-
-    void setEnableRR(bool v);
-    bool getEnableRR() const;
 
     uint32_t getBVHNodeCount() const;
     size_t   getBVHMemoryBytes() const;
     vex::AABB getBVHRootAABB() const;
     float    getBVHSAHCost() const;
-
-    // GPU raytracing settings (separate from CPU to allow independent control)
-    void setGPUMaxDepth(int d);
-    int  getGPUMaxDepth() const;
-    void setGPUEnableNEE(bool v);
-    bool getGPUEnableNEE() const;
-    void setGPUEnableAA(bool v);
-    bool getGPUEnableAA() const;
-    void setGPUEnableFireflyClamping(bool v);
-    bool getGPUEnableFireflyClamping() const;
-    void setGPUEnableEnvironment(bool v);
-    bool getGPUEnableEnvironment() const;
-    void  setGPUEnvLightMultiplier(float v);
-    float getGPUEnvLightMultiplier() const;
-
-    void  setRasterEnableEnvLighting(bool v);
-    bool  getRasterEnableEnvLighting() const;
-    void  setRasterEnvLightMultiplier(float v);
-    float getRasterEnvLightMultiplier() const;
-    void  setRasterExposure(float v);
-    float getRasterExposure() const;
-    void  setRasterGamma(float v);
-    float getRasterGamma() const;
-    void  setRasterEnableACES(bool v);
-    bool  getRasterEnableACES() const;
-    void setGPUFlatShading(bool v);
-    bool getGPUFlatShading() const;
-    void setGPUEnableNormalMapping(bool v);
-    bool getGPUEnableNormalMapping() const;
-    void setGPUEnableEmissive(bool v);
-    bool getGPUEnableEmissive() const;
-    void setGPUBilinearFiltering(bool v);
-    bool getGPUBilinearFiltering() const;
-    void  setVKSamplerType(int v);
-    int   getVKSamplerType() const;
-#ifdef VEX_BACKEND_VULKAN
-    float getVKSamplesPerSec() const { return m_vkSamplesPerSec; }
-    float getVKComputeSamplesPerSec() const { return m_vkComputeSamplesPerSec; }
-#endif
-    void setGPUExposure(float v);
-    float getGPUExposure() const;
-    void setGPUGamma(float v);
-    float getGPUGamma() const;
-    void setGPUEnableACES(bool v);
-    bool getGPUEnableACES() const;
-
-    void setGPURayEps(float v);
-    float getGPURayEps() const;
-
-    void setGPUEnableRR(bool v);
-    bool getGPUEnableRR() const;
 
     bool reloadGPUShader();
 
@@ -202,15 +95,16 @@ public:
     bool isDenoiserReady() const { return m_denoiser && m_denoiser->isReady(); }
     bool getShowDenoisedResult() const { return m_showDenoisedResult; }
 
-    // Bloom (all render paths: GL/VK rasterizer and GPU RT)
-    void  setBloomEnabled(bool v)    { m_bloomEnabled = v; }
-    bool  getBloomEnabled() const    { return m_bloomEnabled; }
-    void  setBloomIntensity(float v) { m_bloomIntensity = v; }
-    float getBloomIntensity() const  { return m_bloomIntensity; }
-    void  setBloomThreshold(float v) { m_bloomThreshold = v; }
-    float getBloomThreshold() const  { return m_bloomThreshold; }
-    void  setBloomBlurPasses(int v)  { m_bloomBlurPasses = v < 1 ? 1 : v; }
-    int   getBloomBlurPasses() const { return m_bloomBlurPasses; }
+#ifdef VEX_BACKEND_VULKAN
+    float getVKSamplesPerSec() const;
+    float getVKComputeSamplesPerSec() const;
+#endif
+
+    // Struct-based settings access (replaces ~50 individual getters/setters)
+    CPURTSettings&  getCPURTSettings()  { return m_cpuRTSettings; }
+    VKRTSettings&   getGPURTSettings()  { return m_gpuMode ? m_gpuMode->getSettings() : m_gpuRTFallback; }
+    RasterSettings& getRasterSettings() { return m_rasterSettings; }
+    BloomSettings&  getBloomSettings()  { return m_bloomSettings; }
 
     // Explicitly rebuild acceleration structures / BVH with optional progress callbacks.
     // Called from App::runImport between frames so the overlay can update at each stage.
@@ -219,174 +113,96 @@ public:
     void buildGeometry(Scene& scene, ProgressFn progress = nullptr);
 
 private:
-    void renderRasterize(Scene& scene, int selectedNodeIdx, int selectedSubmesh);
-    void renderCPURaytrace(Scene& scene);
+    // Helpers
     void renderOutlineMask(Scene& scene, int selectedNodeIdx,
                            const glm::mat4& view, const glm::mat4& proj);
     void rebuildMaterials(Scene& scene);
-
-    static constexpr uint32_t SHADOW_MAP_SIZE = 4096;
-#ifdef VEX_BACKEND_OPENGL
-    void renderGPURaytrace(Scene& scene);
-#endif
-#ifdef VEX_BACKEND_VULKAN
-    void renderVKRaytrace(Scene& scene);
-    void renderVKComputeRaytrace(Scene& scene);
-#endif
     void rebuildRaytraceGeometry(Scene& scene, ProgressFn progress = nullptr);
 
-    std::unique_ptr<vex::Shader> m_meshShader;
+    SharedRenderData buildSharedRenderData();
+    FrameChanges     computeFrameChanges(Scene& scene);
+
+    // Env loading helpers (update m_vkEnvMapData/CdfData + m_vkRasterEnvTex + m_rasterEnvMapTex)
+    void loadEnvData(Scene& scene); // called from computeFrameChanges on env change
+
+    // Lazy-apply settings to the underlying render mode objects (called each renderScene())
+    void applyCPURTSettings();
+    void applyRasterSettings();
+#ifdef VEX_BACKEND_OPENGL
+    void applyGPURTSettingsGL();
+#endif
+
+    // --- Render mode objects ---
+    IRenderMode*                        m_activeMode  = nullptr; // non-owning, points into one of the unique_ptrs below
+    std::unique_ptr<RasterizeMode>      m_rasterMode;
+    std::unique_ptr<CPURaytraceMode>    m_cpuMode;
+    std::unique_ptr<GPURaytraceMode>    m_gpuMode;
+#ifdef VEX_BACKEND_VULKAN
+    std::unique_ptr<VKComputeRaytraceMode> m_computeMode;
+#endif
+
+    // --- Core shared resources (never moved to modes) ---
+    std::unique_ptr<vex::Shader>      m_meshShader;
     std::unique_ptr<vex::Framebuffer> m_framebuffer;
-    std::unique_ptr<vex::Texture2D> m_whiteTexture;
-    std::unique_ptr<vex::Texture2D> m_flatNormalTexture;
+    std::unique_ptr<vex::Texture2D>   m_whiteTexture;
+    std::unique_ptr<vex::Texture2D>   m_flatNormalTexture;
 
-    // Shadow map (directional / sun light)
-    std::unique_ptr<vex::Framebuffer> m_shadowFB;
-    std::unique_ptr<vex::Shader>      m_shadowShader;
-    bool      m_shadowMapEverRendered  = false;
-    float     m_shadowNormalBiasTexels = 1.5f;
-    bool      m_rasterEnableShadows    = true;
-    float     m_shadowStrength         = 1.0f;
-    glm::vec3 m_shadowColor            = {0.0f, 0.0f, 0.0f};
-
-    uint32_t  m_cpuMaxSamples = 0; // 0 = unlimited
-    uint32_t  m_gpuMaxSamples = 0; // 0 = unlimited (shared by GL and VK GPU RT)
-    // Local-space AABB per node (one entry per SceneNode, rebuilt in rebuildRaytraceGeometry).
-    // The world-space scene AABB for shadow frustum fitting is computed each frame by
-    // transforming these 8 corners by the current node's world matrix, so gizmo transforms
-    // are always reflected without needing a full geometry rebuild.
-    std::vector<vex::AABB> m_nodeLocalAABBs;
-
-    // Screen-space outline (both backends)
+    // Screen-space outline
     std::unique_ptr<vex::Framebuffer> m_outlineMaskFB;
     std::unique_ptr<vex::Shader>      m_outlineMaskShader;
-    bool m_outlineActive = false; // true when a selection was rendered into m_outlineMaskFB this frame
+    bool m_outlineActive = false;
 
-    // OpenGL-only: picking shader/framebuffer
-    std::unique_ptr<vex::Shader>      m_pickShader;
-    std::unique_ptr<vex::Framebuffer> m_pickFB;
+    // Fullscreen display shaders/quad (shared by all modes)
+    std::unique_ptr<vex::Mesh>   m_fullscreenQuad;
+    std::unique_ptr<vex::Shader> m_fullscreenRTShader;
+
+    // Bloom post-processing (shared across all render modes, FBs owned here)
+    std::unique_ptr<vex::Framebuffer> m_bloomFB[2];
+    std::unique_ptr<vex::Shader>      m_bloomThresholdShader;
+    std::unique_ptr<vex::Shader>      m_bloomBlurShader;
+
+    // Sample limits
+    uint32_t m_maxSamples = 0;
 
     int m_drawCalls = 0;
 
     // Render mode
     RenderMode m_renderMode = RenderMode::Rasterize;
     DebugMode  m_debugMode  = DebugMode::None;
-    bool m_enableNormalMapping = true;
 
-    // Samples/sec — shared EMA for CPU RT and GL GPU RT modes
-    float                                        m_samplesPerSec    = 0.0f;
-    std::chrono::steady_clock::time_point        m_lastSampleTime   = {};
+    // Settings structs (single source of truth for each domain)
+    CPURTSettings  m_cpuRTSettings;
+    RasterSettings m_rasterSettings;
+    BloomSettings  m_bloomSettings;
+    VKRTSettings   m_gpuRTFallback;  // returned by getGPURTSettings() when m_gpuMode is null
 
     // CPU raytracing
-    bool m_cpuBVHDirty        = false; // CPU BVH not yet built for current geometry
-    bool m_pendingGeomRebuild = false; // set when switching to any RT mode; forces rebuildRaytraceGeometry
+    bool m_pendingGeomRebuild = false;
     std::unique_ptr<vex::CPURaytracer> m_cpuRaytracer;
-    std::unique_ptr<vex::Texture2D> m_raytraceTexture;
-    std::unique_ptr<vex::Shader> m_fullscreenShader;
-    std::unique_ptr<vex::Mesh> m_fullscreenQuad;
+    std::unique_ptr<vex::Texture2D>    m_raytraceTexture; // CPU/denoised display texture
     uint32_t m_raytraceTexW = 0;
     uint32_t m_raytraceTexH = 0;
 
-    // Rasterizer env + post-process state
+    // Rasterizer env + env color (updated by env-loading path, read by RasterizeMode via shared)
 #ifdef VEX_BACKEND_OPENGL
-    uint32_t m_rasterEnvMapTex = 0;
-#endif
-    std::unique_ptr<vex::Framebuffer> m_rasterHDRFB;
-    float m_rasterExposure   = 0.0f;
-    float m_rasterGamma      = 2.2f;
-    bool  m_rasterEnableACES = true;
-    glm::vec3 m_rasterEnvColor { 0.5f };
-    bool  m_rasterEnableEnvLighting  = true;
-    float m_rasterEnvLightMultiplier = 0.3f;
-
-    // Bloom post-processing
-    bool  m_bloomEnabled    = false;
-    float m_bloomIntensity  = 0.05f;
-    float m_bloomThreshold  = 0.8f;
-    int   m_bloomBlurPasses = 5;
-#ifdef VEX_BACKEND_OPENGL
-    std::unique_ptr<vex::Framebuffer> m_bloomFB[2]; // ping-pong half-res RGBA32F buffers
-    std::unique_ptr<vex::Shader>      m_bloomThresholdShader;
-    std::unique_ptr<vex::Shader>      m_bloomBlurShader;
-    uint32_t m_bloomFBW = 0, m_bloomFBH = 0;
+    uint32_t           m_rasterEnvMapTex = 0;
+    std::vector<float> m_glEnvMapData;   // raw HDR float data for GL GPU raytracer
+    int                m_glEnvMapW = 0;
+    int                m_glEnvMapH = 0;
 #endif
 #ifdef VEX_BACKEND_VULKAN
-    std::unique_ptr<vex::Framebuffer> m_vkBloomFB[2]; // ping-pong half-res RGBA16F buffers
-    std::unique_ptr<vex::Shader>      m_vkBloomThresholdShader;
-    std::unique_ptr<vex::Shader>      m_vkBloomBlurShader;
-    uint32_t m_vkBloomFBW = 0, m_vkBloomFBH = 0;
-#endif
-
-    // GPU raytracing (OpenGL only)
-#ifdef VEX_BACKEND_OPENGL
-    std::unique_ptr<vex::GLGPURaytracer> m_gpuRaytracer;
-    std::unique_ptr<vex::Shader> m_fullscreenRTShader;
-    uint32_t m_gpuRTTexW = 0;
-    uint32_t m_gpuRTTexH = 0;
-
-    // GPU raytrace settings (separate from CPU)
-    float m_gpuExposure = 0.0f;
-    float m_gpuGamma = 2.2f;
-    bool  m_gpuEnableACES = true;
-#endif
-
-#ifdef VEX_BACKEND_VULKAN
-    std::unique_ptr<vex::VKGpuRaytracer> m_vkRaytracer;
-    std::unique_ptr<vex::Shader> m_vkFullscreenRTShader;
-
-    // VK RT scene data SSBOs (built in rebuildRaytraceGeometry)
-    std::vector<float>    m_vkTriShading;      // 13 vec4s per tri, per-submesh order
-    std::vector<uint32_t> m_vkTexData;         // texCount header + packed RGBA8 pixels
-    std::vector<uint32_t> m_vkLights;          // lightCount/area header + indices + CDF
-    std::vector<uint32_t> m_vkInstanceOffsets; // first global tri index per BLAS
-    std::vector<float>    m_vkVolumesData;     // volumes SSBO: header + 3 vec4s per volume
-
-    // VK rasterizer env map texture (RGBA8, created from float env data on env change)
     std::unique_ptr<vex::Texture2D> m_vkRasterEnvTex;
+#endif
+    glm::vec3 m_rasterEnvColor { 0.5f };
 
-    // VK RT env map data (updated in renderVKRaytrace on env change)
-    std::vector<float>    m_vkEnvMapData;
-    std::vector<float>    m_vkEnvCdfData;
+#ifdef VEX_BACKEND_VULKAN
+    std::vector<float>    m_vkVolumesData;
+
+    // VK RT env map data (reloaded by loadEnvData() on env change)
+    std::vector<float> m_vkEnvMapData;
+    std::vector<float> m_vkEnvCdfData;
     int m_vkEnvMapW = 0;
     int m_vkEnvMapH = 0;
-
-    bool     m_vkGeomDirty   = false; // triShading/lights/tex/offsets need re-upload
-    uint32_t m_vkSampleCount = 0;     // accumulated sample counter (RNG seed)
-    uint32_t m_vkRTTexW      = 0;     // last created output image width
-    uint32_t m_vkRTTexH      = 0;     // last created output image height
-
-    // VK RT rendering settings (mirrors GPU raytracer settings for the Vulkan build)
-    int   m_vkMaxDepth              = 8;
-    bool  m_vkEnableNEE             = true;
-    bool  m_vkEnableAA              = true;
-    bool  m_vkEnableFireflyClamping = true;
-    bool  m_vkEnableEnvLighting     = true;
-    float m_vkEnvLightMultiplier    = 0.3f;
-    bool  m_vkFlatShading           = false;
-    bool  m_vkEnableNormalMapping   = true;
-    bool  m_vkEnableEmissive        = true;
-    bool  m_vkBilinearFiltering     = true;
-    int   m_vkSamplerType           = 1; // 0=PCG  1=Halton  2=BlueNoise(IGN)
-
-    // Samples-per-second tracking (EMA)
-    float                                        m_vkSamplesPerSec    = 0.0f;
-    std::chrono::steady_clock::time_point        m_vkLastSampleTime   = {};
-    float m_vkRayEps                = 1e-4f;
-    bool  m_vkEnableRR              = true;
-
-    // VK GPU RT display tone-mapping settings
-    float m_vkExposure   = 0.0f;
-    float m_vkGamma      = 2.2f;
-    bool  m_vkEnableACES = true;
-
-    // VK Compute (software BVH) path tracer
-    std::unique_ptr<vex::VKComputeRaytracer> m_vkComputeRaytracer;
-    bool     m_vkComputeGeomDirty    = false;
-    uint32_t m_vkComputeSampleCount  = 0;
-    uint32_t m_vkComputeRTTexW       = 0;
-    uint32_t m_vkComputeRTTexH       = 0;
-    float    m_vkComputeSamplesPerSec = 0.0f;
-    std::chrono::steady_clock::time_point m_vkComputeLastSampleTime = {};
 #endif
 
     // Camera change detection
@@ -415,26 +231,19 @@ private:
     // Custom env map path change detection
     std::string m_prevCustomEnvmapPath;
 
-    // Volume change detection (compare by serialised data each frame)
+    // Volume change detection
     std::vector<float> m_prevVolumesData;
 
     // Denoising
     std::unique_ptr<vex::Denoiser> m_denoiser;
-    std::vector<float>   m_denoiseLinearHDR; // scratch buffer for HDR readback
-    std::vector<float>   m_denoiseAlbedo;    // first-hit albedo (Denoise+)
-    std::vector<float>   m_denoiseNormal;    // first-hit normal  (Denoise+)
-    std::vector<uint8_t> m_denoisedRGBA8;    // tone-mapped denoised result
+    std::vector<float>   m_denoiseLinearHDR;
+    std::vector<float>   m_denoiseAlbedo;
+    std::vector<float>   m_denoiseNormal;
+    std::vector<uint8_t> m_denoisedRGBA8;
     bool m_showDenoisedResult = false;
 
-    // Shared geometry data (for GPU upload after CPU raytracer reorders)
-    std::vector<vex::CPURaytracer::Triangle> m_rtTriangles;
-    std::vector<std::pair<int,int>> m_rtTriangleSrcSubmesh; // {groupIdx, submeshIdx} per m_rtTriangles entry
-    std::vector<int> m_rtTriangleSrcTriIdx;                 // triangle index within submesh per m_rtTriangles entry
-    std::vector<vex::CPURaytracer::TextureData> m_rtTextures;
-    vex::BVH m_rtBVH;
-    std::vector<uint32_t> m_rtLightIndices;
-    std::vector<float> m_rtLightCDF;
-    float m_rtTotalLightArea = 0.0f;
-    bool  m_luminanceCDF     = false;
-    bool m_gpuGeometryDirty = false;
+    // Geometry cache (all packed data + rebuild logic)
+    SceneGeometryCache m_geomCache;
+
+    bool  m_luminanceCDF = false;
 };

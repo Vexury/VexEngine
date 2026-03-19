@@ -1,5 +1,7 @@
 #pragma once
 
+#include "selection.h"
+
 #include <glm/glm.hpp>
 #include <imgui.h>
 #include <string>
@@ -10,7 +12,6 @@ struct Scene;
 class SceneRenderer;
 
 enum class RenderMode;
-enum class Selection { None, Mesh, Skybox, Light, Sun, Camera, Volume };
 
 class EditorUI
 {
@@ -22,34 +23,28 @@ public:
     void renderConsole();
     void renderStats(SceneRenderer& renderer, Scene& scene, vex::GraphicsContext& ctx);
 
-    Selection getSelectionType() const { return m_selectionType; }
-    int       getSelectionIndex() const { return m_selectionIndex; }
+    void init(SelectionState& sel) { m_selection = &sel; }
 
-    void clearSelection()
-    {
-        m_selectionType      = Selection::None;
-        m_submeshIndex       = -1;
-        m_selectedObjectName.clear();
-    }
+    Selection getSelectionType() const { return m_selection->type; }
+    int       getSelectionIndex() const { return m_selection->index; }
+
+    void clearSelection() { m_selection->clear(); }
 
     void setSelection(Selection type, int index = 0, int submesh = -1)
     {
-        m_selectionType  = type;
-        m_selectionIndex = index;
-        m_submeshIndex   = submesh;
-        m_selectedObjectName.clear();
+        m_selection->set(type, index, submesh);
     }
 
     // Called after a viewport pick so we can resolve the object name from mesh data.
-    void setSelectedObjectName(const std::string& name) { m_selectedObjectName = name; }
-    const std::string& getSelectedObjectName() const    { return m_selectedObjectName; }
+    void setSelectedObjectName(const std::string& name) { m_selection->objectName = name; }
+    const std::string& getSelectedObjectName() const    { return m_selection->objectName; }
 
     int getSelectedMeshGroup() const
     {
-        return (m_selectionType == Selection::Mesh) ? m_selectionIndex : -1;
+        return (m_selection->type == Selection::Mesh) ? m_selection->index : -1;
     }
 
-    int getSelectedSubmesh() const { return m_submeshIndex; }
+    int getSelectedSubmesh() const { return m_selection->submeshIdx; }
 
     bool isViewportHovered() const { return m_viewportHovered; }
     int  getRenderModeIndex() const { return m_renderModeIndex; }
@@ -99,10 +94,7 @@ public:
     void renderLoadingOverlay();
 
 private:
-    Selection   m_selectionType       = Selection::None;
-    int         m_selectionIndex      = 0;
-    int         m_submeshIndex        = -1;  // -1 = object/group level, >=0 = specific submesh
-    std::string m_selectedObjectName;         // object (shape) selected within a group
+    SelectionState* m_selection = nullptr;
 
     bool m_viewportHovered = false;
 

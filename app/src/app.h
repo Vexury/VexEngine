@@ -4,6 +4,7 @@
 #include "scene_renderer.h"
 #include "editor_ui.h"
 #include "command.h"
+#include "selection.h"
 
 #include <vex/core/engine.h>
 
@@ -20,11 +21,12 @@ private:
     void duplicateSelected();
     NodeSave saveNode(int nodeIndex) const;
 
-    vex::Engine   m_engine;
-    Scene         m_scene;
-    SceneRenderer m_renderer;
-    EditorUI      m_ui;
-    CommandStack  m_cmdStack;
+    vex::Engine    m_engine;
+    Scene          m_scene;
+    SceneRenderer  m_renderer;
+    SelectionState m_selection;
+    EditorUI       m_ui;
+    CommandStack   m_cmdStack;
 
     double m_lastMouseX = 0.0;
     double m_lastMouseY = 0.0;
