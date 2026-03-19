@@ -52,13 +52,13 @@ void CPURaytracer::setGeometry(std::vector<Triangle> triangles, std::vector<Text
 
 void CPURaytracer::updateMaterials(const std::vector<Triangle>& triangles)
 {
-    const auto& indices = m_bvh.indices();
+    // triangles is already in BVH-reordered order (same permutation as m_triData),
+    // so index directly — no need to invert through m_bvh.indices().
     bool emissiveChanged = false;
     for (size_t i = 0; i < m_triData.size(); ++i)
     {
-        uint32_t origIdx = indices[i];
-        if (origIdx >= triangles.size()) continue;
-        const auto& tri = triangles[origIdx];
+        if (i >= triangles.size()) continue;
+        const auto& tri = triangles[i];
         if (m_triData[i].emissive != tri.emissive)
             emissiveChanged = true;
         m_triData[i].color            = tri.color;
