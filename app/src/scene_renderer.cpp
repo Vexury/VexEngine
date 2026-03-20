@@ -192,15 +192,15 @@ bool SceneRenderer::init([[maybe_unused]] Scene& scene)
     initData.cpuRaytracer         = m_cpuRaytracer.get();
     initData.resizeCPUAccumTex    = [this](uint32_t w, uint32_t h) -> vex::Texture2D*
     {
-        if (w != m_raytraceTexW || h != m_raytraceTexH || m_raytraceTexIsFloat)
+        if (w != m_raytraceTexW || h != m_raytraceTexH || !m_raytraceTexIsFloat)
         {
 #ifdef VEX_BACKEND_VULKAN
             vkDeviceWaitIdle(vex::VKContext::get().getDevice());
 #endif
-            m_raytraceTexture    = vex::Texture2D::create(w, h, 4, false);
+            m_raytraceTexture    = vex::Texture2D::create(w, h, 4, true);
             m_raytraceTexW       = w;
             m_raytraceTexH       = h;
-            m_raytraceTexIsFloat = false;
+            m_raytraceTexIsFloat = true;
 #ifdef VEX_BACKEND_VULKAN
             if (m_fullscreenRTShader)
                 static_cast<vex::VKShader*>(m_fullscreenRTShader.get())->clearExternalTextureCache();

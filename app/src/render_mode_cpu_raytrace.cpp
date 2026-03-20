@@ -128,11 +128,20 @@ void CPURaytraceMode::render(Scene& scene, const SharedRenderData& shared, const
         m_lastSampleTime = now;
         m_cpuRaytracer->traceSample();
 
-        // Upload result to texture
+        // Upload linear HDR result to RGBA32F texture; tone mapping applied in shader
         if (raytraceTex)
         {
-            const auto& pixels = m_cpuRaytracer->getPixelBuffer();
-            raytraceTex->setData(pixels.data(), w, h, 4);
+            m_cpuRaytracer->getLinearHDR(m_cpuHDRScratch);
+            uint32_t n = w * h;
+            m_cpuRGBAScratch.resize(n * 4);
+            for (uint32_t i = 0; i < n; ++i)
+            {
+                m_cpuRGBAScratch[i * 4 + 0] = m_cpuHDRScratch[i * 3 + 0];
+                m_cpuRGBAScratch[i * 4 + 1] = m_cpuHDRScratch[i * 3 + 1];
+                m_cpuRGBAScratch[i * 4 + 2] = m_cpuHDRScratch[i * 3 + 2];
+                m_cpuRGBAScratch[i * 4 + 3] = 1.0f;
+            }
+            raytraceTex->setData(m_cpuRGBAScratch.data(), w, h, 4);
         }
     }
 
@@ -204,9 +213,9 @@ void CPURaytraceMode::render(Scene& scene, const SharedRenderData& shared, const
             : static_cast<GLuint>(m_whiteTexture->getNativeHandle()));
         rtShader->setInt("u_bloomMap", 2);
         rtShader->setFloat("u_sampleCount",    1.0f);
-        rtShader->setFloat("u_exposure",       0.0f);
-        rtShader->setFloat("u_gamma",          1.0f);
-        rtShader->setBool("u_enableACES",      false);
+        rtShader->setFloat("u_exposure",       m_cpuRaytracer->getExposure());
+        rtShader->setFloat("u_gamma",          m_cpuRaytracer->getGamma());
+        rtShader->setBool("u_enableACES",      m_cpuRaytracer->getEnableACES());
         rtShader->setBool("u_flipV",           true);
         rtShader->setBool("u_enableOutline",   shared.outlineActive);
         rtShader->setBool("u_enableBloom",     bloomTex != 0);
@@ -292,11 +301,11 @@ void CPURaytraceMode::render(Scene& scene, const SharedRenderData& shared, const
         shared.outputFB->clear(0.0f, 0.0f, 0.0f, 1.0f);
 
         m_fullscreenRTShader->setFloat("u_sampleCount",    1.0f);
-        m_fullscreenRTShader->setFloat("u_exposure",       0.0f);
-        m_fullscreenRTShader->setFloat("u_gamma",          1.0f);
+        m_fullscreenRTShader->setFloat("u_exposure",       m_cpuRaytracer->getExposure());
+        m_fullscreenRTShader->setFloat("u_gamma",          m_cpuRaytracer->getGamma());
         m_fullscreenRTShader->setFloat("u_bloomIntensity", shared.bloomIntensity);
         m_fullscreenRTShader->bind();
-        m_fullscreenRTShader->setBool("u_enableACES",    false);
+        m_fullscreenRTShader->setBool("u_enableACES",    m_cpuRaytracer->getEnableACES());
         m_fullscreenRTShader->setBool("u_flipV",         true);
         m_fullscreenRTShader->setBool("u_enableOutline", shared.outlineActive);
         m_fullscreenRTShader->setBool("u_enableBloom",   bloomActive);

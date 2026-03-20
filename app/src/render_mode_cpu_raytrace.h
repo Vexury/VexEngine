@@ -34,6 +34,8 @@ private:
 
     vex::CPURaytracer* m_cpuRaytracer = nullptr;
 
+    std::vector<float>                     m_cpuHDRScratch;   // RGB scratch from getLinearHDR
+    std::vector<float>                     m_cpuRGBAScratch;  // RGBA32F scratch for texture upload
     float                                  m_samplesPerSec  = 0.0f;
     std::chrono::steady_clock::time_point  m_lastSampleTime = {};
 };
