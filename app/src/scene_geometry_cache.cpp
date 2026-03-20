@@ -311,7 +311,7 @@ void SceneGeometryCache::rebuild(const Scene& scene, vex::CPURaytracer& cpuRT,
                         tri.n2 = glm::normalize(normalMat2 * v2.normal);
                         tri.uv0 = v0.uv;      tri.uv1 = v1.uv;      tri.uv2 = v2.uv;
                         tri.color            = v0.color * sm.meshData.baseColor;
-                        tri.emissive         = v0.emissive * sm.meshData.emissiveStrength;
+                        tri.emissive         = sm.meshData.emissiveColor * sm.meshData.emissiveStrength;
                         tri.emissiveStrength = sm.meshData.emissiveStrength;
                         tri.geometricNormal = (len > GEOMETRY_EPSILON) ? (cr / len) : glm::vec3(0, 1, 0);
                         tri.area = len * 0.5f;
