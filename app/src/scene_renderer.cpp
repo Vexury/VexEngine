@@ -33,41 +33,6 @@
 #include <unordered_map>
 #include <vector>
 
-static void toneMapToRGBA8(const float* rgb, uint8_t* out, uint32_t count,
-                            float exposure, float gamma, bool aces)
-{
-    float expMul   = std::pow(2.0f, exposure);
-    float invGamma = 1.0f / gamma;
-    for (uint32_t i = 0; i < count; ++i)
-    {
-        float r = rgb[i * 3 + 0] * expMul;
-        float g = rgb[i * 3 + 1] * expMul;
-        float b = rgb[i * 3 + 2] * expMul;
-        if (aces)
-        {
-            const float a = 2.51f, bv = 0.03f, c = 2.43f, d = 0.59f, e = 0.14f;
-            auto acesMap = [&](float x) -> float {
-                return (x * (a * x + bv)) / (x * (c * x + d) + e);
-            };
-            r = std::max(0.0f, std::min(1.0f, acesMap(r)));
-            g = std::max(0.0f, std::min(1.0f, acesMap(g)));
-            b = std::max(0.0f, std::min(1.0f, acesMap(b)));
-        }
-        else
-        {
-            r = std::max(0.0f, std::min(1.0f, r));
-            g = std::max(0.0f, std::min(1.0f, g));
-            b = std::max(0.0f, std::min(1.0f, b));
-        }
-        r = std::pow(r, invGamma);
-        g = std::pow(g, invGamma);
-        b = std::pow(b, invGamma);
-        out[i * 4 + 0] = static_cast<uint8_t>(r * 255.0f + 0.5f);
-        out[i * 4 + 1] = static_cast<uint8_t>(g * 255.0f + 0.5f);
-        out[i * 4 + 2] = static_cast<uint8_t>(b * 255.0f + 0.5f);
-        out[i * 4 + 3] = 255;
-    }
-}
 
 static vex::MeshData buildFullscreenQuadData()
 {
@@ -227,14 +192,15 @@ bool SceneRenderer::init([[maybe_unused]] Scene& scene)
     initData.cpuRaytracer         = m_cpuRaytracer.get();
     initData.resizeCPUAccumTex    = [this](uint32_t w, uint32_t h) -> vex::Texture2D*
     {
-        if (w != m_raytraceTexW || h != m_raytraceTexH)
+        if (w != m_raytraceTexW || h != m_raytraceTexH || m_raytraceTexIsFloat)
         {
 #ifdef VEX_BACKEND_VULKAN
             vkDeviceWaitIdle(vex::VKContext::get().getDevice());
 #endif
-            m_raytraceTexture = vex::Texture2D::create(w, h, 4);
-            m_raytraceTexW = w;
-            m_raytraceTexH = h;
+            m_raytraceTexture    = vex::Texture2D::create(w, h, 4, false);
+            m_raytraceTexW       = w;
+            m_raytraceTexH       = h;
+            m_raytraceTexIsFloat = false;
 #ifdef VEX_BACKEND_VULKAN
             if (m_fullscreenRTShader)
                 static_cast<vex::VKShader*>(m_fullscreenRTShader.get())->clearExternalTextureCache();
@@ -905,18 +871,15 @@ void SceneRenderer::triggerDenoise()
     uint32_t w = spec.width;
     uint32_t h = spec.height;
 
-    float exposure = 0.0f;
-    float gamma    = 2.2f;
-    bool  aces     = true;
-
-    // Ensure accumulation texture exists at the right size
+    // Ensure accumulation texture exists at the right size and as float (HDR)
     auto ensureAccumTex = [&]()
     {
-        if (!m_raytraceTexture || w != m_raytraceTexW || h != m_raytraceTexH)
+        if (!m_raytraceTexture || w != m_raytraceTexW || h != m_raytraceTexH || !m_raytraceTexIsFloat)
         {
-            m_raytraceTexture = vex::Texture2D::create(w, h, 4);
-            m_raytraceTexW = w;
-            m_raytraceTexH = h;
+            m_raytraceTexture    = vex::Texture2D::create(w, h, 4, true);
+            m_raytraceTexW       = w;
+            m_raytraceTexH       = h;
+            m_raytraceTexIsFloat = true;
 #ifdef VEX_BACKEND_VULKAN
             if (m_fullscreenRTShader)
                 static_cast<vex::VKShader*>(m_fullscreenRTShader.get())->clearExternalTextureCache();
@@ -926,28 +889,13 @@ void SceneRenderer::triggerDenoise()
 
 #ifdef VEX_BACKEND_VULKAN
     if (m_renderMode == RenderMode::GPURaytrace && m_gpuMode && m_gpuMode->getRaytracer())
-    {
         m_gpuMode->getRaytracer()->readbackLinearHDR(m_denoiseLinearHDR);
-        const auto& s = m_gpuMode->getSettings();
-        exposure = s.exposure; gamma = s.gamma; aces = s.enableACES;
-        ensureAccumTex();
-    }
     else if (m_renderMode == RenderMode::ComputeRaytrace && m_computeMode && m_computeMode->getRaytracer())
-    {
         m_computeMode->getRaytracer()->readbackLinearHDR(m_denoiseLinearHDR);
-        // Compute mode uses VK settings from GPU mode
-        if (m_gpuMode) { const auto& s = m_gpuMode->getSettings(); exposure = s.exposure; gamma = s.gamma; aces = s.enableACES; }
-        ensureAccumTex();
-    }
     else
 #endif
     if (m_renderMode == RenderMode::CPURaytrace && m_cpuRaytracer)
-    {
         m_cpuRaytracer->getLinearHDR(m_denoiseLinearHDR);
-        exposure = m_cpuRaytracer->getExposure();
-        gamma    = m_cpuRaytracer->getGamma();
-        aces     = m_cpuRaytracer->getEnableACES();
-    }
     else { return; }
 
     if (m_denoiseLinearHDR.empty()) return;
@@ -959,10 +907,18 @@ void SceneRenderer::triggerDenoise()
     float ms = std::chrono::duration<float, std::milli>(
                    std::chrono::steady_clock::now() - t0).count();
 
-    m_denoisedRGBA8.resize(w * h * 4);
-    toneMapToRGBA8(m_denoiseLinearHDR.data(), m_denoisedRGBA8.data(), w * h, exposure, gamma, aces);
+    // Pack RGB HDR → RGBA32F; tone mapping applied in fullscreen shader
+    uint32_t pixelCount = w * h;
+    m_denoisedHDR.resize(pixelCount * 4);
+    for (uint32_t i = 0; i < pixelCount; ++i)
+    {
+        m_denoisedHDR[i * 4 + 0] = m_denoiseLinearHDR[i * 3 + 0];
+        m_denoisedHDR[i * 4 + 1] = m_denoiseLinearHDR[i * 3 + 1];
+        m_denoisedHDR[i * 4 + 2] = m_denoiseLinearHDR[i * 3 + 2];
+        m_denoisedHDR[i * 4 + 3] = 1.0f;
+    }
     ensureAccumTex();
-    m_raytraceTexture->setData(m_denoisedRGBA8.data(), w, h, 4);
+    m_raytraceTexture->setData(m_denoisedHDR.data(), w, h, 4);
     m_showDenoisedResult = true;
 
     char buf[128];
@@ -980,17 +936,15 @@ void SceneRenderer::triggerDenoiseAux()
     uint32_t w = spec.width;
     uint32_t h = spec.height;
 
-    float exposure = 0.0f;
-    float gamma    = 2.2f;
-    bool  aces     = true;
-
+    // Ensure accumulation texture exists at the right size and as RGBA32F float (HDR)
     auto ensureAccumTex = [&]()
     {
-        if (!m_raytraceTexture || w != m_raytraceTexW || h != m_raytraceTexH)
+        if (!m_raytraceTexture || w != m_raytraceTexW || h != m_raytraceTexH || !m_raytraceTexIsFloat)
         {
-            m_raytraceTexture = vex::Texture2D::create(w, h, 4);
-            m_raytraceTexW = w;
-            m_raytraceTexH = h;
+            m_raytraceTexture    = vex::Texture2D::create(w, h, 4, true);
+            m_raytraceTexW       = w;
+            m_raytraceTexH       = h;
+            m_raytraceTexIsFloat = true;
 #ifdef VEX_BACKEND_VULKAN
             if (m_fullscreenRTShader)
                 static_cast<vex::VKShader*>(m_fullscreenRTShader.get())->clearExternalTextureCache();
@@ -1003,16 +957,11 @@ void SceneRenderer::triggerDenoiseAux()
     {
         m_gpuMode->getRaytracer()->readbackLinearHDR(m_denoiseLinearHDR);
         m_gpuMode->getRaytracer()->readbackAuxBuffers(m_denoiseAlbedo, m_denoiseNormal);
-        const auto& s = m_gpuMode->getSettings();
-        exposure = s.exposure; gamma = s.gamma; aces = s.enableACES;
-        ensureAccumTex();
     }
     else if (m_renderMode == RenderMode::ComputeRaytrace && m_computeMode && m_computeMode->getRaytracer())
     {
         m_computeMode->getRaytracer()->readbackLinearHDR(m_denoiseLinearHDR);
         m_computeMode->getRaytracer()->readbackAuxBuffers(m_denoiseAlbedo, m_denoiseNormal);
-        if (m_gpuMode) { const auto& s = m_gpuMode->getSettings(); exposure = s.exposure; gamma = s.gamma; aces = s.enableACES; }
-        ensureAccumTex();
     }
     else
 #endif
@@ -1020,9 +969,6 @@ void SceneRenderer::triggerDenoiseAux()
     {
         m_cpuRaytracer->getLinearHDR(m_denoiseLinearHDR);
         m_cpuRaytracer->getAuxBuffers(m_denoiseAlbedo, m_denoiseNormal);
-        exposure = m_cpuRaytracer->getExposure();
-        gamma    = m_cpuRaytracer->getGamma();
-        aces     = m_cpuRaytracer->getEnableACES();
     }
     else { return; }
 
@@ -1035,10 +981,18 @@ void SceneRenderer::triggerDenoiseAux()
     float ms = std::chrono::duration<float, std::milli>(
                    std::chrono::steady_clock::now() - t0).count();
 
-    m_denoisedRGBA8.resize(w * h * 4);
-    toneMapToRGBA8(m_denoiseLinearHDR.data(), m_denoisedRGBA8.data(), w * h, exposure, gamma, aces);
+    // Pack RGB HDR → RGBA32F; tone mapping applied in fullscreen shader
+    uint32_t pixelCount = w * h;
+    m_denoisedHDR.resize(pixelCount * 4);
+    for (uint32_t i = 0; i < pixelCount; ++i)
+    {
+        m_denoisedHDR[i * 4 + 0] = m_denoiseLinearHDR[i * 3 + 0];
+        m_denoisedHDR[i * 4 + 1] = m_denoiseLinearHDR[i * 3 + 1];
+        m_denoisedHDR[i * 4 + 2] = m_denoiseLinearHDR[i * 3 + 2];
+        m_denoisedHDR[i * 4 + 3] = 1.0f;
+    }
     ensureAccumTex();
-    m_raytraceTexture->setData(m_denoisedRGBA8.data(), w, h, 4);
+    m_raytraceTexture->setData(m_denoisedHDR.data(), w, h, 4);
     m_showDenoisedResult = true;
 
     char buf[128];

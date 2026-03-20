@@ -9,7 +9,7 @@ namespace vex
 class GLTexture2D : public Texture2D
 {
 public:
-    GLTexture2D(uint32_t width, uint32_t height, uint32_t channels);
+    GLTexture2D(uint32_t width, uint32_t height, uint32_t channels, bool isFloat = false);
     ~GLTexture2D() override;
 
     void bind(uint32_t slot = 0) override;
@@ -25,6 +25,7 @@ private:
     uint32_t m_width = 0;
     uint32_t m_height = 0;
     uint32_t m_channels = 4;
+    bool     m_isFloat  = false;
 };
 
 } // namespace vex

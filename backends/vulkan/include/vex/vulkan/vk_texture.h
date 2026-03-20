@@ -10,7 +10,7 @@ namespace vex
 class VKTexture2D : public Texture2D
 {
 public:
-    VKTexture2D(uint32_t width, uint32_t height, uint32_t channels);
+    VKTexture2D(uint32_t width, uint32_t height, uint32_t channels, bool isFloat = false);
     ~VKTexture2D() override;
 
     void bind(uint32_t slot) override;
@@ -38,6 +38,7 @@ private:
     uint32_t m_width    = 0;
     uint32_t m_height   = 0;
     uint32_t m_channels = 4;
+    bool     m_isFloat  = false;
 
     VkImage       m_image      = VK_NULL_HANDLE;
     VmaAllocation m_allocation = VK_NULL_HANDLE;

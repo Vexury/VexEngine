@@ -12,9 +12,9 @@ namespace vex
 {
 
 // Factory methods
-std::unique_ptr<Texture2D> Texture2D::create(uint32_t width, uint32_t height, uint32_t channels)
+std::unique_ptr<Texture2D> Texture2D::create(uint32_t width, uint32_t height, uint32_t channels, bool isFloat)
 {
-    return std::make_unique<GLTexture2D>(width, height, channels);
+    return std::make_unique<GLTexture2D>(width, height, channels, isFloat);
 }
 
 std::unique_ptr<Texture2D> Texture2D::createFromFile(const std::string& path)
@@ -99,16 +99,18 @@ static GLenum channelsToInternalFormat(uint32_t channels)
     }
 }
 
-GLTexture2D::GLTexture2D(uint32_t width, uint32_t height, uint32_t channels)
-    : m_width(width), m_height(height), m_channels(channels)
+GLTexture2D::GLTexture2D(uint32_t width, uint32_t height, uint32_t channels, bool isFloat)
+    : m_width(width), m_height(height), m_channels(channels), m_isFloat(isFloat)
 {
     glGenTextures(1, &m_id);
     glBindTexture(GL_TEXTURE_2D, m_id);
 
+    GLenum internalFmt = isFloat ? GL_RGBA32F : channelsToInternalFormat(channels);
+    GLenum dataType    = isFloat ? GL_FLOAT   : GL_UNSIGNED_BYTE;
     glTexImage2D(GL_TEXTURE_2D, 0,
-                 static_cast<GLint>(channelsToInternalFormat(channels)),
+                 static_cast<GLint>(internalFmt),
                  static_cast<GLsizei>(width), static_cast<GLsizei>(height),
-                 0, channelsToFormat(channels), GL_UNSIGNED_BYTE, nullptr);
+                 0, channelsToFormat(channels), dataType, nullptr);
 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -139,10 +141,12 @@ void GLTexture2D::setData(const void* data, uint32_t width, uint32_t height, uin
     m_channels = channels;
 
     glBindTexture(GL_TEXTURE_2D, m_id);
+    GLenum internalFmt = m_isFloat ? GL_RGBA32F : channelsToInternalFormat(channels);
+    GLenum dataType    = m_isFloat ? GL_FLOAT   : GL_UNSIGNED_BYTE;
     glTexImage2D(GL_TEXTURE_2D, 0,
-                 static_cast<GLint>(channelsToInternalFormat(channels)),
+                 static_cast<GLint>(internalFmt),
                  static_cast<GLsizei>(width), static_cast<GLsizei>(height),
-                 0, channelsToFormat(channels), GL_UNSIGNED_BYTE, data);
+                 0, channelsToFormat(channels), dataType, data);
 }
 
 } // namespace vex

@@ -14,9 +14,9 @@ namespace vex
 {
 
 // Factories
-std::unique_ptr<Texture2D> Texture2D::create(uint32_t width, uint32_t height, uint32_t channels)
+std::unique_ptr<Texture2D> Texture2D::create(uint32_t width, uint32_t height, uint32_t channels, bool isFloat)
 {
-    return std::make_unique<VKTexture2D>(width, height, channels);
+    return std::make_unique<VKTexture2D>(width, height, channels, isFloat);
 }
 
 std::unique_ptr<Texture2D> Texture2D::createFromFile(const std::string& path)
@@ -79,10 +79,11 @@ std::unique_ptr<Texture2D> Texture2D::createFromFile(const std::string& path)
     return tex;
 }
 
-VKTexture2D::VKTexture2D(uint32_t width, uint32_t height, uint32_t channels)
-    : m_width(width), m_height(height), m_channels(channels)
+VKTexture2D::VKTexture2D(uint32_t width, uint32_t height, uint32_t channels, bool isFloat)
+    : m_width(width), m_height(height), m_channels(channels), m_isFloat(isFloat)
 {
-    createImage(width, height, VK_FORMAT_R8G8B8A8_UNORM);
+    VkFormat fmt = isFloat ? VK_FORMAT_R32G32B32A32_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM;
+    createImage(width, height, fmt);
 }
 
 VKTexture2D::~VKTexture2D()
@@ -206,7 +207,8 @@ void VKTexture2D::setData(const void* data, uint32_t width, uint32_t height, uin
     m_height = height;
     m_channels = channels;
 
-    VkDeviceSize imageSize = static_cast<VkDeviceSize>(width) * height * 4; // always RGBA
+    // float RGBA32F = 16 bytes/pixel, RGBA8 = 4 bytes/pixel
+    VkDeviceSize imageSize = static_cast<VkDeviceSize>(width) * height * (m_isFloat ? 16 : 4);
 
     // Create staging buffer
     VkBufferCreateInfo stagingInfo{};

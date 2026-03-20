@@ -230,6 +230,7 @@ void VKComputeRaytraceMode::render(Scene& scene, const SharedRenderData& shared,
     // Bloom pass
     VkImageView vkRTBloomView    = VK_NULL_HANDLE;
     VkSampler   vkRTBloomSampler = VK_NULL_HANDLE;
+    vex::Texture2D* denoisedTex = shared.cpuAccumTex;
     bool vkRTBloomActive = shared.bloomEnabled
                            && m_bloomThresholdShader && m_bloomBlurShader
                            && m_bloomFB[0] && m_bloomFB[1];
@@ -250,16 +251,34 @@ void VKComputeRaytraceMode::render(Scene& scene, const SharedRenderData& shared,
             static_cast<vex::VKShader*>(m_bloomBlurShader)->clearExternalTextureCache();
         }
 
+        // When denoised, compute bloom from the denoised HDR texture (pre-normalized)
+        VkImageView   bloomSrcView;
+        VkSampler     bloomSrcSampler;
+        VkImageLayout bloomSrcLayout;
+        float         bloomSampleCount;
+        if (showDenoised && denoisedTex)
+        {
+            auto* vkTex = static_cast<vex::VKTexture2D*>(denoisedTex);
+            bloomSrcView    = vkTex->getImageView();
+            bloomSrcSampler = vkTex->getSampler();
+            bloomSrcLayout  = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            bloomSampleCount = 1.0f;
+        }
+        else
+        {
+            bloomSrcView    = m_vkComputeRaytracer->getOutputImageView();
+            bloomSrcSampler = m_vkComputeRaytracer->getDisplaySampler();
+            bloomSrcLayout  = VK_IMAGE_LAYOUT_GENERAL;
+            bloomSampleCount = static_cast<float>(m_vkComputeSampleCount);
+        }
+
         auto* vkThreshVK = static_cast<vex::VKShader*>(m_bloomThresholdShader);
         m_bloomFB[0]->bind();
         m_bloomFB[0]->clear(0.0f, 0.0f, 0.0f, 1.0f);
         m_bloomThresholdShader->setFloat("u_threshold",   shared.bloomThreshold);
-        m_bloomThresholdShader->setFloat("u_sampleCount", static_cast<float>(m_vkComputeSampleCount));
+        m_bloomThresholdShader->setFloat("u_sampleCount", bloomSampleCount);
         m_bloomThresholdShader->bind();
-        vkThreshVK->setExternalTextureVK(0,
-            m_vkComputeRaytracer->getOutputImageView(),
-            m_vkComputeRaytracer->getDisplaySampler(),
-            VK_IMAGE_LAYOUT_GENERAL);
+        vkThreshVK->setExternalTextureVK(0, bloomSrcView, bloomSrcSampler, bloomSrcLayout);
         m_fullscreenQuad->draw();
         m_bloomThresholdShader->unbind();
         m_bloomFB[0]->unbind();
@@ -293,8 +312,6 @@ void VKComputeRaytraceMode::render(Scene& scene, const SharedRenderData& shared,
     shared.outputFB->bind();
     shared.outputFB->clear(0.0f, 0.0f, 0.0f, 1.0f);
 
-    vex::Texture2D* denoisedTex = shared.cpuAccumTex;
-
     if (showDenoised && m_fullscreenRTShader && denoisedTex)
     {
         auto* rtShaderVK = static_cast<vex::VKShader*>(m_fullscreenRTShader);
@@ -302,14 +319,14 @@ void VKComputeRaytraceMode::render(Scene& scene, const SharedRenderData& shared,
         auto* vkMaskFB   = static_cast<vex::VKFramebuffer*>(shared.outlineMaskFB);
 
         m_fullscreenRTShader->setFloat("u_sampleCount",    1.0f);
-        m_fullscreenRTShader->setFloat("u_exposure",       0.0f);
-        m_fullscreenRTShader->setFloat("u_gamma",          1.0f);
-        m_fullscreenRTShader->setFloat("u_bloomIntensity", 0.0f);
+        m_fullscreenRTShader->setFloat("u_exposure",       s->exposure);
+        m_fullscreenRTShader->setFloat("u_gamma",          s->gamma);
+        m_fullscreenRTShader->setFloat("u_bloomIntensity", shared.bloomIntensity);
         m_fullscreenRTShader->bind();
-        m_fullscreenRTShader->setBool("u_enableACES",    false);
+        m_fullscreenRTShader->setBool("u_enableACES",    s->enableACES);
         m_fullscreenRTShader->setBool("u_flipV",         true);
         m_fullscreenRTShader->setBool("u_enableOutline", shared.outlineActive);
-        m_fullscreenRTShader->setBool("u_enableBloom",   false);
+        m_fullscreenRTShader->setBool("u_enableBloom",   vkRTBloomActive);
 
         rtShaderVK->setExternalTextureVK(0,
             vkTex->getImageView(), vkTex->getSampler(),
@@ -318,7 +335,8 @@ void VKComputeRaytraceMode::render(Scene& scene, const SharedRenderData& shared,
             vkMaskFB->getColorImageView(), vkMaskFB->getColorSampler(),
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         rtShaderVK->setExternalTextureVK(2,
-            vkMaskFB->getColorImageView(), vkMaskFB->getColorSampler(),
+            vkRTBloomActive ? vkRTBloomView    : vkMaskFB->getColorImageView(),
+            vkRTBloomActive ? vkRTBloomSampler : vkMaskFB->getColorSampler(),
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
         m_fullscreenQuad->draw();

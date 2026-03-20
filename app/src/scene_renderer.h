@@ -180,8 +180,9 @@ private:
     bool m_pendingGeomRebuild = false;
     std::unique_ptr<vex::CPURaytracer> m_cpuRaytracer;
     std::unique_ptr<vex::Texture2D>    m_raytraceTexture; // CPU/denoised display texture
-    uint32_t m_raytraceTexW = 0;
-    uint32_t m_raytraceTexH = 0;
+    uint32_t m_raytraceTexW      = 0;
+    uint32_t m_raytraceTexH      = 0;
+    bool     m_raytraceTexIsFloat = false;
 
     // Rasterizer env + env color (updated by env-loading path, read by RasterizeMode via shared)
 #ifdef VEX_BACKEND_OPENGL
@@ -239,7 +240,7 @@ private:
     std::vector<float>   m_denoiseLinearHDR;
     std::vector<float>   m_denoiseAlbedo;
     std::vector<float>   m_denoiseNormal;
-    std::vector<uint8_t> m_denoisedRGBA8;
+    std::vector<float>   m_denoisedHDR;   // RGBA32F, pre-normalized HDR for shader tone mapping
     bool m_showDenoisedResult = false;
 
     // Geometry cache (all packed data + rebuild logic)

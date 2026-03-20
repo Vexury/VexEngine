@@ -40,14 +40,14 @@ struct VKRTSettings
 
     bool operator==(const VKRTSettings& o) const
     {
+        // exposure/gamma/enableACES are display-only — applied in fullscreen shader,
+        // do NOT reset the accumulator when they change
         return maxDepth == o.maxDepth && enableNEE == o.enableNEE &&
                enableAA == o.enableAA && enableFireflyClamping == o.enableFireflyClamping &&
                enableEnvLighting == o.enableEnvLighting && envLightMultiplier == o.envLightMultiplier &&
                flatShading == o.flatShading && enableNormalMapping == o.enableNormalMapping &&
                enableEmissive == o.enableEmissive && bilinearFiltering == o.bilinearFiltering &&
-               samplerType == o.samplerType && rayEps == o.rayEps &&
-               enableRR == o.enableRR && exposure == o.exposure &&
-               gamma == o.gamma && enableACES == o.enableACES;
+               samplerType == o.samplerType && rayEps == o.rayEps && enableRR == o.enableRR;
     }
     bool operator!=(const VKRTSettings& o) const { return !(*this == o); }
 };
