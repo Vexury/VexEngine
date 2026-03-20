@@ -125,11 +125,27 @@ std::vector<MeshData> MeshData::loadOBJ(const std::string& path)
     // objects that happen to share the same material.
     std::vector<MeshData> result;
 
+    // Vertex deduplication key: the three tinyobj indices that uniquely identify
+    // a corner (position, normal, texcoord can each have independent indices in OBJ).
+    struct VertKey {
+        int vi, ni, ti;
+        bool operator==(const VertKey& o) const { return vi==o.vi && ni==o.ni && ti==o.ti; }
+    };
+    struct VertKeyHash {
+        size_t operator()(const VertKey& k) const {
+            size_t h = std::hash<int>{}(k.vi);
+            h ^= std::hash<int>{}(k.ni) * 2654435761u;
+            h ^= std::hash<int>{}(k.ti) * 40503u;
+            return h;
+        }
+    };
+
     auto t_verts = std::chrono::steady_clock::now();
     for (size_t si = 0; si < shapes.size(); ++si)
     {
         const auto& shape = shapes[si];
         std::unordered_map<int, MeshData> matGroups;
+        std::unordered_map<int, std::unordered_map<VertKey, uint32_t, VertKeyHash>> matVertCache;
         size_t indexOffset = 0;
 
         for (size_t f = 0; f < shape.mesh.num_face_vertices.size(); f++)
@@ -243,35 +259,36 @@ std::vector<MeshData> MeshData::loadOBJ(const std::string& path)
             glm::vec3 pos[3];
             glm::vec3 vtxNormals[3];
             glm::vec2 uv[3] = {};
+            tinyobj::index_t tidx[3] = {};
             bool hasVertexNormals = true;
             for (int v = 0; v < fv && v < 3; v++)
             {
-                tinyobj::index_t idx = shape.mesh.indices[indexOffset + v];
+                tidx[v] = shape.mesh.indices[indexOffset + v];
                 pos[v] =
                 {
-                    attrib.vertices[3 * idx.vertex_index + 0],
-                    attrib.vertices[3 * idx.vertex_index + 1],
-                    attrib.vertices[3 * idx.vertex_index + 2]
+                    attrib.vertices[3 * tidx[v].vertex_index + 0],
+                    attrib.vertices[3 * tidx[v].vertex_index + 1],
+                    attrib.vertices[3 * tidx[v].vertex_index + 2]
                 };
-                if (idx.normal_index >= 0)
+                if (tidx[v].normal_index >= 0)
                 {
                     vtxNormals[v] =
                     {
-                        attrib.normals[3 * idx.normal_index + 0],
-                        attrib.normals[3 * idx.normal_index + 1],
-                        attrib.normals[3 * idx.normal_index + 2]
+                        attrib.normals[3 * tidx[v].normal_index + 0],
+                        attrib.normals[3 * tidx[v].normal_index + 1],
+                        attrib.normals[3 * tidx[v].normal_index + 2]
                     };
                 }
                 else
                 {
                     hasVertexNormals = false;
                 }
-                if (idx.texcoord_index >= 0)
+                if (tidx[v].texcoord_index >= 0)
                 {
                     uv[v] =
                     {
-                        attrib.texcoords[2 * idx.texcoord_index + 0],
-                        attrib.texcoords[2 * idx.texcoord_index + 1]
+                        attrib.texcoords[2 * tidx[v].texcoord_index + 0],
+                        attrib.texcoords[2 * tidx[v].texcoord_index + 1]
                     };
                 }
             }
@@ -297,11 +314,22 @@ std::vector<MeshData> MeshData::loadOBJ(const std::string& path)
             }
             glm::vec4 tangent(T, bSign);
 
-            uint32_t baseIdx = static_cast<uint32_t>(group.vertices.size());
+            auto& vcache = matVertCache[matId];
             for (int v = 0; v < fv && v < 3; v++)
             {
-                group.vertices.push_back({ pos[v], vtxNormals[v], color, emissive, uv[v], tangent });
-                group.indices.push_back(baseIdx + v);
+                VertKey key { tidx[v].vertex_index, tidx[v].normal_index, tidx[v].texcoord_index };
+                auto it = vcache.find(key);
+                if (it != vcache.end())
+                {
+                    group.indices.push_back(it->second);
+                }
+                else
+                {
+                    uint32_t newIdx = static_cast<uint32_t>(group.vertices.size());
+                    group.vertices.push_back({ pos[v], vtxNormals[v], color, emissive, uv[v], tangent });
+                    group.indices.push_back(newIdx);
+                    vcache[key] = newIdx;
+                }
             }
 
             indexOffset += fv;
