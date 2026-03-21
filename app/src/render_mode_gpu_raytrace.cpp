@@ -49,6 +49,8 @@ void GPURaytraceMode::shutdown()
     }
 }
 
+void GPURaytraceMode::deactivate() {}
+
 void GPURaytraceMode::activate()
 {
     m_samplesPerSec = 0.0f;
@@ -293,6 +295,14 @@ void GPURaytraceMode::shutdown()
     }
 }
 
+void GPURaytraceMode::deactivate()
+{
+    if (m_raytracer)
+        m_raytracer->freeSceneData();
+    m_rtTexW = 0;
+    m_rtTexH = 0;
+}
+
 void GPURaytraceMode::activate()
 {
     m_samplesPerSec = 0.0f;
@@ -300,11 +310,14 @@ void GPURaytraceMode::activate()
     {
         m_raytracer->reset();
         m_sampleCount = 0;
-        m_geomDirty   = true;
     }
 }
 
-void GPURaytraceMode::onGeometryRebuilt() { activate(); }
+void GPURaytraceMode::onGeometryRebuilt()
+{
+    activate();
+    m_geomDirty = true;
+}
 
 uint32_t GPURaytraceMode::getSampleCount() const { return m_sampleCount; }
 bool     GPURaytraceMode::reloadShader()         { return false; }

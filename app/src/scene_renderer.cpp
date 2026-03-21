@@ -342,6 +342,9 @@ void SceneRenderer::setRenderMode(RenderMode mode)
 
     m_showDenoisedResult = false;
 
+    // Let the outgoing mode release any GPU resources it no longer needs
+    if (m_activeMode) m_activeMode->deactivate();
+
     // Force a geometry rebuild only when leaving rasterizer mode
     if (mode != RenderMode::Rasterize && prevMode == RenderMode::Rasterize)
         m_pendingGeomRebuild = true;
@@ -394,6 +397,8 @@ uint32_t  SceneRenderer::getBVHNodeCount()  const { return m_geomCache.isReady()
 size_t    SceneRenderer::getBVHMemoryBytes() const { return m_geomCache.isReady() ? m_geomCache.bvh().memoryBytes() : 0; }
 vex::AABB SceneRenderer::getBVHRootAABB()   const { return m_geomCache.isReady() ? m_geomCache.bvh().rootAABB()    : vex::AABB{}; }
 float     SceneRenderer::getBVHSAHCost()    const { return m_geomCache.isReady() ? m_geomCache.bvh().sahCost()     : 0.0f; }
+size_t    SceneRenderer::getLightTriangleCount() const { return m_geomCache.isReady() ? m_geomCache.lightIndices().size() : 0; }
+float     SceneRenderer::getTotalLightArea()     const { return m_geomCache.isReady() ? m_geomCache.totalLightArea()      : 0.0f; }
 
 // --- Lazy-apply helpers ---
 // Settings structs (m_cpuRTSettings / m_rasterSettings) are the single source of truth.

@@ -22,7 +22,7 @@ public:
     bool init(const RenderModeInitData& init) override;
     void shutdown() override;
     void activate() override;
-    void deactivate() override {}
+    void deactivate() override;
     void render(Scene& scene, const SharedRenderData& shared, const FrameChanges& changes) override;
 
     uint32_t getSampleCount()   const override;

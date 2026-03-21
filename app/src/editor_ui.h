@@ -147,4 +147,16 @@ private:
     // Loading overlay state
     std::string m_loadingStage;
     float       m_loadingProgress = 0.f;
+
+    // Cached per-submesh scene stats — recomputed only when the scene changes
+    struct CachedSceneStats
+    {
+        uint32_t totalVerts        = 0;
+        uint32_t totalIndices      = 0;
+        int      totalSubs         = 0;
+        int      emissiveMeshCount = 0;
+        int      uniqueTextureCount = 0;
+        int      cachedNodeCount   = -1;  // sentinel: -1 = never computed
+    };
+    CachedSceneStats m_sceneStats;
 };

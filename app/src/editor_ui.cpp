@@ -4,6 +4,7 @@
 
 #include <cstdio>
 #include <string>
+#include <unordered_set>
 
 #include <vex/core/log.h>
 #include <vex/graphics/framebuffer.h>
@@ -185,47 +186,139 @@ void EditorUI::renderStats(SceneRenderer& renderer, Scene& scene, vex::GraphicsC
 {
     ImGui::Begin("Stats");
 
+    const RenderMode mode = renderer.getRenderMode();
+    const bool isRT = (mode != RenderMode::Rasterize);
+
     // --- Performance ---
     const ImGuiIO& io = ImGui::GetIO();
     ImGui::SeparatorText("Performance");
+
+    const char* modeName = [mode]() -> const char* {
+        switch (mode)
+        {
+            case RenderMode::Rasterize:      return "Rasterizer";
+            case RenderMode::CPURaytrace:    return "CPU Path Tracer";
+            case RenderMode::GPURaytrace:    return "GPU Path Tracer";
+            case RenderMode::ComputeRaytrace: return "Compute Path Tracer";
+            default:                          return "Unknown";
+        }
+    }();
+    ImGui::Text("Mode:       %s", modeName);
     ImGui::Text("FPS:        %.1f", io.Framerate);
     ImGui::Text("Frame time: %.2f ms", 1000.0f / io.Framerate);
-    ImGui::Text("Draw calls: %d", renderer.getDrawCalls());
-    {
-        float sps = renderer.getSamplesPerSec();
-        if (sps > 0.0f)
-            ImGui::Text("Samples/sec: %.1f", sps);
-    }
+
+    if (!isRT)
+        ImGui::Text("Draw calls: %d", renderer.getDrawCalls());
 
     bool vsync = ctx.getVSync();
     if (ImGui::Checkbox("VSync", &vsync))
         ctx.setVSync(vsync);
 
-    // --- Scene ---
-    ImGui::SeparatorText("Scene");
-
-    uint32_t totalVerts   = 0;
-    uint32_t totalIndices = 0;
-    int      totalSubs    = 0;
-    int      totalTex     = 0;
-
-    for (const auto& node : scene.nodes)
+    // --- Path Tracer ---
+    if (isRT)
     {
-        for (const auto& sm : node.submeshes)
+        ImGui::SeparatorText("Path Tracer");
+
+        uint32_t sampleCount = renderer.getRaytraceSampleCount();
+        uint32_t maxSamples  = renderer.getMaxSamples();
+        if (maxSamples > 0)
+            ImGui::Text("Sample:      %u / %u", sampleCount, maxSamples);
+        else
+            ImGui::Text("Sample:      %u", sampleCount);
+
+        float sps = renderer.getSamplesPerSec();
+        if (sps >= 1000.0f)
+            ImGui::Text("Samples/sec: %.1f k", sps / 1000.0f);
+        else if (sps > 0.0f)
+            ImGui::Text("Samples/sec: %.1f", sps);
+
+        size_t lightTris = renderer.getLightTriangleCount();
+        if (lightTris > 0)
         {
-            totalVerts   += sm.vertexCount;
-            totalIndices += sm.indexCount;
-            ++totalSubs;
-            if (sm.diffuseTexture)
-                ++totalTex;
+            ImGui::Text("Light tris:  %zu", lightTris);
+            ImGui::Text("Light area:  %.2f m\xc2\xb2", renderer.getTotalLightArea());
         }
     }
 
-    ImGui::Text("Nodes:        %d", static_cast<int>(scene.nodes.size()));
-    ImGui::Text("Submeshes:    %d", totalSubs);
-    ImGui::Text("Vertices:     %u", totalVerts);
-    ImGui::Text("Triangles:    %u", totalIndices / 3);
-    ImGui::Text("Textures:     %d", totalTex);
+    // --- Scene ---
+    ImGui::SeparatorText("Scene");
+
+    // Recompute per-submesh stats only when node count changes
+    {
+        int nodeCount = static_cast<int>(scene.nodes.size());
+
+        if (nodeCount != m_sceneStats.cachedNodeCount)
+        {
+            m_sceneStats = {};
+            m_sceneStats.cachedNodeCount = nodeCount;
+
+            std::unordered_set<vex::Texture2D*> uniqueTextures;
+            for (const auto& node : scene.nodes)
+            {
+                for (const auto& sm : node.submeshes)
+                {
+                    m_sceneStats.totalVerts   += sm.vertexCount;
+                    m_sceneStats.totalIndices += sm.indexCount;
+                    ++m_sceneStats.totalSubs;
+                    if (sm.diffuseTexture)   uniqueTextures.insert(sm.diffuseTexture.get());
+                    if (sm.normalTexture)    uniqueTextures.insert(sm.normalTexture.get());
+                    if (sm.roughnessTexture) uniqueTextures.insert(sm.roughnessTexture.get());
+                    if (sm.metallicTexture)  uniqueTextures.insert(sm.metallicTexture.get());
+                    if (sm.emissiveTexture)  uniqueTextures.insert(sm.emissiveTexture.get());
+                    if (sm.aoTexture)        uniqueTextures.insert(sm.aoTexture.get());
+
+                    bool hasEmissive = sm.meshData.emissiveStrength > 0.0f &&
+                                       (sm.emissiveTexture != nullptr ||
+                                        sm.meshData.emissiveColor != glm::vec3(0.0f));
+                    if (hasEmissive) ++m_sceneStats.emissiveMeshCount;
+                }
+            }
+            m_sceneStats.uniqueTextureCount = static_cast<int>(uniqueTextures.size());
+        }
+    }
+
+    ImGui::Text("Nodes:      %d", static_cast<int>(scene.nodes.size()));
+    ImGui::Text("Submeshes:  %d", m_sceneStats.totalSubs);
+    ImGui::Text("Triangles:  %s", [this]() {
+        static char buf[32];
+        uint32_t t = m_sceneStats.totalIndices / 3;
+        if (t >= 1000000)
+            snprintf(buf, sizeof(buf), "%.2f M", t / 1000000.0f);
+        else if (t >= 1000)
+            snprintf(buf, sizeof(buf), "%.1f k", t / 1000.0f);
+        else
+            snprintf(buf, sizeof(buf), "%u", t);
+        return buf;
+    }());
+    ImGui::Text("Vertices:   %u", m_sceneStats.totalVerts);
+    ImGui::Text("Textures:   %d", m_sceneStats.uniqueTextureCount);
+    ImGui::Text("Lights");
+    ImGui::Text("  Directional: %d", scene.showSun ? 1 : 0);
+    ImGui::Text("  Point:       %d", scene.showLight ? 1 : 0);
+    ImGui::Text("  Emissive:    %d", m_sceneStats.emissiveMeshCount);
+
+    if (!scene.volumes.empty())
+    {
+        int activeVols = 0;
+        for (const auto& v : scene.volumes)
+            if (v.enabled) ++activeVols;
+        ImGui::Text("Volumes:    %d / %d", activeVols, static_cast<int>(scene.volumes.size()));
+    }
+
+    if (!isRT)
+        ImGui::Text("Shadows:    %s", scene.showSun ? "On" : "Off");
+
+    // --- BVH ---
+    size_t bvhMem = renderer.getBVHMemoryBytes();
+    if (bvhMem > 0)
+    {
+        ImGui::SeparatorText("BVH");
+        ImGui::Text("Nodes:    %u", renderer.getBVHNodeCount());
+        float sahCost = renderer.getBVHSAHCost();
+        if (sahCost > 0.0f)
+            ImGui::Text("SAH cost: %.1f", sahCost);
+        ImGui::Text("Memory:   %.1f KB", static_cast<float>(bvhMem) / 1024.0f);
+    }
 
     // --- Viewport ---
     ImGui::SeparatorText("Viewport");
@@ -239,15 +332,18 @@ void EditorUI::renderStats(SceneRenderer& renderer, Scene& scene, vex::GraphicsC
         ImGui::SeparatorText("GPU Memory");
         ImGui::Text("VRAM used:   %.1f MB", mem.usedMB);
         ImGui::Text("VRAM budget: %.1f MB", mem.budgetMB);
-    }
 
-    // --- BVH ---
-    size_t bvhMem = renderer.getBVHMemoryBytes();
-    if (bvhMem > 0)
-    {
-        ImGui::SeparatorText("BVH");
-        ImGui::Text("Nodes:  %u", renderer.getBVHNodeCount());
-        ImGui::Text("Memory: %.1f KB", static_cast<float>(bvhMem) / 1024.0f);
+        // Per-category breakdown (Vulkan only — tracked via VKMemoryTracker)
+        float tracked = mem.texturesMB + mem.geometryMB + mem.framebuffersMB + mem.rayTracingMB;
+        if (tracked > 0.0f)
+        {
+            if (mem.texturesMB     > 0.0f) ImGui::Text("  Textures:     %.1f MB", mem.texturesMB);
+            if (mem.geometryMB     > 0.0f) ImGui::Text("  Geometry:     %.1f MB", mem.geometryMB);
+            if (mem.framebuffersMB > 0.0f) ImGui::Text("  Framebuffers: %.1f MB", mem.framebuffersMB);
+            if (mem.rayTracingMB   > 0.0f) ImGui::Text("  Ray Tracing:  %.1f MB", mem.rayTracingMB);
+            float other = mem.usedMB - tracked;
+            if (other > 0.1f)              ImGui::Text("  Other:        %.1f MB", other);
+        }
     }
 
     // --- Backend ---

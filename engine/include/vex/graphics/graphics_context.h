@@ -13,9 +13,13 @@ class Window;
 
 struct MemoryStats
 {
-    float usedMB = 0.0f;
-    float budgetMB = 0.0f;
-    bool available = false;
+    float usedMB        = 0.0f;
+    float budgetMB      = 0.0f;
+    float texturesMB    = 0.0f;
+    float geometryMB    = 0.0f;
+    float framebuffersMB = 0.0f;
+    float rayTracingMB  = 0.0f;
+    bool  available     = false;
 };
 
 class GraphicsContext

@@ -125,6 +125,36 @@ bool VKComputeRaytracer::init()
     return true;
 }
 
+void VKComputeRaytracer::freeSceneData()
+{
+    auto& ctx       = VKContext::get();
+    auto  device    = ctx.getDevice();
+    auto  allocator = ctx.getAllocator();
+
+    vkDeviceWaitIdle(device);
+
+    // Output + aux images
+    if (m_outputImageView) { vkDestroyImageView(device, m_outputImageView, nullptr); m_outputImageView = VK_NULL_HANDLE; }
+    if (m_outputImage)     { ctx.getMemoryTracker().untrack(allocator, m_outputAlloc); vmaDestroyImage(allocator, m_outputImage, m_outputAlloc); m_outputImage = VK_NULL_HANDLE; }
+    if (m_albedoImageView) { vkDestroyImageView(device, m_albedoImageView, nullptr); m_albedoImageView = VK_NULL_HANDLE; }
+    if (m_albedoImage)     { ctx.getMemoryTracker().untrack(allocator, m_albedoAlloc); vmaDestroyImage(allocator, m_albedoImage, m_albedoAlloc); m_albedoImage = VK_NULL_HANDLE; }
+    if (m_normalImageView) { vkDestroyImageView(device, m_normalImageView, nullptr); m_normalImageView = VK_NULL_HANDLE; }
+    if (m_normalImage)     { ctx.getMemoryTracker().untrack(allocator, m_normalAlloc); vmaDestroyImage(allocator, m_normalImage, m_normalAlloc); m_normalImage = VK_NULL_HANDLE; }
+    m_width  = 0;
+    m_height = 0;
+
+    // Scene SSBOs
+    destroyBuffer(m_envCdfBuffer,     m_envCdfAlloc);
+    destroyBuffer(m_envMapBuffer,     m_envMapAlloc);
+    destroyBuffer(m_triShadingBuffer, m_triShadingAlloc);
+    destroyBuffer(m_texDataBuffer,    m_texDataAlloc);
+    destroyBuffer(m_lightsBuffer,     m_lightsAlloc);
+    destroyBuffer(m_triVertsBuffer,   m_triVertsAlloc);
+    destroyBuffer(m_bvhBuffer,        m_bvhAlloc);
+    m_triangleCount = 0;
+    m_bvhNodeCount  = 0;
+}
+
 void VKComputeRaytracer::shutdown()
 {
     auto& ctx       = VKContext::get();
@@ -137,13 +167,13 @@ void VKComputeRaytracer::shutdown()
     // Readback + output image
     destroyBuffer(m_readbackBuffer, m_readbackAlloc);
     if (m_outputImageView) { vkDestroyImageView(device, m_outputImageView, nullptr); m_outputImageView = VK_NULL_HANDLE; }
-    if (m_outputImage)     { vmaDestroyImage(allocator, m_outputImage, m_outputAlloc); m_outputImage = VK_NULL_HANDLE; }
+    if (m_outputImage)     { ctx.getMemoryTracker().untrack(allocator, m_outputAlloc); vmaDestroyImage(allocator, m_outputImage, m_outputAlloc); m_outputImage = VK_NULL_HANDLE; }
 
     // Aux images (albedo, normal)
     if (m_albedoImageView) { vkDestroyImageView(device, m_albedoImageView, nullptr); m_albedoImageView = VK_NULL_HANDLE; }
-    if (m_albedoImage)     { vmaDestroyImage(allocator, m_albedoImage, m_albedoAlloc); m_albedoImage = VK_NULL_HANDLE; }
+    if (m_albedoImage)     { ctx.getMemoryTracker().untrack(allocator, m_albedoAlloc); vmaDestroyImage(allocator, m_albedoImage, m_albedoAlloc); m_albedoImage = VK_NULL_HANDLE; }
     if (m_normalImageView) { vkDestroyImageView(device, m_normalImageView, nullptr); m_normalImageView = VK_NULL_HANDLE; }
-    if (m_normalImage)     { vmaDestroyImage(allocator, m_normalImage, m_normalAlloc); m_normalImage = VK_NULL_HANDLE; }
+    if (m_normalImage)     { ctx.getMemoryTracker().untrack(allocator, m_normalAlloc); vmaDestroyImage(allocator, m_normalImage, m_normalAlloc); m_normalImage = VK_NULL_HANDLE; }
 
     // Scene SSBOs
     destroyBuffer(m_envCdfBuffer,    m_envCdfAlloc);
@@ -504,11 +534,11 @@ bool VKComputeRaytracer::createOutputImage(uint32_t width, uint32_t height)
 
     destroyBuffer(m_readbackBuffer, m_readbackAlloc);
     if (m_outputImageView) { vkDestroyImageView(device, m_outputImageView, nullptr); m_outputImageView = VK_NULL_HANDLE; }
-    if (m_outputImage)     { vmaDestroyImage(allocator, m_outputImage, m_outputAlloc); m_outputImage = VK_NULL_HANDLE; }
+    if (m_outputImage)     { ctx.getMemoryTracker().untrack(allocator, m_outputAlloc); vmaDestroyImage(allocator, m_outputImage, m_outputAlloc); m_outputImage = VK_NULL_HANDLE; }
     if (m_albedoImageView) { vkDestroyImageView(device, m_albedoImageView, nullptr); m_albedoImageView = VK_NULL_HANDLE; }
-    if (m_albedoImage)     { vmaDestroyImage(allocator, m_albedoImage, m_albedoAlloc); m_albedoImage = VK_NULL_HANDLE; }
+    if (m_albedoImage)     { ctx.getMemoryTracker().untrack(allocator, m_albedoAlloc); vmaDestroyImage(allocator, m_albedoImage, m_albedoAlloc); m_albedoImage = VK_NULL_HANDLE; }
     if (m_normalImageView) { vkDestroyImageView(device, m_normalImageView, nullptr); m_normalImageView = VK_NULL_HANDLE; }
-    if (m_normalImage)     { vmaDestroyImage(allocator, m_normalImage, m_normalAlloc); m_normalImage = VK_NULL_HANDLE; }
+    if (m_normalImage)     { ctx.getMemoryTracker().untrack(allocator, m_normalAlloc); vmaDestroyImage(allocator, m_normalImage, m_normalAlloc); m_normalImage = VK_NULL_HANDLE; }
 
     m_width  = width;
     m_height = height;
@@ -530,6 +560,7 @@ bool VKComputeRaytracer::createOutputImage(uint32_t width, uint32_t height)
     VmaAllocationCreateInfo allocInfo{};
     allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
     vmaCreateImage(allocator, &imageInfo, &allocInfo, &m_outputImage, &m_outputAlloc, nullptr);
+    ctx.getMemoryTracker().track(allocator, m_outputAlloc, GpuMemCategory::RayTracing);
 
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType            = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -578,6 +609,8 @@ bool VKComputeRaytracer::createOutputImage(uint32_t width, uint32_t height)
 
         vmaCreateImage(allocator, &auxInfo, &auxAllocInfo, &m_albedoImage, &m_albedoAlloc, nullptr);
         vmaCreateImage(allocator, &auxInfo, &auxAllocInfo, &m_normalImage, &m_normalAlloc, nullptr);
+        ctx.getMemoryTracker().track(allocator, m_albedoAlloc, GpuMemCategory::RayTracing);
+        ctx.getMemoryTracker().track(allocator, m_normalAlloc, GpuMemCategory::RayTracing);
 
         VkImageViewCreateInfo auxViewInfo{};
         auxViewInfo.sType            = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;

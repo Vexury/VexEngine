@@ -19,6 +19,24 @@ VKContext& VKContext::get()
     return *s_instance;
 }
 
+void VKMemoryTracker::track(VmaAllocator vma, VmaAllocation alloc, GpuMemCategory cat)
+{
+    if (!alloc) return;
+    VmaAllocationInfo info{};
+    vmaGetAllocationInfo(vma, alloc, &info);
+    m_allocs[alloc] = { info.size, cat };
+    m_bytes[static_cast<int>(cat)] += static_cast<int64_t>(info.size);
+}
+
+void VKMemoryTracker::untrack(VmaAllocator vma, VmaAllocation alloc)
+{
+    if (!alloc) return;
+    auto it = m_allocs.find(alloc);
+    if (it == m_allocs.end()) return;
+    m_bytes[static_cast<int>(it->second.cat)] -= static_cast<int64_t>(it->second.size);
+    m_allocs.erase(it);
+}
+
 // Factory
 std::unique_ptr<GraphicsContext> GraphicsContext::create()
 {
@@ -640,26 +658,39 @@ void VKContext::imguiRenderDrawData()
 
 MemoryStats VKContext::getMemoryStats() const
 {
-    VmaBudget budgets[VK_MAX_MEMORY_HEAPS];
-    vmaGetHeapBudgets(m_allocator, budgets);
-
-    VkPhysicalDeviceMemoryProperties memProps;
-    vkGetPhysicalDeviceMemoryProperties(m_physicalDevice, &memProps);
-
-    VkDeviceSize totalUsage  = 0;
-    VkDeviceSize totalBudget = 0;
-    for (uint32_t i = 0; i < memProps.memoryHeapCount; ++i)
+    // vmaGetHeapBudgets is a driver call (DXGI on Windows) — throttle to every 60 frames
+    if (m_budgetQueryFrame == 0)
     {
-        if (memProps.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+        VmaBudget budgets[VK_MAX_MEMORY_HEAPS];
+        vmaGetHeapBudgets(m_allocator, budgets);
+
+        VkPhysicalDeviceMemoryProperties memProps;
+        vkGetPhysicalDeviceMemoryProperties(m_physicalDevice, &memProps);
+
+        VkDeviceSize totalUsage  = 0;
+        VkDeviceSize totalBudget = 0;
+        for (uint32_t i = 0; i < memProps.memoryHeapCount; ++i)
         {
-            totalUsage  += budgets[i].usage;
-            totalBudget += budgets[i].budget;
+            if (memProps.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+            {
+                totalUsage  += budgets[i].usage;
+                totalBudget += budgets[i].budget;
+            }
         }
+        m_cachedUsedMB   = static_cast<float>(totalUsage)  / (1024.0f * 1024.0f);
+        m_cachedBudgetMB = static_cast<float>(totalBudget) / (1024.0f * 1024.0f);
     }
+    m_budgetQueryFrame = (m_budgetQueryFrame + 1) % 60;
+
+    auto bytesToMB = [](int64_t b) { return static_cast<float>(b) / (1024.0f * 1024.0f); };
 
     MemoryStats stats;
-    stats.usedMB   = static_cast<float>(totalUsage)  / (1024.0f * 1024.0f);
-    stats.budgetMB = static_cast<float>(totalBudget) / (1024.0f * 1024.0f);
+    stats.usedMB         = m_cachedUsedMB;
+    stats.budgetMB       = m_cachedBudgetMB;
+    stats.texturesMB     = bytesToMB(m_memTracker.getBytes(GpuMemCategory::Textures));
+    stats.geometryMB     = bytesToMB(m_memTracker.getBytes(GpuMemCategory::Geometry));
+    stats.framebuffersMB = bytesToMB(m_memTracker.getBytes(GpuMemCategory::Framebuffers));
+    stats.rayTracingMB   = bytesToMB(m_memTracker.getBytes(GpuMemCategory::RayTracing));
     stats.available = true;
     return stats;
 }

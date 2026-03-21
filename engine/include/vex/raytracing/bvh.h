@@ -91,21 +91,7 @@ public:
 
     AABB rootAABB() const { return m_nodes.empty() ? AABB{} : m_nodes[0].bounds; }
 
-    float sahCost() const
-    {
-        if (m_nodes.empty()) return 0.0f;
-        float rootArea = m_nodes[0].bounds.surfaceArea();
-        if (rootArea <= 0.0f) return 0.0f;
-        float cost = 0.0f;
-        for (const auto& n : m_nodes)
-        {
-            if (n.isLeaf())
-                cost += n.bounds.surfaceArea() * static_cast<float>(n.triCount) * INTERSECT_COST;
-            else
-                cost += n.bounds.surfaceArea() * TRAVERSAL_COST;
-        }
-        return cost / rootArea;
-    }
+    float sahCost() const { return m_cachedSAHCost; }
 
 private:
     static constexpr uint32_t SAH_BINS = 12;
@@ -117,7 +103,8 @@ private:
 
     std::vector<Node> m_nodes;
     std::vector<uint32_t> m_indices;
-    uint32_t m_nodesUsed = 0;
+    uint32_t m_nodesUsed    = 0;
+    float    m_cachedSAHCost = 0.0f;
 
     // Temporary build data (cleared after build)
     std::vector<AABB> m_triBounds;

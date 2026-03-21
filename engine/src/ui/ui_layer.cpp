@@ -108,25 +108,26 @@ void UILayer::beginFrame()
 
         ImGuiID dockMain = dockSpaceId;
 
-        // Carve out the four outer regions first
+        // Split right column first so it spans the full height
+        ImGuiID dockRight  = ImGui::DockBuilderSplitNode(dockMain,   ImGuiDir_Right, 0.33f, nullptr, &dockMain);
+        // Bottom and left are carved from the remaining center+left area only
         ImGuiID dockBottom = ImGui::DockBuilderSplitNode(dockMain,   ImGuiDir_Down,  0.33f, nullptr, &dockMain);
         ImGuiID dockLeft   = ImGui::DockBuilderSplitNode(dockMain,   ImGuiDir_Left,  0.20f, nullptr, &dockMain);
-        ImGuiID dockRight  = ImGui::DockBuilderSplitNode(dockMain,   ImGuiDir_Right, 0.33f, nullptr, &dockMain);
 
         // Right panel: Inspector on top, Settings below
         ImGuiID dockRightBottom;
-        ImGui::DockBuilderSplitNode(dockRight, ImGuiDir_Down, 0.60f, &dockRightBottom, &dockRight);
+        ImGui::DockBuilderSplitNode(dockRight, ImGuiDir_Down, 0.55f, &dockRightBottom, &dockRight);
 
-        // Bottom panel: Console on the left, Stats on the right
-        ImGuiID dockBottomRight;
-        ImGui::DockBuilderSplitNode(dockBottom, ImGuiDir_Right, 0.28f, &dockBottomRight, &dockBottom);
+        // Bottom panel: Stats on the left, Console on the right
+        ImGuiID dockBottomLeft;
+        ImGui::DockBuilderSplitNode(dockBottom, ImGuiDir_Left, 0.66f, &dockBottomLeft, &dockBottom);
 
         ImGui::DockBuilderDockWindow("Viewport",   dockMain);
         ImGui::DockBuilderDockWindow("Hierarchy",  dockLeft);
         ImGui::DockBuilderDockWindow("Inspector",  dockRight);
         ImGui::DockBuilderDockWindow("Settings",   dockRightBottom);
-        ImGui::DockBuilderDockWindow("Console",    dockBottom);
-        ImGui::DockBuilderDockWindow("Stats",      dockBottomRight);
+        ImGui::DockBuilderDockWindow("Stats",    dockBottom);
+        ImGui::DockBuilderDockWindow("Console",      dockBottomLeft);
 
         ImGui::DockBuilderFinish(dockSpaceId);
     }

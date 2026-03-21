@@ -26,8 +26,9 @@ VKSkybox::~VKSkybox()
 
 void VKSkybox::destroyResources()
 {
-    auto device = VKContext::get().getDevice();
-    auto allocator = VKContext::get().getAllocator();
+    auto& ctx = VKContext::get();
+    auto device = ctx.getDevice();
+    auto allocator = ctx.getAllocator();
 
     if (m_pipeline)            vkDestroyPipeline(device, m_pipeline, nullptr);
     if (m_pipelineLayout)      vkDestroyPipelineLayout(device, m_pipelineLayout, nullptr);
@@ -38,9 +39,17 @@ void VKSkybox::destroyResources()
 
     if (m_textureSampler)    vkDestroySampler(device, m_textureSampler, nullptr);
     if (m_textureImageView)  vkDestroyImageView(device, m_textureImageView, nullptr);
-    if (m_textureImage)      vmaDestroyImage(allocator, m_textureImage, m_textureAllocation);
+    if (m_textureImage)
+    {
+        ctx.getMemoryTracker().untrack(allocator, m_textureAllocation);
+        vmaDestroyImage(allocator, m_textureImage, m_textureAllocation);
+    }
 
-    if (m_vertexBuffer) vmaDestroyBuffer(allocator, m_vertexBuffer, m_vertexAllocation);
+    if (m_vertexBuffer)
+    {
+        ctx.getMemoryTracker().untrack(allocator, m_vertexAllocation);
+        vmaDestroyBuffer(allocator, m_vertexBuffer, m_vertexAllocation);
+    }
 
     for (auto& frame : m_frames)
     {
@@ -95,6 +104,7 @@ void VKSkybox::createQuad()
 
     vmaCreateBuffer(allocator, &bufInfo, &gpuAllocInfo,
                     &m_vertexBuffer, &m_vertexAllocation, nullptr);
+    ctx.getMemoryTracker().track(allocator, m_vertexAllocation, GpuMemCategory::Geometry);
 
     ctx.immediateSubmit([&](VkCommandBuffer cmd)
     {
@@ -118,6 +128,7 @@ bool VKSkybox::load(const std::string& equirectPath)
         vkDeviceWaitIdle(device);
         if (m_textureSampler)   vkDestroySampler(device, m_textureSampler, nullptr);
         if (m_textureImageView) vkDestroyImageView(device, m_textureImageView, nullptr);
+        ctx.getMemoryTracker().untrack(allocator, m_textureAllocation);
         vmaDestroyImage(allocator, m_textureImage, m_textureAllocation);
         m_textureSampler = VK_NULL_HANDLE;
         m_textureImageView = VK_NULL_HANDLE;
@@ -202,6 +213,7 @@ bool VKSkybox::load(const std::string& equirectPath)
 
     vmaCreateImage(allocator, &imgInfo, &imgAllocInfo,
                    &m_textureImage, &m_textureAllocation, nullptr);
+    ctx.getMemoryTracker().track(allocator, m_textureAllocation, GpuMemCategory::Textures);
 
     // Upload mip 0 then blit-down to generate the full mip chain
     ctx.immediateSubmit([&](VkCommandBuffer cmd)

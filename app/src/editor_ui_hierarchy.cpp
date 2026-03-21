@@ -13,7 +13,6 @@ void EditorUI::drawHierarchyNode(int nodeIdx, Scene& scene)
     bool isSelected = (m_selection->type == Selection::Mesh && m_selection->index == nodeIdx);
 
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow
-                             | ImGuiTreeNodeFlags_DefaultOpen
                              | ImGuiTreeNodeFlags_SpanAvailWidth;
     if (node.childIndices.empty())
         flags |= ImGuiTreeNodeFlags_Leaf;

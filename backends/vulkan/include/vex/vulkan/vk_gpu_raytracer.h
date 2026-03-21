@@ -155,6 +155,10 @@ public:
     // Dispatch the ray generation shader (assumes setUniforms was called).
     void trace(VkCommandBuffer cmd);
 
+    // Free all scene SSBOs and output images (call when deactivating the mode).
+    // Keeps BLAS/TLAS, pipeline, SBT, UBO, and readback buffer intact.
+    void freeSceneData();
+
     // Clear the accumulation image (call when camera moves or settings change).
     void reset();
 

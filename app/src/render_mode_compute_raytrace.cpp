@@ -50,6 +50,14 @@ void VKComputeRaytraceMode::shutdown()
     }
 }
 
+void VKComputeRaytraceMode::deactivate()
+{
+    if (m_vkComputeRaytracer)
+        m_vkComputeRaytracer->freeSceneData();
+    m_vkComputeRTTexW = 0;
+    m_vkComputeRTTexH = 0;
+}
+
 void VKComputeRaytraceMode::activate()
 {
     m_vkComputeSamplesPerSec = 0.0f;
@@ -57,11 +65,14 @@ void VKComputeRaytraceMode::activate()
     {
         m_vkComputeRaytracer->reset();
         m_vkComputeSampleCount = 0;
-        m_vkComputeGeomDirty   = true;
     }
 }
 
-void VKComputeRaytraceMode::onGeometryRebuilt() { activate(); }
+void VKComputeRaytraceMode::onGeometryRebuilt()
+{
+    activate();
+    m_vkComputeGeomDirty = true;
+}
 
 void VKComputeRaytraceMode::render(Scene& scene, const SharedRenderData& shared, const FrameChanges& changes)
 {

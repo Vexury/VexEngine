@@ -118,6 +118,7 @@ void VKTexture2D::createImage(uint32_t width, uint32_t height, VkFormat format)
     allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 
     vmaCreateImage(allocator, &imgInfo, &allocInfo, &m_image, &m_allocation, nullptr);
+    ctx.getMemoryTracker().track(allocator, m_allocation, GpuMemCategory::Textures);
 
     // Create image view
     VkImageViewCreateInfo viewInfo{};
@@ -150,7 +151,11 @@ void VKTexture2D::destroyImage()
 
     if (m_sampler)   vkDestroySampler(device, m_sampler, nullptr);
     if (m_imageView) vkDestroyImageView(device, m_imageView, nullptr);
-    if (m_image)     vmaDestroyImage(allocator, m_image, m_allocation);
+    if (m_image)
+    {
+        VKContext::get().getMemoryTracker().untrack(allocator, m_allocation);
+        vmaDestroyImage(allocator, m_image, m_allocation);
+    }
 
     m_sampler    = VK_NULL_HANDLE;
     m_imageView  = VK_NULL_HANDLE;

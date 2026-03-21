@@ -6,6 +6,7 @@
 #include <VkBootstrap.h>
 #include <vk_mem_alloc.h>
 
+#include <unordered_map>
 #include <vector>
 #include <cstdint>
 
@@ -13,6 +14,21 @@ namespace vex
 {
 
 static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
+
+enum class GpuMemCategory { Textures, Geometry, Framebuffers, RayTracing, Count };
+
+class VKMemoryTracker
+{
+public:
+    void    track(VmaAllocator vma, VmaAllocation alloc, GpuMemCategory cat);
+    void    untrack(VmaAllocator vma, VmaAllocation alloc);
+    int64_t getBytes(GpuMemCategory cat) const { return m_bytes[static_cast<int>(cat)]; }
+
+private:
+    struct Entry { VkDeviceSize size; GpuMemCategory cat; };
+    std::unordered_map<VmaAllocation, Entry> m_allocs;
+    int64_t m_bytes[static_cast<int>(GpuMemCategory::Count)] = {};
+};
 
 struct FrameData
 {
@@ -75,6 +91,8 @@ public:
     // Singleton access for Vulkan resource classes
     static VKContext& get();
 
+    VKMemoryTracker& getMemoryTracker() { return m_memTracker; }
+
 private:
     void createSwapchain();
     void destroySwapchain();
@@ -135,6 +153,13 @@ private:
 
     // RT pipeline properties — queried once after device creation, used for SBT layout
     VkPhysicalDeviceRayTracingPipelinePropertiesKHR m_rtProperties{};
+
+    VKMemoryTracker m_memTracker;
+
+    // Cached budget query — vmaGetHeapBudgets is a driver call, throttled to ~1 Hz
+    mutable float    m_cachedUsedMB   = 0.0f;
+    mutable float    m_cachedBudgetMB = 0.0f;
+    mutable uint32_t m_budgetQueryFrame = 0;
 
     static VKContext* s_instance;
 };

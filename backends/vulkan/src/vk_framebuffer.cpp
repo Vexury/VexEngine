@@ -195,6 +195,7 @@ void VKFramebuffer::createImages()
 
         vmaCreateImage(allocator, &imgInfo, &allocInfo,
                        &m_depthImage, &m_depthAllocation, nullptr);
+        VKContext::get().getMemoryTracker().track(allocator, m_depthAllocation, GpuMemCategory::Framebuffers);
 
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -261,6 +262,7 @@ void VKFramebuffer::createImages()
 
         vmaCreateImage(allocator, &imgInfo, &allocInfo,
                        &m_colorImage, &m_colorAllocation, nullptr);
+        VKContext::get().getMemoryTracker().track(allocator, m_colorAllocation, GpuMemCategory::Framebuffers);
 
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -304,6 +306,7 @@ void VKFramebuffer::createImages()
 
         vmaCreateImage(allocator, &imgInfo, &allocInfo,
                        &m_depthImage, &m_depthAllocation, nullptr);
+        VKContext::get().getMemoryTracker().track(allocator, m_depthAllocation, GpuMemCategory::Framebuffers);
 
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -355,11 +358,19 @@ void VKFramebuffer::destroyImages()
     if (m_framebuffer)          vkDestroyFramebuffer(device, m_framebuffer, nullptr);
     if (m_colorSampler)         vkDestroySampler(device, m_colorSampler, nullptr);
     if (m_colorImageView)       vkDestroyImageView(device, m_colorImageView, nullptr);
-    if (m_colorImage)           vmaDestroyImage(allocator, m_colorImage, m_colorAllocation);
+    if (m_colorImage)
+    {
+        VKContext::get().getMemoryTracker().untrack(allocator, m_colorAllocation);
+        vmaDestroyImage(allocator, m_colorImage, m_colorAllocation);
+    }
     if (m_depthCompSampler)     vkDestroySampler(device, m_depthCompSampler, nullptr);
     if (m_depthDisplaySampler)  vkDestroySampler(device, m_depthDisplaySampler, nullptr);
     if (m_depthImageView)       vkDestroyImageView(device, m_depthImageView, nullptr);
-    if (m_depthImage)           vmaDestroyImage(allocator, m_depthImage, m_depthAllocation);
+    if (m_depthImage)
+    {
+        VKContext::get().getMemoryTracker().untrack(allocator, m_depthAllocation);
+        vmaDestroyImage(allocator, m_depthImage, m_depthAllocation);
+    }
 
     m_framebuffer         = VK_NULL_HANDLE;
     m_colorSampler        = VK_NULL_HANDLE;

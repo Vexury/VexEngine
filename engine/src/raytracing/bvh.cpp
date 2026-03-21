@@ -48,6 +48,25 @@ void BVH::build(const std::vector<AABB>& triBounds)
     m_triBounds.shrink_to_fit();
     m_centroids.clear();
     m_centroids.shrink_to_fit();
+
+    // Cache SAH cost (avoids O(N) traversal on every stats query)
+    float rootArea = m_nodes.empty() ? 0.0f : m_nodes[0].bounds.surfaceArea();
+    if (rootArea > 0.0f)
+    {
+        float cost = 0.0f;
+        for (const auto& n : m_nodes)
+        {
+            if (n.isLeaf())
+                cost += n.bounds.surfaceArea() * static_cast<float>(n.triCount) * INTERSECT_COST;
+            else
+                cost += n.bounds.surfaceArea() * TRAVERSAL_COST;
+        }
+        m_cachedSAHCost = cost / rootArea;
+    }
+    else
+    {
+        m_cachedSAHCost = 0.0f;
+    }
 }
 
 void BVH::updateNodeBounds(uint32_t nodeIdx)

@@ -14,11 +14,18 @@ std::unique_ptr<Mesh> Mesh::create()
 
 VKMesh::~VKMesh()
 {
-    auto allocator = VKContext::get().getAllocator();
+    auto& ctx = VKContext::get();
+    auto allocator = ctx.getAllocator();
     if (m_vertexBuffer)
+    {
+        ctx.getMemoryTracker().untrack(allocator, m_vertexAllocation);
         vmaDestroyBuffer(allocator, m_vertexBuffer, m_vertexAllocation);
+    }
     if (m_indexBuffer)
+    {
+        ctx.getMemoryTracker().untrack(allocator, m_indexAllocation);
         vmaDestroyBuffer(allocator, m_indexBuffer, m_indexAllocation);
+    }
 }
 
 static void createGPUBuffer(const void* data, VkDeviceSize size,
@@ -92,10 +99,12 @@ void VKMesh::upload(const MeshData& data)
     createGPUBuffer(data.vertices.data(), vertexSize,
                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | kASInputFlags,
                     m_vertexBuffer, m_vertexAllocation);
+    VKContext::get().getMemoryTracker().track(VKContext::get().getAllocator(), m_vertexAllocation, GpuMemCategory::Geometry);
 
     createGPUBuffer(data.indices.data(), indexSize,
                     VK_BUFFER_USAGE_INDEX_BUFFER_BIT | kASInputFlags,
                     m_indexBuffer, m_indexAllocation);
+    VKContext::get().getMemoryTracker().track(VKContext::get().getAllocator(), m_indexAllocation, GpuMemCategory::Geometry);
 }
 
 void VKMesh::draw() const

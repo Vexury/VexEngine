@@ -86,6 +86,8 @@ public:
     size_t   getBVHMemoryBytes() const;
     vex::AABB getBVHRootAABB() const;
     float    getBVHSAHCost() const;
+    size_t   getLightTriangleCount() const;
+    float    getTotalLightArea() const;
 
     bool reloadGPUShader();
 

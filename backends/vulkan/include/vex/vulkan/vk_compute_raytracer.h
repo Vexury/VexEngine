@@ -118,6 +118,10 @@ public:
     // Must be called after uploadGeometry() and (optionally) uploadEnvironmentMap().
     bool createOutputImage(uint32_t w, uint32_t h);
 
+    // Free all scene SSBOs and output images (call when deactivating the mode).
+    // Keeps pipeline, UBO, and readback buffer intact.
+    void freeSceneData();
+
     // Clear the accumulation image (call when camera/scene changes).
     void reset();
 
