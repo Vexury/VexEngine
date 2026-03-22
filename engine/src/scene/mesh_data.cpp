@@ -4,6 +4,8 @@
 #include <stb_image.h>
 #include <filesystem>
 #include <unordered_map>
+#include <atomic>
+#include <thread>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -141,20 +143,38 @@ std::vector<MeshData> MeshData::loadOBJ(const std::string& path)
     };
 
     auto t_verts = std::chrono::steady_clock::now();
-    for (size_t si = 0; si < shapes.size(); ++si)
+
+    // Per-shape results stored at fixed indices — workers write to exclusive slots.
+    struct ShapeResult { std::vector<MeshData> submeshes; };
+    std::vector<ShapeResult> perShapeResults(shapes.size());
+
     {
-        const auto& shape = shapes[si];
-        std::unordered_map<int, MeshData> matGroups;
-        std::unordered_map<int, std::unordered_map<VertKey, uint32_t, VertKeyHash>> matVertCache;
-        size_t indexOffset = 0;
+        std::atomic<int> nextShape{0};
+        const int numThreads = std::max(1, (int)std::thread::hardware_concurrency());
+        std::vector<std::thread> workers;
+        workers.reserve(numThreads);
 
-        for (size_t f = 0; f < shape.mesh.num_face_vertices.size(); f++)
+        for (int t = 0; t < numThreads; ++t)
         {
-            int fv = shape.mesh.num_face_vertices[f];
-            int matId = shape.mesh.material_ids[f];
-            if (matId < 0) matId = -1; // normalize "no material"
+            workers.emplace_back([&]()
+            {
+                for (;;)
+                {
+                    int si = nextShape.fetch_add(1, std::memory_order_relaxed);
+                    if (si >= (int)shapes.size()) break;
 
-            auto& group = matGroups[matId];
+                    const auto& shape = shapes[si];
+                    std::unordered_map<int, MeshData> matGroups;
+                    std::unordered_map<int, std::unordered_map<VertKey, uint32_t, VertKeyHash>> matVertCache;
+                    size_t indexOffset = 0;
+
+                    for (size_t f = 0; f < shape.mesh.num_face_vertices.size(); f++)
+                    {
+                        int fv = shape.mesh.num_face_vertices[f];
+                        int matId = shape.mesh.material_ids[f];
+                        if (matId < 0) matId = -1; // normalize "no material"
+
+                        auto& group = matGroups[matId];
 
             glm::vec3 color(0.7f);
             glm::vec3 emissive(0.0f);
@@ -332,29 +352,34 @@ std::vector<MeshData> MeshData::loadOBJ(const std::string& path)
                 }
             }
 
-            indexOffset += fv;
+                        indexOffset += fv;
+                    }
+
+                    // autoSmoothNormals disabled — use OBJ normals as exported
+
+                    // Assign names and collect into this shape's exclusive result slot.
+                    std::string shapeName = shape.name.empty()
+                        ? ("Shape " + std::to_string(si))
+                        : shape.name;
+
+                    for (auto& [matId, group] : matGroups)
+                    {
+                        if (group.name.empty())
+                            group.name = (matId >= 0 && matId < (int)materials.size())
+                                ? materials[matId].name : "default";
+                        group.objectName = shapeName;
+                        perShapeResults[si].submeshes.push_back(std::move(group));
+                    }
+                }
+            });
         }
-
-        // autoSmoothNormals disabled — use OBJ normals as exported
-
-        // Assign names and collect: use the shape name as the submesh name.
-        // If a shape contains multiple material groups, append the material name
-        // to disambiguate (rare, but handles mixed-material objects cleanly).
-        std::string shapeName = shape.name.empty()
-            ? ("Shape " + std::to_string(si))
-            : shape.name;
-
-        for (auto& [matId, group] : matGroups)
-        {
-            // Keep name as the material name (set from MTL inside the face loop).
-            // Fall back to "default" only if no MTL material was referenced.
-            if (group.name.empty())
-                group.name = (matId >= 0 && matId < (int)materials.size())
-                    ? materials[matId].name : "default";
-            group.objectName = shapeName;
-            result.push_back(std::move(group));
-        }
+        for (auto& w : workers) w.join();
     }
+
+    // Flatten per-shape results in shape order (preserves original submesh ordering).
+    for (auto& sr : perShapeResults)
+        for (auto& sm : sr.submeshes)
+            result.push_back(std::move(sm));
 
     float t_verts_ms = std::chrono::duration<float, std::milli>(
         std::chrono::steady_clock::now() - t_verts).count();

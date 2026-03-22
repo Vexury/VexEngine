@@ -50,6 +50,38 @@ void CPURaytracer::setGeometry(std::vector<Triangle> triangles, std::vector<Text
     reset();
 }
 
+void CPURaytracer::getReorderedTriangles(std::vector<Triangle>& out) const
+{
+    const size_t n = m_triVerts.size();
+    out.resize(n);
+    for (size_t i = 0; i < n; ++i)
+    {
+        const auto& v = m_triVerts[i];
+        const auto& d = m_triData[i];
+        Triangle& t  = out[i];
+        t.v0 = v.v0; t.v1 = v.v1; t.v2 = v.v2;
+        t.n0 = d.n0; t.n1 = d.n1; t.n2 = d.n2;
+        t.uv0 = d.uv0; t.uv1 = d.uv1; t.uv2 = d.uv2;
+        t.color            = d.color;
+        t.emissive         = d.emissive;
+        t.geometricNormal  = d.geometricNormal;
+        t.area             = d.area;
+        t.textureIndex          = d.textureIndex;
+        t.emissiveTextureIndex  = d.emissiveTextureIndex;
+        t.normalMapTextureIndex = d.normalMapTextureIndex;
+        t.roughnessTextureIndex = d.roughnessTextureIndex;
+        t.metallicTextureIndex  = d.metallicTextureIndex;
+        t.alphaClip      = d.alphaClip;
+        t.materialType   = d.materialType;
+        t.ior            = d.ior;
+        t.roughness      = d.roughness;
+        t.metallic       = d.metallic;
+        t.tangent        = d.tangent;
+        t.bitangentSign  = d.bitangentSign;
+        t.emissiveStrength = d.emissiveStrength;
+    }
+}
+
 void CPURaytracer::updateMaterials(const std::vector<Triangle>& triangles)
 {
     // triangles is already in BVH-reordered order (same permutation as m_triData),

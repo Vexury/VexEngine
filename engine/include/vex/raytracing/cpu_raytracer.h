@@ -130,6 +130,10 @@ public:
     // Full BVH (for sharing with GPU compute path — avoids a second identical build)
     const BVH& getBVH() const { return m_bvh; }
 
+    // Fills `out` with triangles in BVH-leaf order (same permutation as internal m_triVerts/m_triData).
+    // Call after setGeometry(). Used by SceneGeometryCache to avoid a second full flatten pass.
+    void getReorderedTriangles(std::vector<Triangle>& out) const;
+
     // Point light (caller is responsible for calling reset() after changes)
     void setPointLight(const glm::vec3& pos, const glm::vec3& color, bool enabled);
 
