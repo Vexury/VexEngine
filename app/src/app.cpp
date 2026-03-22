@@ -319,19 +319,30 @@ void App::processPicking()
         m_ui.clearSelection();
 }
 
+void App::pumpLoadingFrame(const std::string& stage, float progress)
+{
+    m_ui.setLoadingState(stage, progress);
+    m_engine.beginFrame();
+    m_ui.renderLoadingOverlay();
+    m_engine.endFrame();
+}
+
+void App::runModeSwitch(RenderMode newMode)
+{
+    m_renderer.setRenderMode(newMode);
+    auto pumpFrame = [&](const std::string& stage, float progress)
+        { pumpLoadingFrame(stage, progress); };
+    m_renderer.flushPendingGeomRebuild(m_scene, pumpFrame);
+    m_ui.clearLoadingState();
+}
+
 void App::runImport(const std::string& path, const std::string& name, bool isGltf)
 {
     auto t_import_total = std::chrono::steady_clock::now();
     int rootIdx = static_cast<int>(m_scene.nodes.size());
 
-    // Pump a single loading frame: update the overlay and present.
     auto pumpFrame = [&](const std::string& stage, float progress)
-    {
-        m_ui.setLoadingState(stage, progress);
-        m_engine.beginFrame();
-        m_ui.renderLoadingOverlay();
-        m_engine.endFrame();
-    };
+        { pumpLoadingFrame(stage, progress); };
 
     if (isGltf)
     {
@@ -501,9 +512,16 @@ void App::run()
             }
         }
 
+        // Handle render mode switch before starting the frame so we can pump
+        // the loading overlay during the (potentially expensive) geometry rebuild.
+        {
+            RenderMode requestedMode = static_cast<RenderMode>(m_ui.getRenderModeIndex());
+            if (requestedMode != m_renderer.getRenderMode())
+                runModeSwitch(requestedMode);
+        }
+
         m_engine.beginFrame();
         handleInput();
-        m_renderer.setRenderMode(static_cast<RenderMode>(m_ui.getRenderModeIndex()));
         m_renderer.setDebugMode(static_cast<DebugMode>(m_ui.getDebugModeIndex()));
         m_renderer.renderScene(m_scene, m_ui.getSelectedMeshGroup(), m_ui.getSelectedSubmesh());
         m_ui.renderViewport(m_renderer, m_scene);

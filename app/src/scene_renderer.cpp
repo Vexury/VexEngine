@@ -345,8 +345,10 @@ void SceneRenderer::setRenderMode(RenderMode mode)
     // Let the outgoing mode release any GPU resources it no longer needs
     if (m_activeMode) m_activeMode->deactivate();
 
-    // Force a geometry rebuild only when leaving rasterizer mode
-    if (mode != RenderMode::Rasterize && prevMode == RenderMode::Rasterize)
+    // Force a geometry rebuild when leaving rasterizer mode, but only if the
+    // cache is not already valid. If geometry changed while in rasterizer,
+    // m_pendingGeomRebuild will already be true from renderScene's deferred path.
+    if (mode != RenderMode::Rasterize && prevMode == RenderMode::Rasterize && !m_geomCache.isReady())
         m_pendingGeomRebuild = true;
 
     // Resolve the mode pointer — the only authoritative switch in the renderer
@@ -413,6 +415,7 @@ void SceneRenderer::applyCPURTSettings()
     m_cpuRaytracer->setEnableNEE(s.enableNEE);
     m_cpuRaytracer->setEnableAA(s.enableAA);
     m_cpuRaytracer->setEnableFireflyClamping(s.enableFireflyClamping);
+    m_cpuRaytracer->setFireflyClampThreshold(s.fireflyClampThreshold);
     m_cpuRaytracer->setEnableEnvironment(s.enableEnvLighting);
     m_cpuRaytracer->setEnvLightMultiplier(s.envLightMultiplier);
     m_cpuRaytracer->setFlatShading(s.flatShading);
@@ -450,6 +453,7 @@ void SceneRenderer::applyGPURTSettingsGL()
     rt->setEnableNEE(s.enableNEE);
     rt->setEnableAA(s.enableAA);
     rt->setEnableFireflyClamping(s.enableFireflyClamping);
+    rt->setFireflyClampThreshold(s.fireflyClampThreshold);
     rt->setEnableEnvironment(s.enableEnvLighting);
     rt->setEnvLightMultiplier(s.envLightMultiplier);
     rt->setFlatShading(s.flatShading);
@@ -472,6 +476,35 @@ void SceneRenderer::buildGeometry(Scene& scene, ProgressFn progress)
     rebuildRaytraceGeometry(scene, std::move(progress));
     scene.geometryDirty = false;
     scene.materialDirty = false;
+}
+
+void SceneRenderer::flushPendingGeomRebuild(Scene& scene, ProgressFn progress)
+{
+    if (m_pendingGeomRebuild)
+    {
+        scene.geometryDirty  = true;
+        m_pendingGeomRebuild = false;
+    }
+
+    if (scene.geometryDirty)
+    {
+        vex::Log::info("Building scene geometry (mode switch)");
+        rebuildRaytraceGeometry(scene, std::move(progress));
+        scene.geometryDirty = false;
+        scene.materialDirty = false;
+        return;
+    }
+
+#ifdef VEX_BACKEND_VULKAN
+    // Cache is valid but BLAS/TLAS may not exist yet — e.g. the first RT session
+    // used Compute mode (no BLAS/TLAS), then the user switches to HW RT.
+    if (m_geomCache.isReady() && !m_geomCache.isAccelReady())
+    {
+        vex::Log::info("Building acceleration structures (HW RT first use)");
+        m_geomCache.buildAccelerationStructures(scene, m_gpuMode ? m_gpuMode->getRaytracer() : nullptr, progress);
+        if (m_gpuMode) m_gpuMode->onGeometryRebuilt();
+    }
+#endif
 }
 
 void SceneRenderer::rebuildRaytraceGeometry(Scene& scene, ProgressFn progress)

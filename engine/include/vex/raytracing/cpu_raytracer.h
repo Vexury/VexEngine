@@ -83,6 +83,8 @@ public:
 
     void setEnableFireflyClamping(bool v);
     bool getEnableFireflyClamping() const { return m_enableFireflyClamping; }
+    void setFireflyClampThreshold(float v);
+    float getFireflyClampThreshold() const { return m_fireflyClampThreshold; }
 
     void setEnableAA(bool v);
     bool getEnableAA() const { return m_enableAA; }
@@ -248,7 +250,8 @@ private:
     int  m_maxDepth = 5;
     bool m_enableNEE = true;
     bool m_useLuminanceCDF = false;
-    bool m_enableFireflyClamping = true;
+    bool  m_enableFireflyClamping = false;
+    float m_fireflyClampThreshold = 10.0f;
     bool m_enableAA = true;
     bool  m_enableEnvironment = true;
     float m_envLightMultiplier = 0.3f;

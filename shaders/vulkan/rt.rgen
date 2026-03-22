@@ -558,7 +558,7 @@ void main() {
     // Firefly clamping
     if (u_uniforms.enableFireflyClamping != 0u) {
         float lum = 0.2126*color.r + 0.7152*color.g + 0.0722*color.b;
-        if (lum > 10.0) color *= 10.0 / lum;
+        if (lum > u_uniforms.fireflyClampThreshold) color *= u_uniforms.fireflyClampThreshold / lum;
     }
 
     // NaN / Inf guard

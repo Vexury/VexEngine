@@ -114,6 +114,11 @@ public:
     using ProgressFn = std::function<void(const std::string& stage, float progress)>;
     void buildGeometry(Scene& scene, ProgressFn progress = nullptr);
 
+    // Executes any pending geometry rebuild (e.g. from a mode switch) with a progress
+    // callback so the caller can pump loading overlay frames between stages.
+    // Clears both m_pendingGeomRebuild and scene.geometryDirty so renderScene skips it.
+    void flushPendingGeomRebuild(Scene& scene, ProgressFn progress);
+
 private:
     // Helpers
     void renderOutlineMask(Scene& scene, int selectedNodeIdx,

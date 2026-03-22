@@ -40,7 +40,8 @@ public:
     // Rebuild only the light CDF (called when luminanceCDF flag toggles).
     void rebuildLightCDF(bool luminanceCDF);
 
-    bool isReady()        const { return m_ready; }
+    bool isReady()      const { return m_ready; }
+    bool isAccelReady() const { return m_blasTlasReady; }
     bool useLuminanceCDF() const { return m_luminanceCDF; }
 
     // --- Read-only accessors (used by render modes via SharedRenderData) ---
@@ -73,6 +74,7 @@ public:
 
 private:
     bool m_ready        = false;
+    bool m_blasTlasReady = false;
     bool m_luminanceCDF = false;
 
     std::vector<vex::CPURaytracer::Triangle>    m_rtTriangles;

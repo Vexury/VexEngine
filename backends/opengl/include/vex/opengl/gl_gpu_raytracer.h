@@ -42,6 +42,7 @@ public:
     void setEnableNEE(bool v);
     void setEnableAA(bool v);
     void setEnableFireflyClamping(bool v);
+    void setFireflyClampThreshold(float v);
     void setEnableEnvironment(bool v);
     void setEnvLightMultiplier(float v);
     void setFlatShading(bool v);
@@ -112,6 +113,7 @@ private:
     int32_t m_locEnableNEE = -1;
     int32_t m_locEnableAA = -1;
     int32_t m_locEnableFireflyClamping = -1;
+    int32_t m_locFireflyClampThreshold = -1;
     int32_t m_locEnableEnvLighting = -1;
     int32_t m_locEnvLightMultiplier = -1;
     int32_t m_locPointLightPos = -1;
@@ -143,7 +145,8 @@ private:
     int  m_maxDepth = 5;
     bool m_enableNEE = true;
     bool m_enableAA = true;
-    bool m_enableFireflyClamping = true;
+    bool  m_enableFireflyClamping = false;
+    float m_fireflyClampThreshold = 10.0f;
     bool  m_enableEnvironment = true;
     float m_envLightMultiplier = 0.3f;
     bool  m_flatShading = false;

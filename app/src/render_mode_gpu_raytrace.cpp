@@ -432,7 +432,8 @@ void GPURaytraceMode::render(Scene& scene, const SharedRenderData& shared, const
     u.rayEps        = m_settings.rayEps;
     u.enableNEE             = m_settings.enableNEE             ? 1u : 0u;
     u.enableAA              = m_settings.enableAA              ? 1u : 0u;
-    u.enableFireflyClamping = m_settings.enableFireflyClamping ? 1u : 0u;
+    u.enableFireflyClamping  = m_settings.enableFireflyClamping ? 1u : 0u;
+    u.fireflyClampThreshold  = m_settings.fireflyClampThreshold;
     u.enableEnvLighting     = m_settings.enableEnvLighting     ? 1u : 0u;
     u.envLightMultiplier    = m_settings.envLightMultiplier;
     u.flatShading           = m_settings.flatShading           ? 1u : 0u;

@@ -116,6 +116,7 @@ void GLGPURaytracer::cacheUniformLocations()
     m_locEnableNEE           = loc("u_enableNEE");
     m_locEnableAA            = loc("u_enableAA");
     m_locEnableFireflyClamping = loc("u_enableFireflyClamping");
+    m_locFireflyClampThreshold = loc("u_fireflyClampThreshold");
     m_locEnableEnvLighting   = loc("u_enableEnvLighting");
     m_locEnvLightMultiplier  = loc("u_envLightMultiplier");
     m_locPointLightPos       = loc("u_pointLightPos");
@@ -532,6 +533,13 @@ void GLGPURaytracer::setEnableFireflyClamping(bool v)
     reset();
 }
 
+void GLGPURaytracer::setFireflyClampThreshold(float v)
+{
+    if (m_fireflyClampThreshold == v) return;
+    m_fireflyClampThreshold = v;
+    reset();
+}
+
 void GLGPURaytracer::setEnableEnvironment(bool v)
 {
     if (m_enableEnvironment == v) return;
@@ -633,6 +641,7 @@ void GLGPURaytracer::traceSample()
     glUniform1i(m_locEnableNEE, m_enableNEE ? 1 : 0);
     glUniform1i(m_locEnableAA, m_enableAA ? 1 : 0);
     glUniform1i(m_locEnableFireflyClamping, m_enableFireflyClamping ? 1 : 0);
+    glUniform1f(m_locFireflyClampThreshold, m_fireflyClampThreshold);
     glUniform1i(m_locEnableEnvLighting, m_enableEnvironment ? 1 : 0);
     glUniform1f(m_locEnvLightMultiplier, m_envLightMultiplier);
     glUniform1i(m_locFlatShading, m_flatShading ? 1 : 0);

@@ -131,6 +131,8 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
             ImGui::Checkbox("Russian Roulette", &renderer.getCPURTSettings().enableRR);
             ImGui::Checkbox("Anti-Aliasing", &renderer.getCPURTSettings().enableAA);
             ImGui::Checkbox("Firefly Clamping", &renderer.getCPURTSettings().enableFireflyClamping);
+            if (renderer.getCPURTSettings().enableFireflyClamping)
+                ImGui::SliderFloat("Clamp Threshold##cpu", &renderer.getCPURTSettings().fireflyClampThreshold, 1.0f, 100.0f, "%.1f");
 
             bool lumCDF = renderer.getUseLuminanceCDF();
             if (ImGui::Checkbox("Luminance CDF", &lumCDF))
@@ -231,6 +233,8 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
             ImGui::Checkbox("Russian Roulette", &renderer.getGPURTSettings().enableRR);
             ImGui::Checkbox("Anti-Aliasing", &renderer.getGPURTSettings().enableAA);
             ImGui::Checkbox("Firefly Clamping", &renderer.getGPURTSettings().enableFireflyClamping);
+            if (renderer.getGPURTSettings().enableFireflyClamping)
+                ImGui::SliderFloat("Clamp Threshold##hwrt", &renderer.getGPURTSettings().fireflyClampThreshold, 1.0f, 100.0f, "%.1f");
 
             bool lumCDF = renderer.getUseLuminanceCDF();
             if (ImGui::Checkbox("Luminance CDF##hwrt", &lumCDF))
@@ -338,6 +342,8 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
             ImGui::Checkbox("Russian Roulette##compute", &renderer.getGPURTSettings().enableRR);
             ImGui::Checkbox("Anti-Aliasing##compute", &renderer.getGPURTSettings().enableAA);
             ImGui::Checkbox("Firefly Clamping##compute", &renderer.getGPURTSettings().enableFireflyClamping);
+            if (renderer.getGPURTSettings().enableFireflyClamping)
+                ImGui::SliderFloat("Clamp Threshold##compute", &renderer.getGPURTSettings().fireflyClampThreshold, 1.0f, 100.0f, "%.1f");
 
             bool lumCDF = renderer.getUseLuminanceCDF();
             if (ImGui::Checkbox("Luminance CDF##compute", &lumCDF))

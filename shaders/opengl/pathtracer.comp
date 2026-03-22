@@ -64,6 +64,7 @@ uniform int   u_maxDepth;
 uniform bool  u_enableNEE;
 uniform bool  u_enableAA;
 uniform bool  u_enableFireflyClamping;
+uniform float u_fireflyClampThreshold;
 uniform bool  u_enableEnvLighting;
 uniform float u_envLightMultiplier;
 uniform bool  u_flatShading;
@@ -1100,8 +1101,8 @@ void main() {
     // Firefly clamping
     if (u_enableFireflyClamping) {
         float lum = 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
-        if (lum > 10.0)
-            color *= 10.0 / lum;
+        if (lum > u_fireflyClampThreshold)
+            color *= u_fireflyClampThreshold / lum;
     }
 
     // NaN/Inf guard — prevent permanent pixel corruption in accumulation buffer

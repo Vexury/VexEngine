@@ -38,7 +38,7 @@ struct RTUniforms
     uint32_t enableRR;                //        offset 160
     uint32_t _pad0a;                  //        offset 164
     uint32_t _pad0b;                  //        offset 168
-    uint32_t _pad0c;                  //        offset 172
+    float    fireflyClampThreshold;   //        offset 172
     float    pointLightPos[3];        // vec3,  offset 176
     uint32_t pointLightEnabled;       //        offset 188
     float    pointLightColor[3];      // vec3,  offset 192

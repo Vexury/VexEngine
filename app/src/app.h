@@ -18,7 +18,9 @@ private:
     void handleInput();
     void processPicking();
     void runImport(const std::string& path, const std::string& name, bool isGltf = false);
+    void runModeSwitch(RenderMode newMode);
     void duplicateSelected();
+    void pumpLoadingFrame(const std::string& stage, float progress);
     NodeSave saveNode(int nodeIndex) const;
 
     vex::Engine    m_engine;

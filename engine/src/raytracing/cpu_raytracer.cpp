@@ -168,6 +168,13 @@ void CPURaytracer::setEnableFireflyClamping(bool v)
     reset();
 }
 
+void CPURaytracer::setFireflyClampThreshold(float v)
+{
+    if (m_fireflyClampThreshold == v) return;
+    m_fireflyClampThreshold = v;
+    reset();
+}
+
 void CPURaytracer::setEnableAA(bool v)
 {
     if (m_enableAA == v) return;
@@ -1102,8 +1109,8 @@ void CPURaytracer::traceRowRange(uint32_t startRow, uint32_t endRow)
             if (m_enableFireflyClamping)
             {
                 float lum = 0.2126f * color.r + 0.7152f * color.g + 0.0722f * color.b;
-                if (lum > 10.0f)
-                    color *= 10.0f / lum;
+                if (lum > m_fireflyClampThreshold)
+                    color *= m_fireflyClampThreshold / lum;
             }
 
             m_accumBuffer[y * m_width + x] += color;

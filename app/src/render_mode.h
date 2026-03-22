@@ -24,7 +24,8 @@ struct VKRTSettings
     int   maxDepth              = 8;
     bool  enableNEE             = true;
     bool  enableAA              = true;
-    bool  enableFireflyClamping = true;
+    bool  enableFireflyClamping  = false;
+    float fireflyClampThreshold  = 10.0f;
     bool  enableEnvLighting     = true;
     float envLightMultiplier    = 0.3f;
     bool  flatShading           = false;
@@ -44,6 +45,7 @@ struct VKRTSettings
         // do NOT reset the accumulator when they change
         return maxDepth == o.maxDepth && enableNEE == o.enableNEE &&
                enableAA == o.enableAA && enableFireflyClamping == o.enableFireflyClamping &&
+               fireflyClampThreshold == o.fireflyClampThreshold &&
                enableEnvLighting == o.enableEnvLighting && envLightMultiplier == o.envLightMultiplier &&
                flatShading == o.flatShading && enableNormalMapping == o.enableNormalMapping &&
                enableEmissive == o.enableEmissive && bilinearFiltering == o.bilinearFiltering &&
@@ -58,7 +60,8 @@ struct CPURTSettings
     int   maxDepth              = 5;
     bool  enableNEE             = true;
     bool  enableAA              = true;
-    bool  enableFireflyClamping = true;
+    bool  enableFireflyClamping  = false;
+    float fireflyClampThreshold  = 10.0f;
     bool  enableEnvLighting     = true;
     float envLightMultiplier    = 0.3f;
     bool  flatShading           = false;

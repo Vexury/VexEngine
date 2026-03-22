@@ -55,6 +55,7 @@ void SceneGeometryCache::rebuild(const Scene& scene, vex::CPURaytracer& cpuRT,
                                   bool luminanceCDF, ProgressFn progress)
 {
     m_luminanceCDF = luminanceCDF;
+    m_blasTlasReady = false;
 
     auto t_total = std::chrono::steady_clock::now();
 
@@ -165,6 +166,7 @@ void SceneGeometryCache::rebuild(const Scene& scene, vex::CPURaytracer& cpuRT,
     if (scene.importedTexPixels.empty())
         SceneImporter::prefetchTextures(const_cast<Scene&>(scene));
 
+    if (progress) progress("Resolving textures...", 0.35f);
     auto t_flatten = std::chrono::steady_clock::now();
 
     for (int ni = 0; ni < (int)scene.nodes.size(); ++ni)
@@ -251,6 +253,7 @@ void SceneGeometryCache::rebuild(const Scene& scene, vex::CPURaytracer& cpuRT,
         vex::Log::info(buf);
     }
 
+    if (progress) progress("Building BVH...", 0.45f);
     m_rtTextures = textures;
 
     {
@@ -402,6 +405,7 @@ void SceneGeometryCache::rebuild(const Scene& scene, vex::CPURaytracer& cpuRT,
         auto iBF = [](int   v) -> float    { float    f; std::memcpy(&f, &v, sizeof(f)); return f; };
         auto fBU = [](float v) -> uint32_t { uint32_t u; std::memcpy(&u, &v, sizeof(u)); return u; };
 
+        if (progress) progress("Packing shading data...", 0.58f);
         m_vkTriShading.clear();
         m_vkInstanceOffsets.clear();
 
@@ -546,6 +550,7 @@ void SceneGeometryCache::rebuild(const Scene& scene, vex::CPURaytracer& cpuRT,
         for (float c : vkLightCDF) m_vkLights.push_back(fBU(c));
 
         {
+            if (progress) progress("Packing texture data...", 0.65f);
             auto t_tex_pack = std::chrono::steady_clock::now();
             m_vkTexData.clear();
             uint32_t texCount = static_cast<uint32_t>(m_rtTextures.size());
@@ -656,6 +661,7 @@ void SceneGeometryCache::buildAccelerationStructures(const Scene& scene,
     }
 
     vex::Log::info("  VK GPU: " + std::to_string(blasTransforms.size()) + " BLASes + TLAS built");
+    m_blasTlasReady = true;
 }
 #endif // VEX_BACKEND_VULKAN
 

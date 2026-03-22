@@ -43,10 +43,10 @@ layout(set = 0, binding = 2) uniform Uniforms {
     uint  flatShading;
     uint  enableNormalMapping;
     uint  enableEmissive;
-    uint  enableRR;          // offset 160
-    uint  _pad0a;            // offset 164
-    uint  _pad0b;            // offset 168
-    uint  _pad0c;            // offset 172
+    uint  enableRR;              // offset 160
+    uint  _pad0a;                // offset 164
+    uint  _pad0b;                // offset 168
+    float fireflyClampThreshold; // offset 172
     vec3  pointLightPos;     // offset 176
     uint  pointLightEnabled;
     vec3  pointLightColor;   // offset 192

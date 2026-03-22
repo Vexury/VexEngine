@@ -22,7 +22,7 @@ layout(set = 0, binding = 0, std140) uniform Uniforms {
     uint  enableRR;
     uint  _pad0a;
     uint  _pad0b;
-    uint  _pad0c;
+    float fireflyClampThreshold;
     vec3  pointLightPos;   uint  pointLightEnabled;
     vec3  pointLightColor; float _pad1;
     vec3  sunDir;          float sunAngularRadius;
@@ -1100,8 +1100,8 @@ void main() {
     // Firefly clamping
     if ((u_uniforms.enableFireflyClamping != 0u)) {
         float lum = 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
-        if (lum > 10.0)
-            color *= 10.0 / lum;
+        if (lum > u_uniforms.fireflyClampThreshold)
+            color *= u_uniforms.fireflyClampThreshold / lum;
     }
 
     // NaN/Inf guard — prevent permanent pixel corruption in accumulation buffer

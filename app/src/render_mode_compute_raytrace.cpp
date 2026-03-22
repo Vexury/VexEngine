@@ -181,7 +181,8 @@ void VKComputeRaytraceMode::render(Scene& scene, const SharedRenderData& shared,
     u.rayEps        = s->rayEps;
     u.enableNEE             = s->enableNEE             ? 1u : 0u;
     u.enableAA              = s->enableAA              ? 1u : 0u;
-    u.enableFireflyClamping = s->enableFireflyClamping ? 1u : 0u;
+    u.enableFireflyClamping  = s->enableFireflyClamping ? 1u : 0u;
+    u.fireflyClampThreshold  = s->fireflyClampThreshold;
     u.enableEnvLighting     = s->enableEnvLighting     ? 1u : 0u;
     u.envLightMultiplier    = s->envLightMultiplier;
     u.flatShading           = s->flatShading           ? 1u : 0u;
