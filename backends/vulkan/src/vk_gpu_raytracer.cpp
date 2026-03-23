@@ -905,6 +905,12 @@ bool VKGpuRaytracer::createOutputImage(uint32_t width, uint32_t height)
     auto  device    = ctx.getDevice();
     auto  allocator = ctx.getAllocator();
 
+    // Wait for any in-flight frames that may be sampling the previous output images
+    // before destroying them. uploadSceneData() calls waitIdle too, but only when
+    // geometry is dirty — a viewport resize can trigger createOutputImage without
+    // a preceding uploadSceneData.
+    vkDeviceWaitIdle(device);
+
     // Destroy previous resources
     destroyBuffer(m_readbackBuffer, m_readbackAlloc);
     if (m_outputImageView) { vkDestroyImageView(device, m_outputImageView, nullptr); m_outputImageView = VK_NULL_HANDLE; }
