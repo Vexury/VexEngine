@@ -90,7 +90,11 @@ struct CookTorranceBSDF
     static float D_GGX(float NdotH, float alpha)
     {
         float a2 = alpha * alpha;
-        float denom = NdotH * NdotH * (a2 - 1.0f) + 1.0f;
+        // Rewrite as sin²θ + a2·cos²θ to avoid catastrophic cancellation:
+        // the original form (NdotH²*(a2-1)+1) loses a2 entirely when
+        // a2 < float machine epsilon (~1e-7), yielding denom=0 and D=+Inf.
+        float NdotH2 = NdotH * NdotH;
+        float denom = (1.0f - NdotH2) + a2 * NdotH2;
         return a2 / (PI * denom * denom);
     }
 

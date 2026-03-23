@@ -325,7 +325,8 @@ void buildONB(vec3 n, out vec3 t, out vec3 b) {
 // ── Cook-Torrance GGX ────────────────────────────────────────────────────
 float D_GGX(float NdotH, float alpha) {
     float a2 = alpha * alpha;
-    float d  = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    float NdotH2 = NdotH * NdotH;
+    float d = (1.0 - NdotH2) + a2 * NdotH2;
     return a2 / (PI * d * d);
 }
 float G1_Smith(float NdotX, float alpha) {

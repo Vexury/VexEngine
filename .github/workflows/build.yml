@@ -67,3 +67,26 @@ jobs:
 
       - name: Build
         run: cmake --build build --config Release --parallel
+
+  test:
+    name: Unit Tests (Linux / OpenGL)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y libgtk-3-dev
+
+      - name: Configure
+        run: cmake -B build -DVEX_BACKEND=OpenGL -DVEX_BUILD_APP=OFF -DVEX_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build tests
+        run: cmake --build build --target vex_tests --parallel
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure

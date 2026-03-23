@@ -55,7 +55,8 @@ const float PI = 3.14159265358979323846;
 float D_GGX(float NdotH, float alpha)
 {
     float a2 = alpha * alpha;
-    float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    float NdotH2 = NdotH * NdotH;
+    float denom = (1.0 - NdotH2) + a2 * NdotH2;
     return a2 / (PI * denom * denom);
 }
 

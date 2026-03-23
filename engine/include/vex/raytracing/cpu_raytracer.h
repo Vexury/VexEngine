@@ -146,6 +146,9 @@ public:
     void setEnvironmentMap(const float* data, int width, int height);
     void clearEnvironmentMap();
 
+    // Traces a single ray and returns the closest hit. Exposed for testing.
+    HitRecord traceRay(const Ray& ray) const;
+
 private:
     struct RNG
     {
@@ -203,8 +206,6 @@ private:
 
     bool intersectTriangle(const Ray& ray, const TriVerts& verts,
                            float& t, float& u, float& v) const;
-
-    HitRecord traceRay(const Ray& ray) const;
     bool traceShadowRay(const Ray& ray, float maxDist) const;
     Ray generateRay(int x, int y, float jitterX, float jitterY, RNG& rng) const;
     glm::vec3 pathTrace(const Ray& ray, RNG& rng,

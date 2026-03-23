@@ -4,7 +4,8 @@ project(VexEngine VERSION 0.1.0 LANGUAGES CXX C)
 # --- Options ---
 set(VEX_BACKEND "OpenGL" CACHE STRING "Graphics backend (OpenGL or Vulkan)")
 set_property(CACHE VEX_BACKEND PROPERTY STRINGS "OpenGL" "Vulkan")
-option(VEX_BUILD_APP "Build the demo application" ON)
+option(VEX_BUILD_APP   "Build the demo application" ON)
+option(VEX_BUILD_TESTS "Build unit tests"           OFF)
 
 # --- Global settings ---
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
@@ -118,6 +119,12 @@ endif()
 # --- Application ---
 if(VEX_BUILD_APP)
     add_subdirectory(app)
+endif()
+
+# --- Tests ---
+if(VEX_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
 endif()
 
 # --- Summary ---
