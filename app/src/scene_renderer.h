@@ -42,6 +42,7 @@ enum class DebugMode : int {
     Roughness  = 8,  // Roughness value (texture .g or scalar)
     Metallic   = 9,  // Metallic value (texture .b or scalar)
     AO         = 10, // Ambient occlusion value (texture .r or 1.0)
+    MappedNormals = 11, // World-space normals after normal-map perturbation
 };
 
 class SceneRenderer
@@ -123,6 +124,7 @@ private:
     // Helpers
     void renderOutlineMask(Scene& scene, int selectedNodeIdx,
                            const glm::mat4& view, const glm::mat4& proj);
+    void renderShadowPrePass(Scene& scene);
     void rebuildMaterials(Scene& scene);
     void rebuildRaytraceGeometry(Scene& scene, ProgressFn progress = nullptr);
 
@@ -167,6 +169,15 @@ private:
     std::unique_ptr<vex::Framebuffer> m_bloomFB[2];
     std::unique_ptr<vex::Shader>      m_bloomThresholdShader;
     std::unique_ptr<vex::Shader>      m_bloomBlurShader;
+
+    // Shadow map pre-pass (shared across all render modes)
+    static constexpr uint32_t SHADOW_MAP_SIZE = 4096;
+    std::unique_ptr<vex::Framebuffer> m_shadowFB;
+    std::unique_ptr<vex::Shader>      m_shadowShader;
+    bool      m_shadowMapDirty        = true;
+    bool      m_shadowMapEverRendered = false;
+    glm::mat4 m_shadowLightVP         {1.0f};
+    float     m_shadowOrthoScale      = 0.0f; // 2*orthoSize/SHADOW_MAP_SIZE, reused each frame
 
     // Sample limits
     uint32_t m_maxSamples = 0;

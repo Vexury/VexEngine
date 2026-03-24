@@ -164,12 +164,22 @@ void main()
     if (pc.hasNormalMap != 0u)
     {
         vec3 T = normalize(vTangent.xyz);
-        T = normalize(T - dot(T, N) * N);  // re-orthogonalize
-        vec3 B = cross(N, T) * vTangent.w;
-        mat3 TBN = mat3(T, B, N);
-        vec3 mapN = texture(u_normalMap, vUV).rgb * 2.0 - 1.0;
-        N = normalize(TBN * mapN);
+        vec3 Tperp = T - dot(T, N) * N;  // Gram-Schmidt re-orthogonalize
+        float tLen = length(Tperp);
+        if (tLen > 1e-4)                  // skip if degenerate (avoids NaN from normalize(0))
+        {
+            T = Tperp / tLen;
+            // Use threshold sign instead of raw vTangent.w: the w varying interpolates
+            // across the triangle and can pass through zero at UV mirror seams, which
+            // would collapse B to zero and produce NaN from normalize().
+            float handedness = (vTangent.w >= 0.0) ? 1.0 : -1.0;
+            vec3 B = cross(N, T) * handedness;
+            mat3 TBN = mat3(T, B, N);
+            vec3 mapN = texture(u_normalMap, vUV).rgb * 2.0 - 1.0;
+            N = normalize(TBN * mapN);
+        }
     }
+    if (pc.debugMode == 11) { FragColor = vec4(N * 0.5 + 0.5, 1.0); return; } // Mapped Normals
 
     vec3 baseColor = vColor * texColor.rgb * vec3(pc.baseColorR, pc.baseColorG, pc.baseColorB);
 

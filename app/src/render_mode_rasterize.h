@@ -28,14 +28,7 @@ public:
     std::pair<int,int> pick(Scene& scene, const SharedRenderData& shared,
                              int pixelX, int pixelY);
 
-    // Shadow map debug display
-    uintptr_t getShadowMapDisplayHandle();
-    bool      shadowMapFlipsUV() const;
-    bool      saveShadowMap(const std::string& path) const;
-
     // Settings getters/setters forwarded from SceneRenderer public API
-    float     getShadowNormalBiasTexels() const   { return m_shadowNormalBiasTexels; }
-    void      setShadowNormalBiasTexels(float v)  { m_shadowNormalBiasTexels = v; }
     bool      getEnableShadows() const            { return m_rasterEnableShadows; }
     void      setEnableShadows(bool v)            { m_rasterEnableShadows = v; }
     float     getShadowStrength() const           { return m_shadowStrength; }
@@ -53,8 +46,6 @@ public:
     bool      getEnableACES() const               { return m_rasterEnableACES; }
     void      setEnableACES(bool v)               { m_rasterEnableACES = v; }
 
-    static constexpr uint32_t SHADOW_MAP_SIZE = 4096;
-
 private:
     // Stable resources injected at init() — never change after that
     vex::Mesh*          m_fullscreenQuad       = nullptr;
@@ -67,14 +58,10 @@ private:
     vex::Shader*        m_bloomBlurShader      = nullptr;
     SceneGeometryCache* m_geomCache            = nullptr;
 
-    // Shadow map (directional / sun light)
-    std::unique_ptr<vex::Framebuffer> m_shadowFB;
-    std::unique_ptr<vex::Shader>      m_shadowShader;
-    bool      m_shadowMapEverRendered  = false;
-    float     m_shadowNormalBiasTexels = 1.5f;
-    bool      m_rasterEnableShadows    = true;
-    float     m_shadowStrength         = 1.0f;
-    glm::vec3 m_shadowColor            = {0.0f, 0.0f, 0.0f};
+    // Shadow settings (rasterizer rendering only; shadow map is rendered in SceneRenderer)
+    bool      m_rasterEnableShadows = true;
+    float     m_shadowStrength      = 1.0f;
+    glm::vec3 m_shadowColor         = {0.0f, 0.0f, 0.0f};
 
     // HDR intermediate framebuffer
     std::unique_ptr<vex::Framebuffer> m_rasterHDRFB;

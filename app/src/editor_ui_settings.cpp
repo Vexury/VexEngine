@@ -56,7 +56,16 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
         const char* debugModes[] = { "None", "Wireframe", "Depth", "Normals",
                                       "UVs", "Albedo", "Emission", "Material Type",
                                       "Roughness", "Metallic", "AO" };
-        ImGui::Combo("Debug Mode", &m_debugModeIndex, debugModes, static_cast<int>(std::size(debugModes)));
+        int comboIndex = (m_debugModeIndex == 11) ? 3 : m_debugModeIndex;
+        if (ImGui::Combo("Debug Mode", &comboIndex, debugModes, static_cast<int>(std::size(debugModes))))
+            m_debugModeIndex = comboIndex;
+        if (m_debugModeIndex == 3 || m_debugModeIndex == 11)
+        {
+            ImGui::SameLine();
+            bool mapped = (m_debugModeIndex == 11);
+            if (ImGui::Checkbox("Normal Mapped", &mapped))
+                m_debugModeIndex = mapped ? 11 : 3;
+        }
 
         ImGui::Checkbox("Normal Mapping", &renderer.getRasterSettings().enableNormalMapping);
 

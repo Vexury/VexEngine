@@ -149,6 +149,12 @@ struct SharedRenderData
     vex::Texture2D* vkRasterEnvTex = nullptr;
 #endif
 
+    // ── Shadow map (shared pre-pass, available in all render modes) ──────────
+    vex::Framebuffer* shadowFB           = nullptr; // non-owning
+    glm::mat4         shadowLightVP      {1.0f};
+    float             shadowNormalBias   = 0.0f;
+    bool              shadowEverRendered = false;
+
     // ── VK-only per-frame data ────────────────────────────────────────────────
 #ifdef VEX_BACKEND_VULKAN
     const std::vector<float>* vkVolumesData = nullptr;

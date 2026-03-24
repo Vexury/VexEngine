@@ -52,13 +52,6 @@ bool RasterizeMode::init(const RenderModeInitData& init)
     std::string dir = vex::Shader::shaderDir();
     std::string ext = vex::Shader::shaderExt();
 
-    // Shadow map framebuffer (depth-only, fixed resolution)
-    m_shadowFB = vex::Framebuffer::create({ .width = SHADOW_MAP_SIZE, .height = SHADOW_MAP_SIZE,
-                                            .hasDepth = true, .depthOnly = true });
-    m_shadowShader = vex::Shader::create();
-    if (!m_shadowShader->loadFromFiles(dir + "shadow.vert" + ext, dir + "shadow.frag" + ext))
-        return false;
-
 #ifdef VEX_BACKEND_OPENGL
     m_rasterHDRFB = vex::Framebuffer::create({ .width = 1280, .height = 720, .hasDepth = true });
 
@@ -70,13 +63,6 @@ bool RasterizeMode::init(const RenderModeInitData& init)
 
 #ifdef VEX_BACKEND_VULKAN
     m_rasterHDRFB = vex::Framebuffer::create({ .width = 1280, .height = 720, .hasDepth = true, .hdrColor = true });
-
-    {
-        auto* vkShadowShader = static_cast<vex::VKShader*>(m_shadowShader.get());
-        auto* vkShadowFB     = static_cast<vex::VKFramebuffer*>(m_shadowFB.get());
-        vkShadowShader->createPipeline(vkShadowFB->getRenderPass(),
-                                       true, true, 1, VK_POLYGON_MODE_FILL, true);
-    }
 #endif
 
     return true;
@@ -112,8 +98,6 @@ void RasterizeMode::shutdown()
     m_vkRasterEnvTex.reset();
 #endif
     m_rasterHDRFB.reset();
-    m_shadowShader.reset();
-    m_shadowFB.reset();
 }
 
 // ---------------------------------------------------------------------------
@@ -155,127 +139,9 @@ void RasterizeMode::renderWithSelection(Scene& scene, const SharedRenderData& sh
     vex::Framebuffer* renderFB = m_rasterHDRFB.get();
     const bool isDebugView = (shared.debugMode != 0); // DebugMode::None == 0
 
-    // --- Compute light view-projection for shadow mapping ---
-    glm::mat4 lightVP         = glm::mat4(1.0f);
-    float     shadowNormalBias = 0.0f;
-    if (scene.showSun && m_rasterEnableShadows && m_shadowFB && m_shadowShader)
-    {
-        glm::vec3 sunDir = scene.getSunDirection();
-        glm::vec3 up = (std::abs(sunDir.y) < 0.99f) ? glm::vec3(0.0f, 1.0f, 0.0f)
-                                                     : glm::vec3(1.0f, 0.0f, 0.0f);
-
-        // Rebuild local AABBs if stale (only in rasterize mode — RT modes maintain them)
-        auto& aabbs = m_geomCache->nodeLocalAABBsMut();
-        if (aabbs.size() != scene.nodes.size())
-        {
-            aabbs.clear();
-            aabbs.resize(scene.nodes.size());
-            for (size_t ni = 0; ni < scene.nodes.size(); ++ni)
-                for (const auto& sm : scene.nodes[ni].submeshes)
-                    for (const auto& v : sm.meshData.vertices)
-                        aabbs[ni].grow(v.position);
-        }
-
-        vex::AABB worldAABB;
-        for (int ni = 0; ni < (int)scene.nodes.size() && ni < (int)aabbs.size(); ++ni)
-        {
-            const vex::AABB& local = aabbs[ni];
-            if (local.min.x > local.max.x) continue;
-            const glm::mat4 M = scene.getWorldMatrix(ni);
-            for (int c = 0; c < 8; ++c)
-            {
-                glm::vec3 corner(
-                    (c & 1) ? local.max.x : local.min.x,
-                    (c & 2) ? local.max.y : local.min.y,
-                    (c & 4) ? local.max.z : local.min.z);
-                worldAABB.grow(glm::vec3(M * glm::vec4(corner, 1.0f)));
-            }
-        }
-        glm::vec3 aabbMin = worldAABB.min;
-        glm::vec3 aabbMax = worldAABB.max;
-        if (aabbMin.x > aabbMax.x)
-        {
-            aabbMin = scene.camera.getTarget() - glm::vec3(1.0f);
-            aabbMax = scene.camera.getTarget() + glm::vec3(1.0f);
-        }
-        glm::vec3 sceneCenter = (aabbMin + aabbMax) * 0.5f;
-        glm::vec3 halfExtent  = (aabbMax - aabbMin) * (0.5f * 1.02f);
-        aabbMin = sceneCenter - halfExtent;
-        aabbMax = sceneCenter + halfExtent;
-
-        float eyeDist = glm::length(halfExtent) + 1.0f;
-        glm::mat4 lightView = glm::lookAt(sceneCenter - sunDir * eyeDist, sceneCenter, up);
-
-        float lMin = std::numeric_limits<float>::max(), lMax = -std::numeric_limits<float>::max();
-        float bMin = std::numeric_limits<float>::max(), bMax = -std::numeric_limits<float>::max();
-        float zNear = std::numeric_limits<float>::max(), zFar = -std::numeric_limits<float>::max();
-        for (int i = 0; i < 8; ++i)
-        {
-            glm::vec3 corner(
-                (i & 1) ? aabbMax.x : aabbMin.x,
-                (i & 2) ? aabbMax.y : aabbMin.y,
-                (i & 4) ? aabbMax.z : aabbMin.z
-            );
-            glm::vec4 lv = lightView * glm::vec4(corner, 1.0f);
-            lMin  = std::min(lMin,  lv.x);  lMax  = std::max(lMax,  lv.x);
-            bMin  = std::min(bMin,  lv.y);  bMax  = std::max(bMax,  lv.y);
-            zNear = std::min(zNear, -lv.z); zFar  = std::max(zFar,  -lv.z);
-        }
-
-        float margin    = (zFar - zNear) * 0.05f + 0.1f;
-        float lightNear = std::max(0.01f, zNear - margin);
-        float lightFar  = zFar + margin;
-
-#ifdef VEX_BACKEND_VULKAN
-        glm::mat4 lightProj = glm::orthoRH_ZO(lMin, lMax, bMin, bMax, lightNear, lightFar);
-#else
-        glm::mat4 lightProj = glm::ortho(lMin, lMax, bMin, bMax, lightNear, lightFar);
-#endif
-        lightVP = lightProj * lightView;
-
-        float orthoSize = std::max(lMax - lMin, bMax - bMin) * 0.5f;
-        shadowNormalBias = m_shadowNormalBiasTexels * (2.0f * orthoSize / float(SHADOW_MAP_SIZE));
-
-        // --- Shadow pass ---
-#ifdef VEX_BACKEND_OPENGL
-        static_cast<vex::GLFramebuffer*>(m_shadowFB.get())->restoreDepthForSampling();
-#endif
-        m_shadowShader->setMat4("u_shadowViewProj", lightVP);
-
-        m_shadowFB->bind();
-        m_shadowFB->clear(0.0f, 0.0f, 0.0f, 1.0f);
-        m_shadowShader->bind();
-        m_shadowShader->setMat4("u_lightViewProj", lightVP);
-
-#ifdef VEX_BACKEND_OPENGL
-        glEnable(GL_POLYGON_OFFSET_FILL);
-        glPolygonOffset(0.0f, 4.0f);
-#endif
-#ifdef VEX_BACKEND_VULKAN
-        vkCmdSetDepthBias(vex::VKContext::get().getCurrentCommandBuffer(), 1.25f, 0.0f, 0.0f);
-#endif
-
-        for (int ni = 0; ni < (int)scene.nodes.size(); ++ni)
-        {
-            const glm::mat4 nodeWorld = scene.getWorldMatrix(ni);
-            for (auto& sm : scene.nodes[ni].submeshes)
-            {
-                m_shadowShader->setMat4("u_model", nodeWorld * sm.modelMatrix);
-                sm.mesh->draw();
-            }
-        }
-
-#ifdef VEX_BACKEND_OPENGL
-        glDisable(GL_POLYGON_OFFSET_FILL);
-#endif
-#ifdef VEX_BACKEND_VULKAN
-        vkCmdSetDepthBias(vex::VKContext::get().getCurrentCommandBuffer(), 0.0f, 0.0f, 0.0f);
-#endif
-
-        m_shadowShader->unbind();
-        m_shadowFB->unbind();
-        m_shadowMapEverRendered = true;
-    }
+    // Shadow map rendered by SceneRenderer's shared pre-pass; just read its results.
+    const glm::mat4 lightVP         = shared.shadowLightVP;
+    const float     shadowNormalBias = shared.shadowNormalBias;
 
     renderFB->bind();
 
@@ -341,9 +207,9 @@ void RasterizeMode::renderWithSelection(Scene& scene, const SharedRenderData& sh
         meshShader->setVec3("u_envColor", envCol);
         meshShader->setFloat("u_envLightMultiplier", m_rasterEnvLightMultiplier);
 
-        if (m_shadowFB)
+        if (shared.shadowFB && shared.shadowEverRendered)
         {
-            auto* glShadowFB = static_cast<vex::GLFramebuffer*>(m_shadowFB.get());
+            auto* glShadowFB = static_cast<vex::GLFramebuffer*>(shared.shadowFB);
             glActiveTexture(GL_TEXTURE6);
             glBindTexture(GL_TEXTURE_2D, glShadowFB->getDepthAttachment());
             meshShader->setInt("u_shadowMap", 6);
@@ -371,9 +237,9 @@ void RasterizeMode::renderWithSelection(Scene& scene, const SharedRenderData& sh
         meshShader->setFloat("u_shadowNormalBias", shadowNormalBias);
         meshShader->setFloat("u_shadowStrength", m_shadowStrength);
         meshShader->setVec3("u_shadowColor", m_shadowColor);
-        if (m_shadowFB)
+        if (shared.shadowFB && shared.shadowEverRendered)
         {
-            auto* vkShadowFB   = static_cast<vex::VKFramebuffer*>(m_shadowFB.get());
+            auto* vkShadowFB   = static_cast<vex::VKFramebuffer*>(shared.shadowFB);
             auto* vkMeshShader = static_cast<vex::VKShader*>(meshShader);
             vkMeshShader->setExternalTextureVK(6,
                 vkShadowFB->getDepthImageView(),
@@ -711,97 +577,3 @@ std::pair<int,int> RasterizeMode::pick(Scene& scene, const SharedRenderData& sha
 #endif
 }
 
-// ---------------------------------------------------------------------------
-// Shadow map display helpers
-// ---------------------------------------------------------------------------
-
-uintptr_t RasterizeMode::getShadowMapDisplayHandle()
-{
-    if (!m_shadowFB || !m_shadowMapEverRendered)
-        return 0;
-
-#ifdef VEX_BACKEND_OPENGL
-    auto* fb = static_cast<vex::GLFramebuffer*>(m_shadowFB.get());
-    fb->prepareDepthForDisplay();
-    return static_cast<uintptr_t>(fb->getDepthAttachment());
-#else
-    auto* fb = static_cast<vex::VKFramebuffer*>(m_shadowFB.get());
-    return fb->getDepthImGuiHandle();
-#endif
-}
-
-bool RasterizeMode::shadowMapFlipsUV() const
-{
-#ifdef VEX_BACKEND_VULKAN
-    return m_shadowFB != nullptr;
-#else
-    return m_shadowFB ? m_shadowFB->flipsUV() : false;
-#endif
-}
-
-bool RasterizeMode::saveShadowMap(const std::string& path) const
-{
-    if (!m_shadowFB || !m_shadowMapEverRendered)
-        return false;
-
-    constexpr uint32_t OUT  = 1024;
-    constexpr uint32_t SRC  = SHADOW_MAP_SIZE;
-    constexpr uint32_t STEP = SRC / OUT;
-
-    std::vector<float>   srcDepth;
-    std::vector<uint8_t> outPixels(OUT * OUT);
-
-#ifdef VEX_BACKEND_OPENGL
-    {
-        auto* fb = static_cast<vex::GLFramebuffer*>(m_shadowFB.get());
-        fb->prepareDepthForDisplay();
-        srcDepth.resize(static_cast<size_t>(SRC) * SRC);
-        glBindTexture(GL_TEXTURE_2D, fb->getDepthAttachment());
-        glGetTexImage(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, GL_FLOAT, srcDepth.data());
-        glBindTexture(GL_TEXTURE_2D, 0);
-
-        for (uint32_t oy = 0; oy < OUT; ++oy)
-        {
-            uint32_t sy0 = (OUT - 1 - oy) * STEP;
-            for (uint32_t ox = 0; ox < OUT; ++ox)
-            {
-                float sum = 0.0f;
-                uint32_t sx0 = ox * STEP;
-                for (uint32_t dy = 0; dy < STEP; ++dy)
-                    for (uint32_t dx = 0; dx < STEP; ++dx)
-                        sum += srcDepth[(sy0 + dy) * SRC + sx0 + dx];
-                outPixels[oy * OUT + ox] = static_cast<uint8_t>(
-                    std::clamp(sum * (1.0f / float(STEP * STEP)), 0.0f, 1.0f) * 255.0f + 0.5f);
-            }
-        }
-    }
-#endif
-
-#ifdef VEX_BACKEND_VULKAN
-    {
-        auto* fb = static_cast<vex::VKFramebuffer*>(m_shadowFB.get());
-        srcDepth = fb->readDepthPixels();
-        if (srcDepth.empty())
-            return false;
-
-        for (uint32_t oy = 0; oy < OUT; ++oy)
-        {
-            uint32_t sy0 = (OUT - 1 - oy) * STEP;
-            for (uint32_t ox = 0; ox < OUT; ++ox)
-            {
-                float sum = 0.0f;
-                uint32_t sx0 = ox * STEP;
-                for (uint32_t dy = 0; dy < STEP; ++dy)
-                    for (uint32_t dx = 0; dx < STEP; ++dx)
-                        sum += srcDepth[(sy0 + dy) * SRC + sx0 + dx];
-                outPixels[oy * OUT + ox] = static_cast<uint8_t>(
-                    std::clamp(sum * (1.0f / float(STEP * STEP)), 0.0f, 1.0f) * 255.0f + 0.5f);
-            }
-        }
-    }
-#endif
-
-    return stbi_write_png(path.c_str(),
-        static_cast<int>(OUT), static_cast<int>(OUT),
-        1, outPixels.data(), static_cast<int>(OUT)) != 0;
-}
