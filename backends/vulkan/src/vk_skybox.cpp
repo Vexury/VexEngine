@@ -461,7 +461,7 @@ void VKSkybox::createPipeline(VkRenderPass renderPass)
     {
         VkBufferCreateInfo bufInfo{};
         bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bufInfo.size = sizeof(glm::mat4);
+        bufInfo.size = 80; // mat4 (64) + float envRotation (4) + std140 pad to 16-byte multiple
         bufInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
 
         VmaAllocationCreateInfo vmaInfo{};
@@ -483,7 +483,7 @@ void VKSkybox::createPipeline(VkRenderPass renderPass)
         // Write UBO binding
         VkDescriptorBufferInfo bufDescInfo{};
         bufDescInfo.buffer = m_frames[i].uboBuffer;
-        bufDescInfo.range = sizeof(glm::mat4);
+        bufDescInfo.range = 80;
 
         VkWriteDescriptorSet writes[2]{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -610,8 +610,11 @@ void VKSkybox::draw(const glm::mat4& inverseVP) const
     auto cmd = ctx.getCurrentCommandBuffer();
     uint32_t frame = ctx.getCurrentFrameIndex();
 
-    // Update UBO
-    std::memcpy(m_frames[frame].uboMapped, &inverseVP, sizeof(glm::mat4));
+    // Update UBO: inverseVP (64 bytes) + envRotation (4 bytes) + pad (12 bytes) = 80 bytes
+    struct { float mat[16]; float envRotation; float _pad[3]; } ubo{};
+    std::memcpy(ubo.mat, &inverseVP[0][0], 64);
+    ubo.envRotation = m_envRotation;
+    std::memcpy(m_frames[frame].uboMapped, &ubo, sizeof(ubo));
 
     // Bind pipeline and descriptors
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);

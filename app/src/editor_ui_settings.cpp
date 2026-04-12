@@ -402,10 +402,6 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
                 rayEps = std::pow(10.0f, static_cast<float>(expVal));
             ImGui::SameLine();
             ImGui::TextDisabled("= %.0e", rayEps);
-
-            float sps = renderer.getVKComputeSamplesPerSec();
-            if (sps > 0.0f)
-                ImGui::Text("Samples/sec: %.1f", sps);
         }
     }
 #endif

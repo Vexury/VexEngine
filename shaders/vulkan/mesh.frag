@@ -25,7 +25,7 @@ layout(set = 0, binding = 0) uniform UBO {
     uint  enableEnvLighting;
     float envLightMultiplier;
     uint  hasEnvMap;
-    float _pad6;
+    float envRotation;
     mat4  sunShadowVP;
     uint  enableShadows;
     float shadowNormalBias; // world-space normal offset per shadow texel
@@ -230,7 +230,7 @@ void main()
     if (enableEnvLighting != 0u && hasEnvMap != 0u)
     {
         vec3 R = reflect(-V, N);
-        float eu = atan(R.z, R.x) / (2.0 * PI) + 0.5;
+        float eu = fract(0.5 + (atan(R.z, R.x) + envRotation) / (2.0 * PI));
         float ev = asin(clamp(R.y, -1.0, 1.0)) / PI + 0.5;
         float mip = roughness * float(textureQueryLevels(u_envMap) - 1);
         float horizonFade = clamp(dot(N, R) * 8.0, 0.0, 1.0);

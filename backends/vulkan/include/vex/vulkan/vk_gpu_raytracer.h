@@ -12,7 +12,7 @@ namespace vex
 {
 
 // ── RTUniforms ────────────────────────────────────────────────────────────────
-// Must exactly match the 'Uniforms' block in rt.common.glsl (std140, 288 bytes).
+// Must exactly match the 'Uniforms' block in rt.common.glsl (std140, 292 bytes).
 // Use plain float/uint fields so the layout is independent of glm alignment flags.
 struct RTUniforms
 {
@@ -57,9 +57,10 @@ struct RTUniforms
     uint32_t bilinearFiltering;       //        offset 276
     uint32_t samplerType;             //        offset 280 — 0=PCG  1=Halton  2=BlueNoise(IGN)
     uint32_t useLuminanceCDF;         //        offset 284
-                                      // total: 288
+    float    envRotation;             //        offset 288
+                                      // total: 292
 };
-static_assert(sizeof(RTUniforms) == 288, "RTUniforms layout mismatch");
+static_assert(sizeof(RTUniforms) == 292, "RTUniforms layout mismatch");
 
 // ── Convenience setters ───────────────────────────────────────────────────────
 // These avoid pulling a large glm dependency into every call site.

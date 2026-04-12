@@ -98,10 +98,6 @@ public:
     bool isDenoiserReady() const { return m_denoiser && m_denoiser->isReady(); }
     bool getShowDenoisedResult() const { return m_showDenoisedResult; }
 
-#ifdef VEX_BACKEND_VULKAN
-    float getVKSamplesPerSec() const;
-    float getVKComputeSamplesPerSec() const;
-#endif
 
     // Struct-based settings access (replaces ~50 individual getters/setters)
     CPURTSettings&  getCPURTSettings()  { return m_cpuRTSettings; }
@@ -231,8 +227,9 @@ private:
     float     m_prevFocusDistance = 10.0f;
 
     // Environment change detection
-    int m_prevEnvmapIndex = -1;
+    int   m_prevEnvmapIndex  = -1;
     glm::vec3 m_prevSkyboxColor{-1.0f};
+    float m_prevEnvRotation  = 0.0f;
 
     // Point light change detection
     glm::vec3 m_prevLightPos{0.0f};

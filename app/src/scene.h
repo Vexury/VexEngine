@@ -111,6 +111,7 @@ struct Scene
 
     int currentEnvmap = SolidColor;
     glm::vec3 skyboxColor { 0.9f, 0.78f, 0.65f };
+    float envRotation = 0.0f;  // Y-axis rotation of the env map in radians
     std::string customEnvmapPath;
 
     bool showSkybox = true;

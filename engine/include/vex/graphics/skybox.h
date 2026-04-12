@@ -19,7 +19,13 @@ public:
 
     virtual void preparePipeline(const Framebuffer& /*fb*/) {}
 
+    void  setEnvRotation(float r) { m_envRotation = r; }
+    float getEnvRotation() const  { return m_envRotation; }
+
     static std::unique_ptr<Skybox> create();
+
+protected:
+    float m_envRotation = 0.0f;
 };
 
 } // namespace vex

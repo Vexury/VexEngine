@@ -103,6 +103,7 @@ void GLSkybox::draw(const glm::mat4& inverseVP) const
 
     m_shader->bind();
     m_shader->setMat4("u_inverseVP", inverseVP);
+    m_shader->setFloat("u_envRotation", m_envRotation);
     m_shader->setInt("u_envmap", 0);
 
     glActiveTexture(GL_TEXTURE0);

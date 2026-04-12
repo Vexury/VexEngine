@@ -36,7 +36,7 @@ struct MeshUBO
     uint32_t  enableEnvLighting  = 0;
     float     envLightMultiplier = 1.f;
     uint32_t  hasEnvMap          = 0;
-    float     _pad6              = 0;
+    float     envRotation        = 0.0f;
     glm::mat4 sunShadowVP;           // light view-projection for shadow mapping
     uint32_t  enableShadows     = 0;
     float     shadowNormalBias  = 0.0f; // world-space normal offset scale (texel-sized)

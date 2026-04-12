@@ -101,6 +101,7 @@ void VKShader::buildUniformMap()
     m_uniformOffsets["u_enableEnvLighting"]  = offsetof(MeshUBO, enableEnvLighting);
     m_uniformOffsets["u_envLightMultiplier"] = offsetof(MeshUBO, envLightMultiplier);
     m_uniformOffsets["u_hasEnvMap"]          = offsetof(MeshUBO, hasEnvMap);
+    m_uniformOffsets["u_envRotation"]        = offsetof(MeshUBO, envRotation);
     m_uniformOffsets["u_shadowViewProj"]     = offsetof(MeshUBO, sunShadowVP);
     m_uniformOffsets["u_enableShadows"]      = offsetof(MeshUBO, enableShadows);
     m_uniformOffsets["u_shadowNormalBias"]   = offsetof(MeshUBO, shadowNormalBias);

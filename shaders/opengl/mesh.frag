@@ -31,6 +31,7 @@ uniform float u_envLightMultiplier;
 
 uniform sampler2D       u_aoMap;
 uniform bool            u_hasAOMap;
+uniform float           u_envRotation;
 
 uniform mat4            u_shadowViewProj;
 uniform sampler2DShadow u_shadowMap;
@@ -203,7 +204,7 @@ void main()
     if (u_enableEnvLighting && u_hasEnvMap)
     {
         vec3 R = reflect(-V, N);
-        float eu = atan(R.z, R.x) / (2.0 * PI) + 0.5;
+        float eu = fract(0.5 + (atan(R.z, R.x) + u_envRotation) / (2.0 * PI));
         float ev = asin(clamp(R.y, -1.0, 1.0)) / PI + 0.5;
         float mip = roughness * float(textureQueryLevels(u_envMap) - 1);
         float horizonFade = clamp(dot(N, R) * 8.0, 0.0, 1.0);

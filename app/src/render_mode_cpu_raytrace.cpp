@@ -66,6 +66,9 @@ void CPURaytraceMode::render(Scene& scene, const SharedRenderData& shared, const
         if (shared.showDenoisedResult) *shared.showDenoisedResult = false;
     }
 
+    // Env rotation (setEnvRotation handles its own change detection and reset)
+    m_cpuRaytracer->setEnvRotation(scene.envRotation);
+
     // React to light changes
     if (changes.lightChanged)
     {

@@ -307,6 +307,13 @@ void CPURaytracer::setEnvironmentColor(const glm::vec3& color)
     m_envColor = color;
 }
 
+void CPURaytracer::setEnvRotation(float r)
+{
+    if (m_envRotation == r) return;
+    m_envRotation = r;
+    reset();
+}
+
 void CPURaytracer::setEnvironmentMap(const float* data, int width, int height)
 {
     m_envMapWidth = width;
@@ -400,8 +407,8 @@ glm::vec3 CPURaytracer::sampleEnvMap(RNG& rng, glm::vec3& outDir, float& outPdf)
     float texU = (static_cast<float>(col) + 0.5f) / static_cast<float>(W);
     float texV = (static_cast<float>(row) + 0.5f) / static_cast<float>(H);
 
-    // Convert to direction (consistent with sampleEnvironment mapping)
-    float phi = (texU - 0.5f) * 2.0f * PI;
+    // Convert to direction (consistent with sampleEnvironment mapping, with rotation)
+    float phi = (texU - 0.5f) * 2.0f * PI + m_envRotation;
     float theta = texV * PI;
     float sinTheta = std::sin(theta);
     float cosTheta = std::cos(theta);
@@ -431,8 +438,8 @@ float CPURaytracer::envMapPdf(const glm::vec3& dir) const
     int W = m_envMapWidth;
     int H = m_envMapHeight;
 
-    // Direction to UV (same as sampleEnvironment)
-    float u = 0.5f + std::atan2(dir.z, dir.x) / (2.0f * PI);
+    // Direction to UV (same as sampleEnvironment, with rotation)
+    float u = std::fmod(0.5f + (std::atan2(dir.z, dir.x) + m_envRotation) / (2.0f * PI) + 1.0f, 1.0f);
     float v = 0.5f - std::asin(glm::clamp(dir.y, -1.0f, 1.0f)) / PI;
 
     int px = std::clamp(static_cast<int>(u * W), 0, W - 1);
@@ -456,17 +463,29 @@ glm::vec3 CPURaytracer::sampleEnvironment(const glm::vec3& direction) const
 {
     if (m_hasEnvMap && !m_envMapPixels.empty())
     {
-        // Equirectangular mapping
-        float u = 0.5f + std::atan2(direction.z, direction.x) / (2.0f * PI);
+        // Equirectangular mapping (with Y-axis rotation)
+        float u = std::fmod(0.5f + (std::atan2(direction.z, direction.x) + m_envRotation) / (2.0f * PI) + 1.0f, 1.0f);
         float v = 0.5f - std::asin(glm::clamp(direction.y, -1.0f, 1.0f)) / PI;
 
-        int px = std::clamp(static_cast<int>(u * m_envMapWidth),  0, m_envMapWidth - 1);
-        int py = std::clamp(static_cast<int>(v * m_envMapHeight), 0, m_envMapHeight - 1);
-        int idx = (py * m_envMapWidth + px) * 3;
+        // Bilinear filtering — U wraps (360° panorama), V clamps at poles
+        float fx = u * static_cast<float>(m_envMapWidth);
+        float fy = v * static_cast<float>(m_envMapHeight);
+        float wx = fx - std::floor(fx);
+        float wy = fy - std::floor(fy);
 
-        return glm::vec3(m_envMapPixels[idx],
-                         m_envMapPixels[idx + 1],
-                         m_envMapPixels[idx + 2]);
+        int x0 = static_cast<int>(fx) % m_envMapWidth;
+        if (x0 < 0) x0 += m_envMapWidth;
+        int x1 = (x0 + 1) % m_envMapWidth;
+        int y0 = std::clamp(static_cast<int>(fy),     0, m_envMapHeight - 1);
+        int y1 = std::clamp(static_cast<int>(fy) + 1, 0, m_envMapHeight - 1);
+
+        auto fetch = [&](int x, int y) -> glm::vec3 {
+            int i = (y * m_envMapWidth + x) * 3;
+            return { m_envMapPixels[i], m_envMapPixels[i + 1], m_envMapPixels[i + 2] };
+        };
+
+        return glm::mix(glm::mix(fetch(x0, y0), fetch(x1, y0), wx),
+                        glm::mix(fetch(x0, y1), fetch(x1, y1), wx), wy);
     }
 
     return m_envColor;
@@ -480,14 +499,25 @@ glm::vec4 CPURaytracer::sampleTexture(int textureIndex, const glm::vec2& uv) con
     float u = uv.x - std::floor(uv.x);
     float v = 1.0f - (uv.y - std::floor(uv.y)); // flip V: OBJ V=0 is bottom, texture row 0 is top
 
-    int px = std::clamp(static_cast<int>(u * tex.width),  0, tex.width - 1);
-    int py = std::clamp(static_cast<int>(v * tex.height), 0, tex.height - 1);
-    int idx = (py * tex.width + px) * 4;
+    // Bilinear filtering
+    float fx = u * static_cast<float>(tex.width);
+    float fy = v * static_cast<float>(tex.height);
+    float wx = fx - std::floor(fx);
+    float wy = fy - std::floor(fy);
 
-    return glm::vec4(tex.pixels[idx]     / 255.0f,
-                     tex.pixels[idx + 1] / 255.0f,
-                     tex.pixels[idx + 2] / 255.0f,
-                     tex.pixels[idx + 3] / 255.0f);
+    int x0 = std::clamp(static_cast<int>(fx),     0, tex.width  - 1);
+    int y0 = std::clamp(static_cast<int>(fy),     0, tex.height - 1);
+    int x1 = std::clamp(static_cast<int>(fx) + 1, 0, tex.width  - 1);
+    int y1 = std::clamp(static_cast<int>(fy) + 1, 0, tex.height - 1);
+
+    auto fetch = [&](int x, int y) -> glm::vec4 {
+        int i = (y * tex.width + x) * 4;
+        return { tex.pixels[i]     / 255.0f, tex.pixels[i + 1] / 255.0f,
+                 tex.pixels[i + 2] / 255.0f, tex.pixels[i + 3] / 255.0f };
+    };
+
+    return glm::mix(glm::mix(fetch(x0, y0), fetch(x1, y0), wx),
+                    glm::mix(fetch(x0, y1), fetch(x1, y1), wx), wy);
 }
 
 // --- Light data ---

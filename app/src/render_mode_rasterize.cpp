@@ -167,6 +167,7 @@ void RasterizeMode::renderWithSelection(Scene& scene, const SharedRenderData& sh
 
     if (scene.showSkybox && scene.skybox && !useSolidColor)
     {
+        scene.skybox->setEnvRotation(scene.envRotation);
         scene.skybox->draw(glm::inverse(proj * view));
         if (shared.drawCalls) ++(*shared.drawCalls);
     }
@@ -206,6 +207,7 @@ void RasterizeMode::renderWithSelection(Scene& scene, const SharedRenderData& sh
         glm::vec3 envCol = useSolidColor ? scene.skyboxColor : shared.rasterEnvColor;
         meshShader->setVec3("u_envColor", envCol);
         meshShader->setFloat("u_envLightMultiplier", m_rasterEnvLightMultiplier);
+        meshShader->setFloat("u_envRotation", scene.envRotation);
 
         if (shared.shadowFB && shared.shadowEverRendered)
         {
@@ -230,6 +232,7 @@ void RasterizeMode::renderWithSelection(Scene& scene, const SharedRenderData& sh
         meshShader->setFloat("u_envLightMultiplier", m_rasterEnvLightMultiplier);
         meshShader->setBool("u_enableEnvLighting", m_rasterEnableEnvLighting);
         meshShader->setBool("u_hasEnvMap", hasEnvMap && m_rasterEnableEnvLighting);
+        meshShader->setFloat("u_envRotation", scene.envRotation);
         meshShader->setTexture(5, hasEnvMap ? shared.vkRasterEnvTex : m_whiteTexture);
 
         meshShader->setMat4("u_shadowViewProj", lightVP);

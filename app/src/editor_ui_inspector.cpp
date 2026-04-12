@@ -283,6 +283,12 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                 ImGui::ColorEdit3("Color", &scene.skyboxColor.x);
             if (scene.currentEnvmap == Scene::CustomHDR && !scene.customEnvmapPath.empty())
                 ImGui::TextWrapped("Path: %s", scene.customEnvmapPath.c_str());
+            if (scene.currentEnvmap != Scene::SolidColor)
+            {
+                float deg = glm::degrees(scene.envRotation);
+                if (ImGui::SliderFloat("Rotation", &deg, -180.0f, 180.0f, "%.1f°"))
+                    scene.envRotation = glm::radians(deg);
+            }
             break;
 
         case Selection::Light:

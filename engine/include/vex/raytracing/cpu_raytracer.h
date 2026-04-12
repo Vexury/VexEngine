@@ -145,6 +145,7 @@ public:
     void setEnvironmentColor(const glm::vec3& color);
     void setEnvironmentMap(const float* data, int width, int height);
     void clearEnvironmentMap();
+    void setEnvRotation(float r);
 
     // Traces a single ray and returns the closest hit. Exposed for testing.
     HitRecord traceRay(const Ray& ray) const;
@@ -289,6 +290,7 @@ private:
 
     // Environment
     glm::vec3 m_envColor{0.0f};
+    float m_envRotation = 0.0f;
     std::vector<float> m_envMapPixels;
     int m_envMapWidth = 0;
     int m_envMapHeight = 0;

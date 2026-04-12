@@ -404,6 +404,7 @@ void SceneRenderer::setRenderMode(RenderMode mode)
     m_prevViewMatrix       = glm::mat4(std::numeric_limits<float>::quiet_NaN());
     m_prevEnvmapIndex      = -1;
     m_prevSkyboxColor      = glm::vec3(-1.0f);
+    m_prevEnvRotation      = std::numeric_limits<float>::quiet_NaN();
     m_prevShowLight        = !m_prevShowLight;
     m_prevLightPos         = glm::vec3(std::numeric_limits<float>::quiet_NaN());
     m_prevLightColor       = glm::vec3(-1.0f);
@@ -786,11 +787,16 @@ void SceneRenderer::renderScene(Scene& scene, int selectedNodeIdx, int selectedS
     applyGPURTSettingsGL();
 #endif
 
-    // Build shared data and dispatch to the active render mode
+    // computeFrameChanges() must run before buildSharedRenderData() because it
+    // calls loadEnvData() on env changes, which destroys and recreates
+    // m_vkRasterEnvTex. Building shared data first would capture the old
+    // (about-to-be-freed) pointer, causing an access violation in setTexture().
+    FrameChanges changes = computeFrameChanges(scene);
+
+    // Build shared data after env/light updates so it picks up fresh pointers.
     SharedRenderData shared = buildSharedRenderData();
     shared.selectedNodeIdx = selectedNodeIdx;
     shared.selectedSubmesh = selectedSubmesh;
-    FrameChanges changes = computeFrameChanges(scene);
 
     if (changes.sunChanged)
         m_shadowMapDirty = true;
@@ -846,6 +852,15 @@ SharedRenderData SceneRenderer::buildSharedRenderData()
 // Called from computeFrameChanges() when the env index or custom path changes.
 void SceneRenderer::loadEnvData(Scene& scene)
 {
+#ifdef VEX_BACKEND_VULKAN
+    // The raster env texture's sampler may still be referenced by in-flight
+    // command buffers via cached descriptor sets in the mesh shader.
+    // beginFrame() only waits for frame N-2, so frame N-1 could still be
+    // executing. Stall before destroying the texture.
+    if (m_vkRasterEnvTex)
+        vkDeviceWaitIdle(vex::VKContext::get().getDevice());
+#endif
+
     if (scene.currentEnvmap > Scene::SolidColor)
     {
         std::string envPath = (scene.currentEnvmap == Scene::CustomHDR)
@@ -1029,6 +1044,13 @@ FrameChanges SceneRenderer::computeFrameChanges(Scene& scene)
         if (m_cpuRaytracer)
             m_cpuRaytracer->setEnvironmentColor(scene.skyboxColor);
         // Treat as env change so all RT modes reset their accumulators
+        changes.envChanged = true;
+    }
+
+    // Env rotation change — reset accumulation in all RT modes
+    if (scene.envRotation != m_prevEnvRotation)
+    {
+        m_prevEnvRotation = scene.envRotation;
         changes.envChanged = true;
     }
 
@@ -1400,15 +1422,3 @@ std::pair<int,int> SceneRenderer::pick(Scene& scene, int pixelX, int pixelY)
     return m_rasterMode->pick(scene, shared, pixelX, pixelY);
 #endif
 }
-
-#ifdef VEX_BACKEND_VULKAN
-float SceneRenderer::getVKSamplesPerSec() const
-{
-    return m_gpuMode ? m_gpuMode->getSamplesPerSec() : 0.0f;
-}
-
-float SceneRenderer::getVKComputeSamplesPerSec() const
-{
-    return m_computeMode ? m_computeMode->getSamplesPerSec() : 0.0f;
-}
-#endif

@@ -36,10 +36,10 @@ layout(set = 0, binding = 0, std140) uniform Uniforms {
     uint  bilinearFiltering;
     uint  samplerType;
     uint  useLuminanceCDF;
+    float envRotation;
     uint  triangleCount;
     uint  bvhNodeCount;
     uint  _pad3a;
-    uint  _pad3b;
 } u_uniforms;
 
 // ── BVH Nodes (binding 1) ──────────────────────────────────────────────────
@@ -216,7 +216,7 @@ vec3 fetchEnvTexel(int px, int py) {
 
 vec3 sampleEnvironment(vec3 dir) {
     if ((u_uniforms.hasEnvMap != 0u) && u_uniforms.envMapWidth > 0) {
-        float u = 0.5 + atan(dir.z, dir.x) / (2.0 * PI);
+        float u = fract(0.5 + (atan(dir.z, dir.x) + u_uniforms.envRotation) / (2.0 * PI));
         float v = 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / PI;
 
         if ((u_uniforms.bilinearFiltering == 0u))
@@ -270,7 +270,7 @@ vec3 sampleEnvMapDirection(out vec3 outRadiance, out float outPdf) {
     float texV = (float(row) + 0.5) / float(H);
 
     // Convert to direction
-    float phi = (texU - 0.5) * 2.0 * PI;
+    float phi = (texU - 0.5) * 2.0 * PI + u_uniforms.envRotation;
     float theta = texV * PI;
     float sinTheta = sin(theta);
     float cosTheta = cos(theta);
@@ -299,7 +299,7 @@ float envMapPdf(vec3 dir) {
     int W = u_uniforms.envMapWidth;
     int H = u_uniforms.envMapHeight;
 
-    float u = 0.5 + atan(dir.z, dir.x) / (2.0 * PI);
+    float u = fract(0.5 + (atan(dir.z, dir.x) + u_uniforms.envRotation) / (2.0 * PI));
     float v = 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / PI;
 
     int px = clamp(int(u * float(W)), 0, W - 1);

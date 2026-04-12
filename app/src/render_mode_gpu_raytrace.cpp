@@ -454,6 +454,7 @@ void GPURaytraceMode::render(Scene& scene, const SharedRenderData& shared, const
     u.sunEnabled       = scene.showSun ? 1u : 0u;
 
     vex::rtUniformsSetVec3(u.envColor, scene.skyboxColor);
+    u.envRotation  = scene.envRotation;
     u.hasEnvMap    = (changes.vkEnvMapW > 0) ? 1u : 0u;
     u.envMapWidth  = changes.vkEnvMapW;
     u.envMapHeight = changes.vkEnvMapH;

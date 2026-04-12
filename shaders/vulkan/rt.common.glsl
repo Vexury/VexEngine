@@ -65,6 +65,7 @@ layout(set = 0, binding = 2) uniform Uniforms {
     uint  bilinearFiltering; // offset 276
     uint  samplerType;       // offset 280 — 0=PCG  1=Halton  2=BlueNoise(IGN)
     uint  useLuminanceCDF;   // offset 284
+    float envRotation;       // offset 288
 } u_uniforms;
 
 // TriShading: 13 vec4s per triangle (see below for layout)
@@ -244,7 +245,7 @@ vec3 fetchEnvTexel(int px, int py) {
 
 vec3 sampleEnvironment(vec3 dir) {
     if (u_uniforms.hasEnvMap != 0u && u_uniforms.envMapWidth > 0) {
-        float u = 0.5 + atan(dir.z, dir.x) / (2.0 * PI);
+        float u = fract(0.5 + (atan(dir.z, dir.x) + u_uniforms.envRotation) / (2.0 * PI));
         float v = 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / PI;
         int W = u_uniforms.envMapWidth;
         int H = u_uniforms.envMapHeight;
@@ -286,7 +287,7 @@ vec3 sampleEnvMapDirection(out vec3 outRadiance, out float outPdf) {
     int col = binarySearchCDF(H + row * W, W, rngNext());
     float texU = (float(col) + 0.5) / float(W);
     float texV = (float(row) + 0.5) / float(H);
-    float phi   = (texU - 0.5) * 2.0 * PI;
+    float phi   = (texU - 0.5) * 2.0 * PI + u_uniforms.envRotation;
     float theta = texV * PI;
     float sinTheta = sin(theta);
     float cosTheta = cos(theta);
@@ -303,7 +304,7 @@ vec3 sampleEnvMapDirection(out vec3 outRadiance, out float outPdf) {
 float envMapPdf(vec3 dir) {
     int W = u_uniforms.envMapWidth;
     int H = u_uniforms.envMapHeight;
-    float u = 0.5 + atan(dir.z, dir.x) / (2.0 * PI);
+    float u = fract(0.5 + (atan(dir.z, dir.x) + u_uniforms.envRotation) / (2.0 * PI));
     float v = 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / PI;
     int px = clamp(int(u * float(W)), 0, W - 1);
     int py = clamp(int(v * float(H)), 0, H - 1);
