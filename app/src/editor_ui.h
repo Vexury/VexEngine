@@ -85,6 +85,10 @@ public:
     struct PendingReparent { int nodeIdx; int newParentIdx; };  // newParentIdx=-1 = make root
     bool consumePendingReparent(PendingReparent& out);
 
+    // Deferred env map load — must happen before beginFrame() to avoid destroying
+    // a VkSampler while the current frame's command buffer has it bound.
+    bool consumePendingEnvLoad(std::string& outPath);
+
     // Ancestor check (used to prevent parenting a node to one of its own descendants)
     bool isAncestorOf(const Scene& scene, int potentialAncestor, int node) const;
 
@@ -132,6 +136,9 @@ private:
     PrimitiveType m_pendingPrimitive  = PrimitiveType::None;
     bool          m_pendingAddVolume  = false;
     bool          m_pendingDuplicate  = false;
+
+    // Pending env map load (set by inspector, consumed by App before beginFrame)
+    std::string m_pendingEnvLoadPath;
 
     // Gizmo transform commit
     bool            m_transformCommitReady = false;

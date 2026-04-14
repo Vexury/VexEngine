@@ -520,6 +520,14 @@ void App::run()
                 runModeSwitch(requestedMode);
         }
 
+        // Env map load must happen before beginFrame() so the old VkSampler is
+        // not destroyed while the current frame's command buffer has it bound.
+        {
+            std::string envPath;
+            if (m_ui.consumePendingEnvLoad(envPath) && m_scene.skybox)
+                m_scene.skybox->load(envPath);
+        }
+
         m_engine.beginFrame();
         handleInput();
         m_renderer.setDebugMode(static_cast<DebugMode>(m_ui.getDebugModeIndex()));

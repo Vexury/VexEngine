@@ -39,6 +39,7 @@ void CPURaytracer::setGeometry(std::vector<Triangle> triangles, std::vector<Text
                           tri.area, tri.textureIndex, tri.emissiveTextureIndex,
                           tri.normalMapTextureIndex,
                           tri.roughnessTextureIndex, tri.metallicTextureIndex,
+                          tri.alphaTextureIndex,
                           tri.alphaClip, tri.materialType, tri.ior,
                           tri.roughness, tri.metallic,
                           tri.tangent, tri.bitangentSign,
@@ -71,6 +72,7 @@ void CPURaytracer::getReorderedTriangles(std::vector<Triangle>& out) const
         t.normalMapTextureIndex = d.normalMapTextureIndex;
         t.roughnessTextureIndex = d.roughnessTextureIndex;
         t.metallicTextureIndex  = d.metallicTextureIndex;
+        t.alphaTextureIndex     = d.alphaTextureIndex;
         t.alphaClip      = d.alphaClip;
         t.materialType   = d.materialType;
         t.ior            = d.ior;
@@ -674,18 +676,21 @@ HitRecord CPURaytracer::traceRay(const Ray& ray) const
                     const auto& data = m_triData[i];
 
                     // Back-face culling: matches Vulkan RT default behavior.
-                    // Dielectrics (materialType==2) allow back-face hits for refraction.
+                    // Dielectrics (2) and thin glass (3) allow back-face hits.
                     if (glm::dot(data.geometricNormal, -ray.direction) <= 0.0f &&
-                        data.materialType != 2)
+                        data.materialType != 2 && data.materialType != 3)
                         continue;
 
                     float w = 1.0f - u - v;
 
-                    // Alpha clip: skip transparent intersections
-                    if (data.alphaClip && data.textureIndex >= 0)
+                    // Alpha clip: dedicated map_d takes priority; fall back to diffuse .a channel.
+                    if (data.alphaClip)
                     {
                         glm::vec2 hitUV = w * data.uv0 + u * data.uv1 + v * data.uv2;
-                        if (sampleTexture(data.textureIndex, hitUV).a < 0.5f)
+                        float alpha = (data.alphaTextureIndex >= 0)
+                            ? sampleTexture(data.alphaTextureIndex, hitUV).r
+                            : (data.textureIndex >= 0 ? sampleTexture(data.textureIndex, hitUV).a : 1.0f);
+                        if (alpha < 0.5f)
                             continue;
                     }
 
@@ -754,16 +759,22 @@ bool CPURaytracer::traceShadowRay(const Ray& ray, float maxDist) const
                     const auto& data = m_triData[i];
 
                     // Back-face culling: back-facing surfaces don't cast shadows.
+                    // Thin glass (3) is also exempt — it needs both faces for correct shadowing.
                     if (glm::dot(data.geometricNormal, -ray.direction) <= 0.0f &&
-                        data.materialType != 2)
+                        data.materialType != 2 && data.materialType != 3)
                         continue;
 
+                    // Thin glass is transparent to shadow rays
+                    if (data.materialType == 3) continue;
                     // Alpha clip: transparent surfaces don't occlude
-                    if (data.alphaClip && data.textureIndex >= 0)
+                    if (data.alphaClip)
                     {
                         float w = 1.0f - u - v;
                         glm::vec2 hitUV = w * data.uv0 + u * data.uv1 + v * data.uv2;
-                        if (sampleTexture(data.textureIndex, hitUV).a < 0.5f)
+                        float alpha = (data.alphaTextureIndex >= 0)
+                            ? sampleTexture(data.alphaTextureIndex, hitUV).r
+                            : (data.textureIndex >= 0 ? sampleTexture(data.textureIndex, hitUV).a : 1.0f);
+                        if (alpha < 0.5f)
                             continue;
                     }
                     return true; // occluded
@@ -858,7 +869,7 @@ glm::vec3 CPURaytracer::pathTrace(const Ray& initialRay, RNG& rng,
         // arch interior where it oscillates forever. Pass through instead: advance the origin
         // past the surface and keep the same direction. Dielectrics are exempt because they
         // legitimately need back-face handling for refraction.
-        if (!frontFace && hit.materialType != 2) // 2 = Dielectric
+        if (!frontFace && hit.materialType != 2 && hit.materialType != 3) // 2=Dielectric 3=ThinGlass
         {
             ray.origin = hit.position + ray.direction * m_rayEps;
             continue;
@@ -951,16 +962,42 @@ glm::vec3 CPURaytracer::pathTrace(const Ray& initialRay, RNG& rng,
         // Sample roughness/metallic textures
         // G channel = roughness, B channel = metallic (ARM packing).
         // Safe for OBJ separate grayscale textures too since R=G=B there.
+        // Thin glass (type 3) repurposes metallic as tint strength — skip texture override.
         float roughness = hit.roughness;
-        if (hit.roughnessTextureIndex >= 0)
-            roughness = sampleTexture(hit.roughnessTextureIndex, hit.uv).y;
-
         float metallic = hit.metallic;
-        if (hit.metallicTextureIndex >= 0)
-            metallic = sampleTexture(hit.metallicTextureIndex, hit.uv).z;
+        if (hit.materialType != 3)
+        {
+            if (hit.roughnessTextureIndex >= 0)
+                roughness = sampleTexture(hit.roughnessTextureIndex, hit.uv).y;
+            if (hit.metallicTextureIndex >= 0)
+                metallic = sampleTexture(hit.metallicTextureIndex, hit.uv).z;
+        }
 
         // --- Material dispatch ---
-        if (hit.materialType == 2)
+        if (hit.materialType == 3)
+        {
+            // Thin glass: Fresnel reflection or tinted passthrough — no refraction.
+            glm::vec3 wo  = -ray.direction;
+            float cosI    = glm::max(glm::dot(hit.normal, wo), 0.0f);
+            float dF0     = (1.0f - hit.ior) / (1.0f + hit.ior); dF0 = dF0 * dF0;
+            float F       = dF0 + (1.0f - dF0) * std::pow(1.0f - cosI, 5.0f);
+
+            prevBsdfPdf  = 1.0f;
+            prevWasDelta = true;
+
+            if (rng.next() < F)
+            {
+                ray.origin    = hit.position + offsetNormal * m_rayEps;
+                ray.direction = glm::reflect(-wo, hit.normal);
+            }
+            else
+            {
+                throughput   *= glm::mix(glm::vec3(1.0f), albedo, metallic);
+                ray.origin    = hit.position - offsetNormal * m_rayEps;
+                // ray.direction unchanged
+            }
+        }
+        else if (hit.materialType == 2)
         {
             // Dielectric: Fresnel reflect/refract
             DielectricBSDF glassBsdf{ albedo, hit.ior };

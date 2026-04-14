@@ -114,7 +114,10 @@ private:
     std::array<FrameUBO, MAX_FRAMES_IN_FLIGHT> m_frameUBOs{};
 
     // Texture descriptor set cache (per VKTexture2D*)
-    std::unordered_map<VKTexture2D*, VkDescriptorSet> m_textureDescriptorSets;
+    // Also stores the VkImageView at cache-write time to detect texture recreation
+    // at the same pointer address (C++ allocator address reuse).
+    struct TexCacheEntry { VkDescriptorSet set; VkImageView view; };
+    std::unordered_map<VKTexture2D*, TexCacheEntry> m_textureDescriptorSets;
     // Separate pool for external image views (e.g. RT output) so it can be
     // reset independently without touching material texture sets.
     VkDescriptorPool m_externalTexturePool = VK_NULL_HANDLE;
@@ -154,7 +157,8 @@ private:
         float    emissiveColorR  = 0.0f;   // offset 104
         float    emissiveColorG  = 0.0f;   // offset 108
         float    emissiveColorB  = 0.0f;   // offset 112
-    };                                     // total: 116 bytes
+        uint32_t hasAlphaMap     = 0;      // offset 116 — shader PC offset 180
+    };                                     // total: 120 bytes
     MeshPushConstant m_pushData{};
 
     // Wireframe pipeline

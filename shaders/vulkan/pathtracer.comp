@@ -143,7 +143,9 @@ vec3  triEmissive(uint i)  { return triShading[i * 10u + 6u].xyz; }
 float triArea(uint i)      { return triShading[i * 10u + 6u].w; }
 vec3  triGeoNormal(uint i) { return triShading[i * 10u + 7u].xyz; }
 int   triNormalMapTexIdx(uint i) { return floatBitsToInt(triShading[i * 10u + 7u].w); }
-bool  triAlphaClip(uint i)       { return triShading[i * 10u + 8u].x > 0.5; }
+// Returns: -1=no alpha clip, -2=clip via diffuse .a, >=0=clip via alpha tex at that index
+int   triAlphaTexIdx(uint i)     { return floatBitsToInt(triShading[i * 10u + 8u].x); }
+bool  triAlphaClip(uint i)       { return triAlphaTexIdx(i) != -1; }
 int   triMaterialType(uint i)    { return int(triShading[i * 10u + 8u].y); }
 float triIOR(uint i)             { return triShading[i * 10u + 8u].z; }
 int   triEmissiveTexIdx(uint i)  { return floatBitsToInt(triShading[i * 10u + 8u].w); }
@@ -346,8 +348,8 @@ bool intersectTriangle(vec3 rayOrig, vec3 rayDir, uint triIdx,
     if (a > -1e-9 && a < 1e-9) return false;
 
     // Back-face culling: matches Vulkan RT default (gl_RayFlagsOpaqueEXT).
-    // Dielectrics (materialType==2) still receive back-face hits for refraction.
-    if (a < 0.0 && triMaterialType(triIdx) != 2) return false;
+    // Dielectrics (2) and thin glass (3) still receive back-face hits.
+    if (a < 0.0 && triMaterialType(triIdx) != 2 && triMaterialType(triIdx) != 3) return false;
 
     float f = 1.0 / a;
     vec3 s = rayOrig - v0;
@@ -427,12 +429,14 @@ HitRecord traceRay(vec3 origin, vec3 direction) {
                 if (intersectTriangle(origin, direction, i, t, u, v) && t < closest.t) {
                     float w = 1.0 - u - v;
 
-                    // Alpha clip: skip transparent intersections
-                    if (triAlphaClip(i) && triTexIdx(i) >= 0) {
-                        vec2 hitUV = w * triUV0(i) + u * triUV1(i) + v * triUV2(i);
-                        if (sampleTexture(triTexIdx(i), hitUV).a < 0.5)
-                            continue;
-                    }
+                    // Alpha clip: map_d takes priority; fall back to diffuse .a channel
+                    { int atx = triAlphaTexIdx(i);
+                      if (atx != -1) {
+                          vec2 hitUV = w * triUV0(i) + u * triUV1(i) + v * triUV2(i);
+                          float alpha = (atx >= 0) ? sampleTexture(atx, hitUV).r
+                                                   : sampleTexture(triTexIdx(i), hitUV).a;
+                          if (alpha < 0.5) continue;
+                      } }
 
                     closest.t = t;
                     closest.hit = true;
@@ -507,13 +511,17 @@ bool traceShadowRay(vec3 origin, vec3 direction, float maxDist) {
             for (uint i = node.leftFirst; i < node.leftFirst + node.triCount; ++i) {
                 float t, u, v;
                 if (intersectTriangle(origin, direction, i, t, u, v) && t < maxDist) {
+                    // Thin glass is transparent to shadow rays
+                    if (triMaterialType(i) == 3) continue;
                     // Alpha clip: transparent surfaces don't occlude
-                    if (triAlphaClip(i) && triTexIdx(i) >= 0) {
-                        float w = 1.0 - u - v;
-                        vec2 hitUV = w * triUV0(i) + u * triUV1(i) + v * triUV2(i);
-                        if (sampleTexture(triTexIdx(i), hitUV).a < 0.5)
-                            continue;
-                    }
+                    { int atx = triAlphaTexIdx(i);
+                      if (atx != -1) {
+                          float w = 1.0 - u - v;
+                          vec2 hitUV = w * triUV0(i) + u * triUV1(i) + v * triUV2(i);
+                          float alpha = (atx >= 0) ? sampleTexture(atx, hitUV).r
+                                                   : sampleTexture(triTexIdx(i), hitUV).a;
+                          if (alpha < 0.5) continue;
+                      } }
                     return true; // Any hit found — occluded
                 }
             }
@@ -770,8 +778,8 @@ vec3 pathTrace(vec3 rayOrigin, vec3 rayDirection) {
 
         // Opaque back-face hit — inverted-normal mesh (e.g. CAD export).
         // Pass through: advance past the surface, keep direction.
-        // Dielectrics (materialType == 2) are exempt — they need back-face for refraction.
-        if (!frontFace && hit.materialType != 2)
+        // Dielectrics (2) and thin glass (3) are exempt — they need both faces.
+        if (!frontFace && hit.materialType != 2 && hit.materialType != 3)
         {
             origin    = hit.position + direction * u_uniforms.rayEps;
             continue;
@@ -843,16 +851,36 @@ vec3 pathTrace(vec3 rayOrigin, vec3 rayDirection) {
         // Sample roughness/metallic textures
         // G channel = roughness, B channel = metallic (ARM packing).
         // Safe for OBJ separate grayscale textures too since R=G=B there.
+        // Thin glass (type 3) repurposes metallic as tint strength — skip texture override.
         float roughness = hit.roughness;
-        if (hit.roughnessTextureIndex >= 0)
-            roughness = sampleTexture(hit.roughnessTextureIndex, hit.uv).y;
-
         float metallic = hit.metallic;
-        if (hit.metallicTextureIndex >= 0)
-            metallic = sampleTexture(hit.metallicTextureIndex, hit.uv).z;
+        if (hit.materialType != 3) {
+            if (hit.roughnessTextureIndex >= 0)
+                roughness = sampleTexture(hit.roughnessTextureIndex, hit.uv).y;
+            if (hit.metallicTextureIndex >= 0)
+                metallic = sampleTexture(hit.metallicTextureIndex, hit.uv).z;
+        }
 
         // ── Material dispatch ──────────────────────────────────────────────
-        if (hit.materialType == 2) {
+        if (hit.materialType == 3) {
+            // Thin glass: Fresnel reflection or tinted passthrough — no refraction.
+            vec3  wo   = -direction;
+            float cosI = max(dot(hit.normal, wo), 0.0);
+            float dF0  = (1.0 - hit.ior) / (1.0 + hit.ior); dF0 = dF0 * dF0;
+            float F    = dF0 + (1.0 - dF0) * pow(1.0 - cosI, 5.0);
+
+            prevBsdfPdf  = 1.0;
+            prevWasDelta = true;
+
+            if (rngNext() < F) {
+                origin    = hit.position + offsetNormal * u_uniforms.rayEps;
+                direction = reflect(-wo, hit.normal);
+            } else {
+                throughput *= mix(vec3(1.0), albedo, metallic);
+                origin      = hit.position - offsetNormal * u_uniforms.rayEps;
+            }
+
+        } else if (hit.materialType == 2) {
             // Dielectric: Fresnel reflect/refract
             vec3 wo = -direction;
             float etaI = frontFace ? 1.0 : hit.ior;

@@ -125,6 +125,7 @@ static SceneMesh makeSM(size_t i, const std::vector<vex::MeshData>& submeshes,
     sm.metallicTexture  = loadTex(submeshes[i].metallicTexturePath,   texCache, texCount, pixCache);
     sm.emissiveTexture  = loadTex(submeshes[i].emissiveTexturePath,   texCache, texCount, pixCache);
     sm.aoTexture        = loadTex(submeshes[i].aoTexturePath,         texCache, texCount, pixCache);
+    sm.alphaTexture     = loadTex(submeshes[i].alphaTexturePath,      texCache, texCount, pixCache);
     sm.meshData         = submeshes[i];
     sm.vertexCount      = static_cast<uint32_t>(submeshes[i].vertices.size());
     sm.indexCount       = static_cast<uint32_t>(submeshes[i].indices.size());
@@ -156,6 +157,7 @@ static void addMeshDataTexPaths(const vex::MeshData& md,
     addTexPath(md.metallicTexturePath,  seen, out);
     addTexPath(md.emissiveTexturePath,  seen, out);
     addTexPath(md.aoTexturePath,        seen, out);
+    addTexPath(md.alphaTexturePath,     seen, out);
 }
 
 static void parallelDecode(const std::vector<std::string>& paths,
@@ -497,6 +499,7 @@ void SceneImporter::addNodeFromSave(Scene& scene, const NodeSave& save, int inse
         sm.metallicTexture  = loadTex(ss.meshData.metallicTexturePath,   texCache, texCount, scene.importedTexPixels);
         sm.emissiveTexture  = loadTex(ss.meshData.emissiveTexturePath,   texCache, texCount, scene.importedTexPixels);
         sm.aoTexture        = loadTex(ss.meshData.aoTexturePath,         texCache, texCount, scene.importedTexPixels);
+        sm.alphaTexture     = loadTex(ss.meshData.alphaTexturePath,      texCache, texCount, scene.importedTexPixels);
         sm.meshData         = ss.meshData;
         sm.modelMatrix      = ss.modelMatrix;
         sm.vertexCount      = static_cast<uint32_t>(ss.meshData.vertices.size());

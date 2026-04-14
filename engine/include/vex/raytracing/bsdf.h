@@ -80,6 +80,14 @@ struct DielectricBSDF
     }
 };
 
+// Thin glass: pure passthrough — tint throughput by glass color, keep the same direction.
+// No Fresnel, no reflection. Base Color controls the tint.
+struct ThinGlassBSDF
+{
+    // direction is unchanged; caller applies albedo tint to throughput
+    glm::vec3 passthrough(const glm::vec3& rayDir) const { return rayDir; }
+};
+
 struct CookTorranceBSDF
 {
     glm::vec3 baseColor;

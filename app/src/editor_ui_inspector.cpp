@@ -23,7 +23,7 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
             {
                 auto& node = scene.nodes[m_selection->index];
 
-                const char* matTypes[] = { "Microfacet (GGX)", "Mirror", "Dielectric" };
+                const char* matTypes[] = { "Microfacet (GGX)", "Mirror", "Dielectric", "Thin Glass" };
                 bool isRasterize = (renderer.getRenderMode() == RenderMode::Rasterize);
 
                 auto drawSubmeshMaterial = [&](auto& sm)
@@ -31,7 +31,7 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                     if (ImGui::ColorEdit3("Base Color", &sm.meshData.baseColor.x))
                         scene.materialDirty = true;
 
-                    if (ImGui::Combo("Type", &sm.meshData.materialType, matTypes, 3))
+                    if (ImGui::Combo("Type", &sm.meshData.materialType, matTypes, 4))
                         scene.materialDirty = true;
 
                     if (sm.meshData.materialType == 0)
@@ -50,7 +50,7 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                         }
                         else ImGui::TextDisabled("Metallic   (texture)");
                     }
-                    else if (sm.meshData.materialType == 2)
+                    else if (sm.meshData.materialType == 2 || sm.meshData.materialType == 3)
                     {
                         ImGui::BeginDisabled(isRasterize);
                         ImGui::DragFloat("IOR", &sm.meshData.ior, 0.01f, 1.f, 3.f, "%.2f");
@@ -77,6 +77,11 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                                 }
                             }
                             ImGui::EndPopup();
+                        }
+                        if (sm.meshData.materialType == 3)
+                        {
+                            ImGui::DragFloat("Tint", &sm.meshData.metallic, 0.01f, 0.f, 1.f, "%.2f");
+                            if (ImGui::IsItemDeactivatedAfterEdit()) scene.materialDirty = true;
                         }
                         ImGui::EndDisabled();
                     }
@@ -158,6 +163,7 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                     };
 
                     texRow("Diffuse",   sm.meshData.diffuseTexturePath,    sm.diffuseTexture);
+                    texRow("Alpha",     sm.meshData.alphaTexturePath,      sm.alphaTexture);
                     texRow("Normal",    sm.meshData.normalTexturePath,     sm.normalTexture);
                     texRow("AO",        sm.meshData.aoTexturePath,         sm.aoTexture);
                     texRow("Roughness", sm.meshData.roughnessTexturePath,  sm.roughnessTexture);
@@ -262,8 +268,8 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                 {
                     scene.currentEnvmap = comboSel;
                     scene.customEnvmapPath.clear();
-                    if (comboSel > Scene::SolidColor && scene.skybox)
-                        scene.skybox->load(Scene::envmapPaths[comboSel]);
+                    if (comboSel > Scene::SolidColor)
+                        m_pendingEnvLoadPath = Scene::envmapPaths[comboSel];
                     m_prevEnvmapForRevert = scene.currentEnvmap;
                 }
             }
@@ -274,8 +280,7 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                 {
                     scene.customEnvmapPath = hdrPath;
                     scene.currentEnvmap = Scene::CustomHDR;
-                    if (scene.skybox)
-                        scene.skybox->load(hdrPath);
+                    m_pendingEnvLoadPath = hdrPath;
                     m_prevEnvmapForRevert = scene.currentEnvmap;
                 }
             }

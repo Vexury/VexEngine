@@ -31,6 +31,8 @@ uniform float u_envLightMultiplier;
 
 uniform sampler2D       u_aoMap;
 uniform bool            u_hasAOMap;
+uniform sampler2D       u_alphaMap;
+uniform bool            u_hasAlphaMap;
 uniform float           u_envRotation;
 
 uniform mat4            u_shadowViewProj;
@@ -104,8 +106,11 @@ vec3 cookTorranceBRDF(vec3 N, vec3 V, vec3 L, vec3 baseColor, float alpha, float
 void main()
 {
     vec4 texColor = texture(u_diffuseMap, vUV);
-    if (u_alphaClip && texColor.a < 0.5)
-        discard;
+    if (u_alphaClip)
+    {
+        float alpha = u_hasAlphaMap ? texture(u_alphaMap, vUV).r : texColor.a;
+        if (alpha < 0.5) discard;
+    }
 
     // --- Debug modes (early-out) ---
     if (u_debugMode == 1) // Wireframe: solid white (polygon mode set on CPU)

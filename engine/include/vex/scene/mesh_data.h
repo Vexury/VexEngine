@@ -37,11 +37,12 @@ struct MeshData
     std::string roughnessTexturePath;
     std::string metallicTexturePath;
     std::string aoTexturePath;
+    std::string alphaTexturePath;  // map_d: dedicated opacity mask; takes priority over map_Kd alpha channel
     glm::vec3 baseColor = {1.0f, 1.0f, 1.0f};     // albedo tint multiplied on top of vertex/texture color
     glm::vec3 emissiveColor = {0.0f, 0.0f, 0.0f}; // additive solid emissive; lets non-emissive materials glow
     float emissiveStrength = 1.0f;                 // multiplier on all emissive contributions
     bool alphaClip = false;
-    int materialType = 0;   // 0=Microfacet (GGX), 1=Mirror, 2=Dielectric
+    int materialType = 0;   // 0=Microfacet (GGX), 1=Mirror, 2=Dielectric, 3=ThinGlass
     float ior = 1.5f;       // index of refraction (dielectric only)
     float roughness = 0.5f;
     float metallic = 0.0f;

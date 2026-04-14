@@ -6,14 +6,12 @@ layout(location = 1) rayPayloadEXT uint       g_shadowed;
 
 // ── Shadow ray ──────────────────────────────────────────────────────────────
 // g_shadowed is pre-set to 1 (occluded). shadow.rmiss clears it on miss.
-// gl_RayFlagsOpaqueEXT prevents rahit (alpha-clip) from firing on shadow hits;
-// alpha-transparent surfaces will cast shadows (acceptable simplification).
+// rahit fires to let thin glass (matType==3) and alpha-clip pass through.
 bool traceShadowRay(vec3 origin, vec3 dir, float maxDist) {
     g_shadowed = 1u;
     traceRayEXT(u_tlas,
         gl_RayFlagsTerminateOnFirstHitEXT |
-        gl_RayFlagsSkipClosestHitShaderEXT |
-        gl_RayFlagsOpaqueEXT,
+        gl_RayFlagsSkipClosestHitShaderEXT,
         0xFF,   // cull mask
         0,      // sbtRecordOffset
         0,      // sbtRecordStride
@@ -249,7 +247,8 @@ vec3 pathTrace(vec3 rayOrigin, vec3 rayDirection) {
         bool frontFace = dot(geoN, -direction) > 0.0;
 
         // Opaque back-face hit (inverted-normal mesh): skip, advance past surface
-        if (!frontFace && matType != 2) {
+        // Dielectric (2) and thin glass (3) are exempt — they need both faces.
+        if (!frontFace && matType != 2 && matType != 3) {
             origin = hitPos + direction * u_uniforms.rayEps;
             continue;
         }
@@ -314,13 +313,38 @@ vec3 pathTrace(vec3 rayOrigin, vec3 rayDirection) {
         // ── Roughness / metallic textures ─────────────────────────────────
         // G channel = roughness, B channel = metallic (ARM packing).
         // Safe for OBJ separate grayscale textures too since R=G=B there.
-        if (roughTexIdx >= 0) roughness = sampleTexture(roughTexIdx, hitUV).y;
-        if (metalTexIdx >= 0) metallic  = sampleTexture(metalTexIdx, hitUV).z;
+        // Thin glass (type 3) repurposes metallic as tint strength — skip texture override.
+        if (matType != 3) {
+            if (roughTexIdx >= 0) roughness = sampleTexture(roughTexIdx, hitUV).y;
+            if (metalTexIdx >= 0) metallic  = sampleTexture(metalTexIdx, hitUV).z;
+        }
 
         // ── Material dispatch ─────────────────────────────────────────────
         vec3 wo = -direction;
 
-        if (matType == 2) {
+        if (matType == 3) {
+            // ── Thin glass ────────────────────────────────────────────────
+            // Fresnel: stochastically reflect or pass through (no refraction).
+            // Base Color = tint color, metallic = tint strength.
+            float cosI = max(dot(shadingN, wo), 0.0);
+            float dF0  = (1.0 - ior) / (1.0 + ior); dF0 = dF0 * dF0;
+            float F    = dF0 + (1.0 - dF0) * pow(1.0 - cosI, 5.0);
+
+            prevBsdfPdf  = 1.0;
+            prevWasDelta = true;
+
+            if (rngNext() < F) {
+                // Reflect — mirror off shading normal, no tint
+                origin    = hitPos + offsetNormal * u_uniforms.rayEps;
+                direction = reflect(-wo, shadingN);
+            } else {
+                // Pass through with optional tint
+                throughput *= mix(vec3(1.0), albedo, metallic);
+                origin      = hitPos - offsetNormal * u_uniforms.rayEps;
+                // direction unchanged
+            }
+
+        } else if (matType == 2) {
             // ── Dielectric ────────────────────────────────────────────────
             float etaI = frontFace ? 1.0 : ior;
             float etaT = frontFace ? ior  : 1.0;

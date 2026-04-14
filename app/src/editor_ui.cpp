@@ -63,6 +63,14 @@ bool EditorUI::consumePendingDuplicate()
     return true;
 }
 
+bool EditorUI::consumePendingEnvLoad(std::string& outPath)
+{
+    if (m_pendingEnvLoadPath.empty()) return false;
+    outPath = std::move(m_pendingEnvLoadPath);
+    m_pendingEnvLoadPath.clear();
+    return true;
+}
+
 bool EditorUI::consumeTransformCommit(TransformCommit& out)
 {
     if (!m_transformCommitReady) return false;
@@ -306,7 +314,7 @@ void EditorUI::renderStats(SceneRenderer& renderer, Scene& scene, vex::GraphicsC
     }
 
     if (!isRT)
-        ImGui::Text("Shadows:    %s", scene.showSun ? "On" : "Off");
+        ImGui::Text("Sun:    %s", scene.showSun ? "On" : "Off");
 
     // --- BVH ---
     size_t bvhMem = renderer.getBVHMemoryBytes();

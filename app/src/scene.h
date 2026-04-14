@@ -34,6 +34,7 @@ struct SceneMesh
     std::shared_ptr<vex::Texture2D> metallicTexture;
     std::shared_ptr<vex::Texture2D> emissiveTexture;
     std::shared_ptr<vex::Texture2D> aoTexture;
+    std::shared_ptr<vex::Texture2D> alphaTexture;
     vex::MeshData meshData;
     glm::mat4 modelMatrix = glm::mat4(1.0f);  // local transform relative to node
     uint32_t vertexCount = 0;

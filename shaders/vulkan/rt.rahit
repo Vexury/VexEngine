@@ -7,12 +7,24 @@ hitAttributeEXT vec2 g_barycentrics;
 void main() {
     uint triIdx = instanceOffsets[gl_InstanceCustomIndexEXT] + uint(gl_PrimitiveID);
 
-    if (triAlphaClip(triIdx) && triTexIdx(triIdx) >= 0) {
+    // Thin glass: transparent to shadow rays, but primary rays must see the hit
+    // so rgen can shade it. Shadow rays carry gl_RayFlagsTerminateOnFirstHitEXT.
+    if (triMaterialType(triIdx) == 3) {
+        if ((gl_IncomingRayFlagsEXT & gl_RayFlagsTerminateOnFirstHitEXT) != 0u)
+            ignoreIntersectionEXT;
+        return; // primary ray: accept hit, let rgen handle shading
+    }
+
+    int atx = triAlphaTexIdx(triIdx);
+    if (atx != -1) {
         float u = g_barycentrics.x;
         float v = g_barycentrics.y;
         float w = 1.0 - u - v;
         vec2 uv = w * triUV0(triIdx) + u * triUV1(triIdx) + v * triUV2(triIdx);
-        if (sampleTexture(triTexIdx(triIdx), uv).a < 0.5)
+        // map_d takes priority; fall back to diffuse .a channel
+        float alpha = (atx >= 0) ? sampleTexture(atx, uv).r
+                                  : sampleTexture(triTexIdx(triIdx), uv).a;
+        if (alpha < 0.5)
             ignoreIntersectionEXT;
     }
 }

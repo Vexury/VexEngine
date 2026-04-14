@@ -445,8 +445,12 @@ void VKComputeRaytracer::uploadGeometry(
             // vec4 7: geometricNormal + normalMapTextureIndex
             p[28] = tri.geometricNormal.x; p[29] = tri.geometricNormal.y; p[30] = tri.geometricNormal.z;
             { uint32_t b; std::memcpy(&b, &tri.normalMapTextureIndex, sizeof(int)); std::memcpy(&p[31], &b, 4); }
-            // vec4 8: alphaClip, materialType, ior, emissiveTextureIndex
-            p[32] = tri.alphaClip ? 1.0f : 0.0f;
+            // vec4 8: alphaEnc, materialType, ior, emissiveTextureIndex
+            // alphaEnc: -1=no clip, -2=use diffuse.a, >=0=alpha tex idx
+            { int alphaEnc = tri.alphaClip
+                  ? (tri.alphaTextureIndex >= 0 ? tri.alphaTextureIndex : -2)
+                  : -1;
+              uint32_t b; std::memcpy(&b, &alphaEnc, sizeof(int)); std::memcpy(&p[32], &b, 4); }
             p[33] = static_cast<float>(tri.materialType);
             p[34] = tri.ior;
             { uint32_t b; std::memcpy(&b, &tri.emissiveTextureIndex, sizeof(int)); std::memcpy(&p[35], &b, 4); }

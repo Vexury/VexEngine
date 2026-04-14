@@ -158,18 +158,19 @@ bool VKShader::loadFromFiles(const std::string& vertexPath, const std::string& f
         return false;
     }
 
-    // Pipeline layout with 9 set layouts + push constant
+    // Pipeline layout with 10 set layouts + push constant
     // Set 0: UBO, Set 1: diffuse, Set 2: normal, Set 3: roughness, Set 4: metallic,
-    // Set 5: emissive, Set 6: env map, Set 7: shadow map, Set 8: AO map
+    // Set 5: emissive, Set 6: env map, Set 7: shadow map, Set 8: AO map, Set 9: alpha map
     VkDescriptorSetLayout setLayouts[] = {
         m_descriptorSetLayout, m_textureSetLayout, m_textureSetLayout,
         m_textureSetLayout, m_textureSetLayout, m_textureSetLayout,
-        m_textureSetLayout, m_textureSetLayout, m_textureSetLayout
+        m_textureSetLayout, m_textureSetLayout, m_textureSetLayout,
+        m_textureSetLayout
     };
 
     // Two push constant ranges:
     //   [0..64)   — vertex stage: mat4 model
-    //   [64..164) — fragment stage: MeshPushConstant (100 bytes)
+    //   [64..184) — fragment stage: MeshPushConstant (120 bytes)
     VkPushConstantRange pushRanges[2]{};
     pushRanges[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pushRanges[0].offset     = 0;
@@ -180,7 +181,7 @@ bool VKShader::loadFromFiles(const std::string& vertexPath, const std::string& f
 
     VkPipelineLayoutCreateInfo plInfo{};
     plInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    plInfo.setLayoutCount = 9;
+    plInfo.setLayoutCount = 10;
     plInfo.pSetLayouts = setLayouts;
     plInfo.pushConstantRangeCount = 2;
     plInfo.pPushConstantRanges = pushRanges;
@@ -610,6 +611,13 @@ void VKShader::setBool(const std::string& name, bool value)
         vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                            sizeof(glm::mat4), sizeof(MeshPushConstant), &m_pushData);
     }
+    else if (name == "u_hasAlphaMap")
+    {
+        m_pushData.hasAlphaMap = value ? 1u : 0u;
+        auto cmd = VKContext::get().getCurrentCommandBuffer();
+        vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+                           sizeof(glm::mat4), sizeof(MeshPushConstant), &m_pushData);
+    }
     else if (name == "u_enableOutline")
     {
         m_pushData.enableOutline = value ? 1u : 0u;
@@ -698,33 +706,52 @@ void VKShader::setTexture(uint32_t slot, Texture2D* tex)
     auto device = ctx.getDevice();
     auto cmd = ctx.getCurrentCommandBuffer();
 
-    // Look up or create descriptor set for this texture
+    // Look up or create descriptor set for this texture.
+    // Also check that the stored VkImageView still matches the texture's current
+    // view — the C++ allocator can reuse addresses, so the pointer alone is not
+    // sufficient to confirm the entry is still valid.
     auto it = m_textureDescriptorSets.find(vkTex);
     VkDescriptorSet texSet;
+    VkImageView currentView = vkTex->getImageView();
+    bool needWrite = false;
 
-    if (it != m_textureDescriptorSets.end())
+    if (it != m_textureDescriptorSets.end() && it->second.view == currentView)
     {
-        texSet = it->second;
+        texSet = it->second.set;  // valid cache hit
     }
     else
     {
-        // Allocate a new descriptor set from the texture pool
-        VkDescriptorSetAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        allocInfo.descriptorPool = m_textureDescriptorPool;
-        allocInfo.descriptorSetCount = 1;
-        allocInfo.pSetLayouts = &m_textureSetLayout;
-
-        if (vkAllocateDescriptorSets(device, &allocInfo, &texSet) != VK_SUCCESS)
+        if (it == m_textureDescriptorSets.end())
         {
-            Log::error("Failed to allocate texture descriptor set");
-            return;
-        }
+            // Allocate a new descriptor set from the texture pool
+            VkDescriptorSetAllocateInfo allocInfo{};
+            allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            allocInfo.descriptorPool = m_textureDescriptorPool;
+            allocInfo.descriptorSetCount = 1;
+            allocInfo.pSetLayouts = &m_textureSetLayout;
 
-        // Write the image descriptor
+            if (vkAllocateDescriptorSets(device, &allocInfo, &texSet) != VK_SUCCESS)
+            {
+                Log::error("Failed to allocate texture descriptor set");
+                return;
+            }
+            m_textureDescriptorSets[vkTex] = {texSet, currentView};
+        }
+        else
+        {
+            // Same pointer, different view — texture was recreated at the same address.
+            // Reuse the existing descriptor set and re-write it with the new view.
+            texSet = it->second.set;
+            it->second.view = currentView;
+        }
+        needWrite = true;
+    }
+
+    if (needWrite)
+    {
         VkDescriptorImageInfo imageInfo{};
         imageInfo.sampler = vkTex->getSampler();
-        imageInfo.imageView = vkTex->getImageView();
+        imageInfo.imageView = currentView;
         imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
         VkWriteDescriptorSet write{};
@@ -736,8 +763,6 @@ void VKShader::setTexture(uint32_t slot, Texture2D* tex)
         write.pImageInfo = &imageInfo;
 
         vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
-
-        m_textureDescriptorSets[vkTex] = texSet;
     }
 
     // Bind to set = 1 + slot (set 1 = diffuse, set 2 = normal map)

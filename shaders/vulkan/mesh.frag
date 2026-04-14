@@ -44,6 +44,7 @@ layout(set = 5, binding = 0) uniform sampler2D u_emissiveMap;
 layout(set = 6, binding = 0) uniform sampler2D u_envMap;
 layout(set = 7, binding = 0) uniform sampler2DShadow u_shadowMap;
 layout(set = 8, binding = 0) uniform sampler2D u_aoMap;
+layout(set = 9, binding = 0) uniform sampler2D u_alphaMap;
 
 // Fragment push constants start at offset 64 (after the 64-byte vertex model matrix).
 layout(push_constant) uniform PC {
@@ -72,6 +73,7 @@ layout(push_constant) uniform PC {
     layout(offset = 168) float emissiveColorR;
     layout(offset = 172) float emissiveColorG;
     layout(offset = 176) float emissiveColorB;
+    layout(offset = 180) uint  hasAlphaMap;
 } pc;
 
 layout(location = 0) out vec4 FragColor;
@@ -129,8 +131,11 @@ vec3 cookTorranceBRDF(vec3 N, vec3 V, vec3 L, vec3 baseColor, float alpha, float
 void main()
 {
     vec4 texColor = texture(u_diffuseMap, vUV);
-    if (pc.alphaClip != 0u && texColor.a < 0.5)
-        discard;
+    if (pc.alphaClip != 0u)
+    {
+        float alpha = (pc.hasAlphaMap != 0u) ? texture(u_alphaMap, vUV).r : texColor.a;
+        if (alpha < 0.5) discard;
+    }
 
     // --- Debug modes (early-out) ---
     if (pc.debugMode == 1) // Wireframe: solid white

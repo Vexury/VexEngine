@@ -5,6 +5,7 @@
 
 #include <functional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -86,6 +87,9 @@ private:
     std::vector<float>                          m_rtLightCDF;
     float                                       m_rtTotalLightArea = 0.0f;
     std::vector<vex::AABB>                      m_nodeLocalAABBs;
+    // Maps texture path → texture index; populated during rebuild() so rebuildMaterials()
+    // can re-derive alpha texture indices without reading back from the SSBO.
+    std::unordered_map<std::string, int>        m_texturePathToIndex;
 
 #ifdef VEX_BACKEND_VULKAN
     std::vector<float>    m_vkTriShading;

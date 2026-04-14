@@ -32,6 +32,7 @@ public:
         int normalMapTextureIndex = -1;
         int roughnessTextureIndex = -1;
         int metallicTextureIndex = -1;
+        int alphaTextureIndex = -1;    // map_d: dedicated alpha mask; -1 = use diffuse .a channel
         bool alphaClip = false;
         int materialType = 0;   // 0=Diffuse, 1=Mirror, 2=Dielectric
         float ior = 1.5f;
@@ -195,6 +196,7 @@ private:
         int normalMapTextureIndex = -1;
         int roughnessTextureIndex = -1;
         int metallicTextureIndex = -1;
+        int alphaTextureIndex = -1;    // map_d: dedicated alpha mask; -1 = use diffuse .a channel
         bool alphaClip = false;
         int materialType = 0;
         float ior = 1.5f;

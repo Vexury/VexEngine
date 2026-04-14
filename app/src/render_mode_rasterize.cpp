@@ -300,6 +300,10 @@ void RasterizeMode::renderWithSelection(Scene& scene, const SharedRenderData& sh
             meshShader->setTexture(7, hasAO ? sm.aoTexture.get() : m_whiteTexture);
             meshShader->setBool("u_hasAOMap", hasAO);
 
+            bool hasAlpha = sm.alphaTexture != nullptr;
+            meshShader->setTexture(8, hasAlpha ? sm.alphaTexture.get() : m_whiteTexture);
+            meshShader->setBool("u_hasAlphaMap", hasAlpha);
+
             meshShader->setVec3("u_baseColor", sm.meshData.baseColor);
             meshShader->setVec3("u_emissiveColor", sm.meshData.emissiveColor);
             meshShader->setFloat("u_emissiveStrength", sm.meshData.emissiveStrength);

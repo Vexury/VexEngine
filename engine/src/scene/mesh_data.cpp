@@ -209,9 +209,19 @@ std::vector<MeshData> MeshData::loadOBJ(const std::string& path)
                     group.diffuseTexturePath =
                         (std::filesystem::path(mtlDir) / m.diffuse_texname).string();
 
+                    // Fallback: if map_Kd has alpha channel and no dedicated map_d, enable alphaClip.
+                    // (Will be overridden below if map_d is present.)
                     int tw, th, tch;
                     if (stbi_info(group.diffuseTexturePath.c_str(), &tw, &th, &tch) && tch == 4)
                         group.alphaClip = true;
+                }
+
+                // map_d: dedicated opacity mask — takes priority over map_Kd alpha channel.
+                if (group.alphaTexturePath.empty() && !m.alpha_texname.empty())
+                {
+                    group.alphaTexturePath =
+                        (std::filesystem::path(mtlDir) / m.alpha_texname).string();
+                    group.alphaClip = true;  // always clip when a dedicated mask is present
                 }
 
                 // tinyobjloader defaults Kd to (0.6,0.6,0.6) when map_Kd exists
@@ -274,6 +284,21 @@ std::vector<MeshData> MeshData::loadOBJ(const std::string& path)
 
                 if (group.metallicTexturePath.empty() && !m.metallic_texname.empty())
                     group.metallicTexturePath = (std::filesystem::path(mtlDir) / m.metallic_texname).string();
+                // map_refl is commonly used for metallic by exporters predating PBR's map_Pm.
+                // tinyobj only recognises bare "refl" → reflection_texname; "map_refl" is unknown
+                // and lands in unknown_parameter. Use ParseTextureNameAndOption so options like
+                // "-type sphere" are stripped and only the filename is kept.
+                if (group.metallicTexturePath.empty())
+                {
+                    auto it = m.unknown_parameter.find("map_refl");
+                    if (it != m.unknown_parameter.end())
+                    {
+                        std::string texName;
+                        tinyobj::texture_option_t texOpt;
+                        if (tinyobj::ParseTextureNameAndOption(&texName, &texOpt, it->second.c_str()) && !texName.empty())
+                            group.metallicTexturePath = (std::filesystem::path(mtlDir) / texName).string();
+                    }
+                }
             }
 
             glm::vec3 pos[3];

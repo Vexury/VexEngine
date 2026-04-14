@@ -171,7 +171,7 @@ void SceneGeometryCache::rebuild(const Scene& scene, vex::CPURaytracer& cpuRT,
         int triOffset, triCount;
         glm::mat4 worldMat;
         glm::mat3 normalMat;
-        int texIdx, emissiveTexIdx, normalTexIdx, roughnessTexIdx, metallicTexIdx;
+        int texIdx, emissiveTexIdx, normalTexIdx, roughnessTexIdx, metallicTexIdx, alphaTexIdx;
     };
 
     std::vector<SubmeshTask> tasks;
@@ -205,6 +205,7 @@ void SceneGeometryCache::rebuild(const Scene& scene, vex::CPURaytracer& cpuRT,
             task.normalTexIdx    = resolveTexture(sm.meshData.normalTexturePath);
             task.roughnessTexIdx = resolveTexture(sm.meshData.roughnessTexturePath);
             task.metallicTexIdx  = resolveTexture(sm.meshData.metallicTexturePath);
+            task.alphaTexIdx     = resolveTexture(sm.meshData.alphaTexturePath);
             tasks.push_back(task);
 
 #ifdef VEX_BACKEND_VULKAN
@@ -310,6 +311,7 @@ void SceneGeometryCache::rebuild(const Scene& scene, vex::CPURaytracer& cpuRT,
                         tri.normalMapTextureIndex = task.normalTexIdx;
                         tri.roughnessTextureIndex = task.roughnessTexIdx;
                         tri.metallicTextureIndex  = task.metallicTexIdx;
+                        tri.alphaTextureIndex     = task.alphaTexIdx;
                         tri.alphaClip    = md.alphaClip;
                         tri.materialType = md.materialType;
                         tri.ior          = md.ior;
@@ -344,8 +346,13 @@ void SceneGeometryCache::rebuild(const Scene& scene, vex::CPURaytracer& cpuRT,
                         sh[27]=area;
                         // [7] geoNormal.xyz + normalMapTexIdx
                         sh[28]=geoN.x; sh[29]=geoN.y; sh[30]=geoN.z; sh[31]=iBF(task.normalTexIdx);
-                        // [8] alphaClip + materialType + ior + emissiveTexIdx
-                        sh[32]=md.alphaClip?1.0f:0.0f; sh[33]=static_cast<float>(md.materialType);
+                        // [8] alphaEnc + materialType + ior + emissiveTexIdx
+                        // alphaEnc encodes alpha clip: -1=no clip, -2=use diffuse.a, >=0=alpha tex idx
+                        { int alphaEnc = md.alphaClip
+                              ? (task.alphaTexIdx >= 0 ? task.alphaTexIdx : -2)
+                              : -1;
+                          sh[32]=iBF(alphaEnc); }
+                        sh[33]=static_cast<float>(md.materialType);
                         sh[34]=md.ior; sh[35]=iBF(task.emissiveTexIdx);
                         // [9] tangent.xyz + bitangentSign
                         sh[36]=tangent.x; sh[37]=tangent.y; sh[38]=tangent.z; sh[39]=bitangentSign;
@@ -551,6 +558,7 @@ void SceneGeometryCache::rebuild(const Scene& scene, vex::CPURaytracer& cpuRT,
         vex::Log::info(buf);
     }
 
+    m_texturePathToIndex = std::move(textureMap);
     m_ready = true;
 }
 
@@ -636,6 +644,7 @@ void SceneGeometryCache::rebuildMaterials(const Scene& scene, vex::CPURaytracer*
         m_rtTriangles[i].ior              = md.ior;
         m_rtTriangles[i].roughness        = md.roughness;
         m_rtTriangles[i].metallic         = md.metallic;
+        m_rtTriangles[i].alphaClip        = md.alphaClip;
     }
 
     m_rtLightIndices.clear();
@@ -664,6 +673,7 @@ void SceneGeometryCache::rebuildMaterials(const Scene& scene, vex::CPURaytracer*
     if (!m_vkTriShading.empty())
     {
         static constexpr size_t FLOATS_PER_TRI = 52;
+        auto iBF = [](int   v) -> float    { float    f; std::memcpy(&f, &v, sizeof(f)); return f; };
         auto fBU = [](float v) -> uint32_t { uint32_t u; std::memcpy(&u, &v, sizeof(u)); return u; };
 
         size_t blasIdx = 0;
@@ -690,8 +700,13 @@ void SceneGeometryCache::rebuildMaterials(const Scene& scene, vex::CPURaytracer*
                     m_vkTriShading[base + 24] = sm.meshData.emissiveColor.x * sm.meshData.emissiveStrength;
                     m_vkTriShading[base + 25] = sm.meshData.emissiveColor.y * sm.meshData.emissiveStrength;
                     m_vkTriShading[base + 26] = sm.meshData.emissiveColor.z * sm.meshData.emissiveStrength;
-                    // [8].x/.y/.z = alphaClip/materialType/ior
-                    m_vkTriShading[base + 32] = sm.meshData.alphaClip ? 1.0f : 0.0f;
+                    // [8].x encodes alpha clip: -1=no clip, -2=use diffuse.a, >=0=alpha tex idx.
+                    { auto it = m_texturePathToIndex.find(sm.meshData.alphaTexturePath);
+                      int alphaTexIdx = (it != m_texturePathToIndex.end()) ? it->second : -1;
+                      int alphaEnc = sm.meshData.alphaClip
+                          ? (alphaTexIdx >= 0 ? alphaTexIdx : -2)
+                          : -1;
+                      m_vkTriShading[base + 32] = iBF(alphaEnc); }
                     m_vkTriShading[base + 33] = static_cast<float>(sm.meshData.materialType);
                     m_vkTriShading[base + 34] = sm.meshData.ior;
                 }

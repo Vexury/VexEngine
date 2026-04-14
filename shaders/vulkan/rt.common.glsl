@@ -155,7 +155,7 @@ float ign(vec2 p) {
 // [5]  color.xyz + texIdx
 // [6]  emissive.xyz + area
 // [7]  geoNormal.xyz + normalMapTexIdx
-// [8]  alphaClip + materialType + ior + emissiveTexIdx
+// [8]  alphaEnc + materialType + ior + emissiveTexIdx  (alphaEnc: -1=no clip, -2=use diffuse.a, >=0=alpha tex idx)
 // [9]  tangent.xyz + bitangentSign
 // [10] v0.xyz + pad
 // [11] v1.xyz + pad
@@ -177,7 +177,9 @@ vec3  triEmissive(uint i)        { return triShading[i * 13u + 6u].xyz; }
 float triArea(uint i)            { return triShading[i * 13u + 6u].w; }
 vec3  triGeoNormal(uint i)       { return triShading[i * 13u + 7u].xyz; }
 int   triNormalMapTexIdx(uint i) { return floatBitsToInt(triShading[i * 13u + 7u].w); }
-bool  triAlphaClip(uint i)       { return triShading[i * 13u + 8u].x > 0.5; }
+// Returns: -1=no alpha clip, -2=clip via diffuse .a, >=0=clip via alpha tex at that index
+int   triAlphaTexIdx(uint i)     { return floatBitsToInt(triShading[i * 13u + 8u].x); }
+bool  triAlphaClip(uint i)       { return triAlphaTexIdx(i) != -1; }
 int   triMaterialType(uint i)    { return int(triShading[i * 13u + 8u].y); }
 float triIOR(uint i)             { return triShading[i * 13u + 8u].z; }
 int   triEmissiveTexIdx(uint i)  { return floatBitsToInt(triShading[i * 13u + 8u].w); }
