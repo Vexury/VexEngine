@@ -84,8 +84,8 @@ layout(std430, set = 0, binding = 4) readonly buffer Lights {
 // PARTIALLY_BOUND — only slots [0..texCount-1] are written; negative texIndex = no texture.
 layout(set = 0, binding = 5) uniform sampler2D u_textures[];
 
-// EnvMap: flat float RGB pixels (3 floats per pixel)
-layout(std430, set = 0, binding = 6) readonly buffer EnvMap      { float envPixels[];    };
+// EnvMap: hardware sampler2D (RGBA32F). V=0 = top of image = north pole, matching spherical mapping.
+layout(set = 0, binding = 6) uniform sampler2D u_envMap;
 
 // EnvCDF: [marginal H floats][conditional W*H floats][totalIntegral 1 float]
 layout(std430, set = 0, binding = 7) readonly buffer EnvCDF      { float envCdfData[];   };
@@ -206,36 +206,12 @@ vec4 sampleTexture(int texIndex, vec2 uv) {
 }
 
 // ── Environment sampling ─────────────────────────────────────────────────
-vec3 fetchEnvTexel(int px, int py) {
-    px = clamp(px, 0, u_uniforms.envMapWidth  - 1);
-    py = clamp(py, 0, u_uniforms.envMapHeight - 1);
-    int idx = (py * u_uniforms.envMapWidth + px) * 3;
-    return vec3(envPixels[idx], envPixels[idx+1], envPixels[idx+2]);
-}
-
 vec3 sampleEnvironment(vec3 dir) {
     if (u_uniforms.hasEnvMap != 0u && u_uniforms.envMapWidth > 0) {
         float u = fract(0.5 + (atan(dir.z, dir.x) + u_uniforms.envRotation) / (2.0 * PI));
         float v = 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / PI;
-        int W = u_uniforms.envMapWidth;
-        int H = u_uniforms.envMapHeight;
-
-        if (u_uniforms.bilinearFiltering == 0u)
-            return fetchEnvTexel(clamp(int(u * float(W)), 0, W - 1),
-                                 clamp(int(v * float(H)), 0, H - 1));
-
-        float fu = u * float(W) - 0.5;
-        float fv = v * float(H) - 0.5;
-        int   x0 = int(floor(fu));
-        int   y0 = int(floor(fv));
-        float fx = fu - float(x0);
-        float fy = fv - float(y0);
-
-        vec3 c00 = fetchEnvTexel(x0,     y0    );
-        vec3 c10 = fetchEnvTexel(x0 + 1, y0    );
-        vec3 c01 = fetchEnvTexel(x0,     y0 + 1);
-        vec3 c11 = fetchEnvTexel(x0 + 1, y0 + 1);
-        return mix(mix(c00, c10, fx), mix(c01, c11, fx), fy);
+        // Hardware bilinear. V=0 = first row in image = north pole — matches CPU layout.
+        return texture(u_envMap, vec2(u, v)).rgb;
     }
     return u_uniforms.envColor;
 }
@@ -262,8 +238,7 @@ vec3 sampleEnvMapDirection(out vec3 outRadiance, out float outPdf) {
     float sinTheta = sin(theta);
     float cosTheta = cos(theta);
     vec3 dir = vec3(sinTheta * cos(phi), cosTheta, sinTheta * sin(phi));
-    int idx = (row * W + col) * 3;
-    outRadiance = vec3(envPixels[idx], envPixels[idx+1], envPixels[idx+2]);
+    outRadiance = texelFetch(u_envMap, ivec2(col, row), 0).rgb;
     float lum  = 0.2126*outRadiance.r + 0.7152*outRadiance.g + 0.0722*outRadiance.b;
     float totalIntegral = envCdfData[H + W * H];
     if (sinTheta < 1e-8 || totalIntegral < 1e-8 || lum < 1e-8) { outPdf = 0.0; return dir; }
@@ -278,8 +253,8 @@ float envMapPdf(vec3 dir) {
     float v = 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / PI;
     int px = clamp(int(u * float(W)), 0, W - 1);
     int py = clamp(int(v * float(H)), 0, H - 1);
-    int idx = (py * W + px) * 3;
-    float lum = 0.2126*envPixels[idx] + 0.7152*envPixels[idx+1] + 0.0722*envPixels[idx+2];
+    vec3 envPx = texelFetch(u_envMap, ivec2(px, py), 0).rgb;
+    float lum = 0.2126*envPx.r + 0.7152*envPx.g + 0.0722*envPx.b;
     float sinTheta    = sin(PI * (float(py) + 0.5) / float(H));
     float totalIntegral = envCdfData[H + W * H];
     if (sinTheta < 1e-8 || totalIntegral < 1e-8) return 0.0;

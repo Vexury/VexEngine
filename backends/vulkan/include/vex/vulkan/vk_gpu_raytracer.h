@@ -140,6 +140,8 @@ public:
         const std::vector<uint32_t>&                       lightsData,
         const std::vector<vex::CPURaytracer::TextureData>& textures,
         const std::vector<float>&                          envMapData,
+        int                                                envMapWidth,
+        int                                                envMapHeight,
         const std::vector<float>&                          envCdfData,
         const std::vector<uint32_t>&                       instanceOffsets,
         const std::vector<float>&                          volumesData);
@@ -241,19 +243,22 @@ private:
     VmaAllocation m_uboAlloc  = VK_NULL_HANDLE;
     RTUniforms*   m_uboMapped = nullptr;
 
-    // ── Scene SSBOs (bindings 3–4, 6–9) ─────────────────────────────────────
+    // ── Scene SSBOs (bindings 3–4, 7–9) ─────────────────────────────────────
     VkBuffer      m_triShadingBuffer      = VK_NULL_HANDLE;
     VmaAllocation m_triShadingAlloc       = VK_NULL_HANDLE;
     VkBuffer      m_lightsBuffer          = VK_NULL_HANDLE;
     VmaAllocation m_lightsAlloc           = VK_NULL_HANDLE;
-    VkBuffer      m_envMapBuffer          = VK_NULL_HANDLE;
-    VmaAllocation m_envMapAlloc           = VK_NULL_HANDLE;
     VkBuffer      m_envCdfBuffer          = VK_NULL_HANDLE;
     VmaAllocation m_envCdfAlloc           = VK_NULL_HANDLE;
     VkBuffer      m_instanceOffsetsBuffer = VK_NULL_HANDLE;
     VmaAllocation m_instanceOffsetsAlloc  = VK_NULL_HANDLE;
     VkBuffer      m_volumesBuffer         = VK_NULL_HANDLE;
     VmaAllocation m_volumesAlloc          = VK_NULL_HANDLE;
+
+    // ── Env map VkImage (binding 6) ──────────────────────────────────────────
+    VkImage       m_envMapImage      = VK_NULL_HANDLE;
+    VkImageView   m_envMapImageView  = VK_NULL_HANDLE;
+    VmaAllocation m_envMapImageAlloc = nullptr;
 
     // ── Bindless texture array (binding 5) ───────────────────────────────────
     static constexpr uint32_t  kMaxTextures  = 1024;

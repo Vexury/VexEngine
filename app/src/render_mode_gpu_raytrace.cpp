@@ -362,6 +362,7 @@ void GPURaytraceMode::render(Scene& scene, const SharedRenderData& shared, const
             m_geomCache->vkTriShading(), m_geomCache->vkLights(),
             m_geomCache->textures(),
             changes.vkEnvMapData ? *changes.vkEnvMapData : std::vector<float>{},
+            changes.vkEnvMapW, changes.vkEnvMapH,
             changes.vkEnvCdfData ? *changes.vkEnvCdfData : std::vector<float>{},
             m_geomCache->vkInstanceOffsets(),
             *shared.vkVolumesData);
