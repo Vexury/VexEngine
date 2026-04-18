@@ -369,6 +369,18 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
             {
                 glm::vec3 pos = scene.camera.getPosition();
                 ImGui::Text("Position: %.2f, %.2f, %.2f", pos.x, pos.y, pos.z);
+                ImGui::Text("Yaw: %.3f  Pitch: %.3f", scene.camera.getYaw(), scene.camera.getPitch());
+            }
+            ImGui::Separator();
+            ImGui::TextUnformatted("Presets");
+            {
+                struct CameraPreset { const char* label; glm::vec3 target; float distance, yaw, pitch; };
+                static constexpr CameraPreset k_presets[] = {
+                    { "Preset 1", { -8.0f, 3.0f, 0.0f }, 11.0f, -0.8f, 0.0f },
+                };
+                for (const auto& p : k_presets)
+                    if (ImGui::Button(p.label))
+                        scene.camera.setOrbit(p.target, p.distance, p.yaw, p.pitch);
             }
             ImGui::Separator();
             ImGui::TextUnformatted("Depth of Field (Path Trace only)");

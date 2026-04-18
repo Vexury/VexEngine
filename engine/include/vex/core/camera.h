@@ -22,6 +22,9 @@ public:
     float getDistance() const { return m_distance; }
     float& getDistance() { return m_distance; }
 
+    float getYaw()   const { return m_yaw; }
+    float getPitch() const { return m_pitch; }
+
     float fov = 45.0f;
     float nearPlane = 0.01f;
     float farPlane = 1000.0f;

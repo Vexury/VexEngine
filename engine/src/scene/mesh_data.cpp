@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <unordered_map>
 #include <atomic>
+#include <mutex>
 #include <thread>
 #include <chrono>
 #include <cmath>
@@ -89,6 +90,45 @@ namespace vex
             mesh.vertices[vi].normal = (len > 1e-8f) ? smoothN / len : faceNormals[t];
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Returns true if the texture at `path` contains any pixel with alpha < 253.
+// Uses stbi_info to cheaply skip non-RGBA files, then subsamples up to 4096
+// pixels for speed.  Results are cached (mutex-protected) so each unique path
+// is loaded at most once — safe for the parallel shape-dedup workers.
+// ---------------------------------------------------------------------------
+static std::mutex                            s_alphaCacheMtx;
+static std::unordered_map<std::string, bool> s_alphaPresenceCache;
+
+static bool textureHasTransparency(const std::string& path)
+{
+    {
+        std::lock_guard<std::mutex> lk(s_alphaCacheMtx);
+        auto it = s_alphaPresenceCache.find(path);
+        if (it != s_alphaPresenceCache.end()) return it->second;
+    }
+
+    bool result = false;
+    int w = 0, h = 0, ch = 0;
+    if (stbi_info(path.c_str(), &w, &h, &ch) && ch == 4)
+    {
+        unsigned char* data = stbi_load(path.c_str(), &w, &h, &ch, 4);
+        if (data)
+        {
+            int total = w * h;
+            int step  = std::max(1, total / 4096);
+            for (int i = 0; i < total && !result; i += step)
+                if (data[i * 4 + 3] < 253) result = true;
+            stbi_image_free(data);
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(s_alphaCacheMtx);
+        s_alphaPresenceCache[path] = result;
+    }
+    return result;
 }
 
 std::vector<MeshData> MeshData::loadOBJ(const std::string& path)
@@ -209,19 +249,29 @@ std::vector<MeshData> MeshData::loadOBJ(const std::string& path)
                     group.diffuseTexturePath =
                         (std::filesystem::path(mtlDir) / m.diffuse_texname).string();
 
-                    // Fallback: if map_Kd has alpha channel and no dedicated map_d, enable alphaClip.
-                    // (Will be overridden below if map_d is present.)
-                    int tw, th, tch;
-                    if (stbi_info(group.diffuseTexturePath.c_str(), &tw, &th, &tch) && tch == 4)
-                        group.alphaClip = true;
                 }
 
-                // map_d: dedicated opacity mask — takes priority over map_Kd alpha channel.
+                // map_d: opacity mask.
                 if (group.alphaTexturePath.empty() && !m.alpha_texname.empty())
                 {
-                    group.alphaTexturePath =
+                    auto alphaPath =
                         (std::filesystem::path(mtlDir) / m.alpha_texname).string();
-                    group.alphaClip = true;  // always clip when a dedicated mask is present
+                    if (alphaPath == group.diffuseTexturePath)
+                    {
+                        // map_d aliases map_Kd — alpha lives in diffuse .a channel.
+                        // Only enable alpha-clip if pixels are actually transparent;
+                        // many Blender exports set map_d = map_Kd even for fully-opaque
+                        // materials (e.g. the Bistro scene).
+                        group.alphaClip = textureHasTransparency(alphaPath);
+                        // Leave alphaTexturePath empty; the shader falls back to
+                        // texColor.a when hasAlphaMap is false.
+                    }
+                    else
+                    {
+                        // Dedicated separate mask — always clip.
+                        group.alphaTexturePath = alphaPath;
+                        group.alphaClip = true;
+                    }
                 }
 
                 // tinyobjloader defaults Kd to (0.6,0.6,0.6) when map_Kd exists
