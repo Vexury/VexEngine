@@ -79,6 +79,7 @@ public:
     DebugMode getDebugMode() const { return m_debugMode; }
 
     uint32_t getRaytraceSampleCount() const;
+    void     resetAccumulation();
 
     void setUseLuminanceCDF(bool v);
     bool getUseLuminanceCDF() const { return m_luminanceCDF; }

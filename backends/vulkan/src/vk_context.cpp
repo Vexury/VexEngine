@@ -129,11 +129,21 @@ bool VKContext::init(Window& window)
     rtFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
     rtFeatures.rayTracingPipeline = VK_TRUE;
 
+    // Descriptor indexing (core since Vulkan 1.2) — required for bindless texture arrays
+    VkPhysicalDeviceVulkan12Features vk12Features{};
+    vk12Features.sType                                     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    vk12Features.descriptorIndexing                        = VK_TRUE;
+    vk12Features.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+    vk12Features.descriptorBindingPartiallyBound           = VK_TRUE;
+    vk12Features.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
+    vk12Features.runtimeDescriptorArray                    = VK_TRUE;
+
     vkb::DeviceBuilder deviceBuilder(pdRet.value());
     auto devRet = deviceBuilder
         .add_pNext(&bdaFeatures)
         .add_pNext(&asFeatures)
         .add_pNext(&rtFeatures)
+        .add_pNext(&vk12Features)
         .build();
 
     if (!devRet)

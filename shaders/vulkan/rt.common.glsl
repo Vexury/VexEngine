@@ -80,8 +80,9 @@ layout(std430, set = 0, binding = 4) readonly buffer Lights {
     uint  lightRawData[];
 };
 
-// TexData: [texCount][offset,w,h,pad per tex...][packed RGBA pixels as uint...]
-layout(std430, set = 0, binding = 5) readonly buffer TexData     { uint  texHeader[];    };
+// Bindless scene textures: one hardware sampler2D per texture (up to 1024)
+// PARTIALLY_BOUND — only slots [0..texCount-1] are written; negative texIndex = no texture.
+layout(set = 0, binding = 5) uniform sampler2D u_textures[];
 
 // EnvMap: flat float RGB pixels (3 floats per pixel)
 layout(std430, set = 0, binding = 6) readonly buffer EnvMap      { float envPixels[];    };
@@ -194,47 +195,14 @@ uint  getLightIndex(uint i) { return lightRawData[i]; }
 float getLightCDF(uint i)   { return uintBitsToFloat(lightRawData[l_lightCount + i]); }
 
 // ── Texture sampling ─────────────────────────────────────────────────────
-vec4 fetchTexel(uint pixelOffset, int tw, int th, int px, int py) {
-    px = clamp(px, 0, tw - 1);
-    py = clamp(py, 0, th - 1);
-    uint word = texHeader[pixelOffset + uint(py * tw + px)];
-    return vec4(float((word >>  0u) & 0xFFu),
-                float((word >>  8u) & 0xFFu),
-                float((word >> 16u) & 0xFFu),
-                float((word >> 24u) & 0xFFu)) / 255.0;
-}
-
+// Hardware sampler2D array (binding 5). CPU pixel data is stored unflipped
+// (stbi loaded without flip flag), so V must be flipped here to match GPU convention.
+// The hardware sampler handles bilinear filtering and U-wrapping (REPEAT mode).
 vec4 sampleTexture(int texIndex, vec2 uv) {
     if (texIndex < 0) return vec4(1.0);
-    uint texCount = texHeader[0];
-    if (uint(texIndex) >= texCount) return vec4(1.0);
-    uint headerBase  = 1u + uint(texIndex) * 4u;
-    uint pixelOffset = texHeader[headerBase + 0u];
-    int  tw          = int(texHeader[headerBase + 1u]);
-    int  th          = int(texHeader[headerBase + 2u]);
-
-    // Wrap UVs and flip V
-    float u = uv.x - floor(uv.x);
-    float v = 1.0 - (uv.y - floor(uv.y));
-
-    if (u_uniforms.bilinearFiltering == 0u)
-        return fetchTexel(pixelOffset, tw, th,
-                          clamp(int(u * float(tw)), 0, tw - 1),
-                          clamp(int(v * float(th)), 0, th - 1));
-
-    // Bilinear filtering: map to texel-center space
-    float fu = u * float(tw) - 0.5;
-    float fv = v * float(th) - 0.5;
-    int   x0 = int(floor(fu));
-    int   y0 = int(floor(fv));
-    float fx = fu - float(x0);
-    float fy = fv - float(y0);
-
-    vec4 c00 = fetchTexel(pixelOffset, tw, th, x0,     y0    );
-    vec4 c10 = fetchTexel(pixelOffset, tw, th, x0 + 1, y0    );
-    vec4 c01 = fetchTexel(pixelOffset, tw, th, x0,     y0 + 1);
-    vec4 c11 = fetchTexel(pixelOffset, tw, th, x0 + 1, y0 + 1);
-    return mix(mix(c00, c10, fx), mix(c01, c11, fx), fy);
+    // V-flip: unflipped CPU data → match GPU origin (V=0 = bottom)
+    vec2 sampledUV = vec2(uv.x, 1.0 - fract(uv.y));
+    return texture(u_textures[nonuniformEXT(texIndex)], sampledUV);
 }
 
 // ── Environment sampling ─────────────────────────────────────────────────

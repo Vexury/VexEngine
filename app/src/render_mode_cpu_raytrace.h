@@ -21,6 +21,7 @@ public:
 
     float    getSamplesPerSec() const override { return m_samplesPerSec; }
     uint32_t getSampleCount()   const override { return m_cpuRaytracer ? m_cpuRaytracer->getSampleCount() : 0; }
+    void     resetAccumulation()      override { if (m_cpuRaytracer) m_cpuRaytracer->reset(); }
 
 private:
     // Stable resources injected at init() — never change after that

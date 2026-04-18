@@ -68,6 +68,12 @@ void VKComputeRaytraceMode::activate()
     }
 }
 
+void VKComputeRaytraceMode::resetAccumulation()
+{
+    if (m_vkComputeRaytracer) m_vkComputeRaytracer->reset();
+    m_vkComputeSampleCount = 0;
+}
+
 void VKComputeRaytraceMode::onGeometryRebuilt()
 {
     activate();

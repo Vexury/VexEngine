@@ -171,6 +171,23 @@ bool VKGpuRaytracer::init()
         return false;
     }
 
+    // Shared sampler for the bindless scene-texture array — repeat + linear, no mipmaps
+    VkSamplerCreateInfo texSamplerInfo{};
+    texSamplerInfo.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    texSamplerInfo.magFilter    = VK_FILTER_LINEAR;
+    texSamplerInfo.minFilter    = VK_FILTER_LINEAR;
+    texSamplerInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    texSamplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    texSamplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    texSamplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    texSamplerInfo.minLod       = 0.0f;
+    texSamplerInfo.maxLod       = 0.0f;
+    if (vkCreateSampler(VKContext::get().getDevice(), &texSamplerInfo, nullptr, &m_textureSampler) != VK_SUCCESS)
+    {
+        Log::error("VKGpuRaytracer: failed to create texture sampler");
+        return false;
+    }
+
     return true;
 }
 
@@ -192,12 +209,26 @@ void VKGpuRaytracer::freeSceneData()
     m_width  = 0;
     m_height = 0;
 
+    // Bindless texture images (binding 5)
+    for (size_t i = 0; i < m_texImages.size(); ++i)
+    {
+        if (m_texImageViews[i]) { vkDestroyImageView(device, m_texImageViews[i], nullptr); }
+        if (m_texImages[i])
+        {
+            ctx.getMemoryTracker().untrack(allocator, m_texAllocs[i]);
+            vmaDestroyImage(allocator, m_texImages[i], m_texAllocs[i]);
+        }
+    }
+    m_texImages.clear();
+    m_texImageViews.clear();
+    m_texAllocs.clear();
+    m_texCount = 0;
+
     // Scene SSBOs
     destroyBuffer(m_volumesBuffer,         m_volumesAlloc);
     destroyBuffer(m_instanceOffsetsBuffer, m_instanceOffsetsAlloc);
     destroyBuffer(m_envCdfBuffer,          m_envCdfAlloc);
     destroyBuffer(m_envMapBuffer,          m_envMapAlloc);
-    destroyBuffer(m_texDataBuffer,         m_texDataAlloc);
     destroyBuffer(m_lightsBuffer,          m_lightsAlloc);
     destroyBuffer(m_triShadingBuffer,      m_triShadingAlloc);
 }
@@ -221,12 +252,26 @@ void VKGpuRaytracer::shutdown()
     if (m_normalImageView) { vkDestroyImageView(device, m_normalImageView, nullptr); m_normalImageView = VK_NULL_HANDLE; }
     if (m_normalImage)     { ctx.getMemoryTracker().untrack(allocator, m_normalAlloc); vmaDestroyImage(allocator, m_normalImage, m_normalAlloc); m_normalImage = VK_NULL_HANDLE; }
 
+    // Bindless texture images (binding 5)
+    for (size_t i = 0; i < m_texImages.size(); ++i)
+    {
+        if (m_texImageViews[i]) { vkDestroyImageView(device, m_texImageViews[i], nullptr); }
+        if (m_texImages[i])
+        {
+            ctx.getMemoryTracker().untrack(allocator, m_texAllocs[i]);
+            vmaDestroyImage(allocator, m_texImages[i], m_texAllocs[i]);
+        }
+    }
+    m_texImages.clear();
+    m_texImageViews.clear();
+    m_texAllocs.clear();
+    m_texCount = 0;
+
     // Scene SSBOs
     destroyBuffer(m_volumesBuffer,         m_volumesAlloc);
     destroyBuffer(m_instanceOffsetsBuffer, m_instanceOffsetsAlloc);
     destroyBuffer(m_envCdfBuffer,          m_envCdfAlloc);
     destroyBuffer(m_envMapBuffer,          m_envMapAlloc);
-    destroyBuffer(m_texDataBuffer,         m_texDataAlloc);
     destroyBuffer(m_lightsBuffer,          m_lightsAlloc);
     destroyBuffer(m_triShadingBuffer,      m_triShadingAlloc);
 
@@ -242,6 +287,7 @@ void VKGpuRaytracer::shutdown()
     if (m_descSetLayout)   { vkDestroyDescriptorSetLayout(device, m_descSetLayout, nullptr); m_descSetLayout = VK_NULL_HANDLE; }
 
     if (m_displaySampler)  { vkDestroySampler(device, m_displaySampler, nullptr); m_displaySampler = VK_NULL_HANDLE; }
+    if (m_textureSampler)  { vkDestroySampler(device, m_textureSampler, nullptr); m_textureSampler = VK_NULL_HANDLE; }
 }
 
 // ---------------------------------------------------------------------------
@@ -553,22 +599,36 @@ bool VKGpuRaytracer::createPipeline()
         VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
 
     VkDescriptorSetLayoutBinding bindings[12]{};
-    bindings[0]  = { 0,  VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_RAYGEN_BIT_KHR, nullptr };
-    bindings[1]  = { 1,  VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,              1, VK_SHADER_STAGE_RAYGEN_BIT_KHR, nullptr };
-    bindings[2]  = { 2,  VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,             1, kAllRT,                         nullptr };
-    bindings[3]  = { 3,  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             1, kAllRT,                         nullptr };
-    bindings[4]  = { 4,  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             1, kAllRT,                         nullptr };
-    bindings[5]  = { 5,  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             1, kAllRT,                         nullptr };
-    bindings[6]  = { 6,  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             1, kAllRT,                         nullptr };
-    bindings[7]  = { 7,  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             1, kAllRT,                         nullptr };
-    bindings[8]  = { 8,  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             1, kAllRT,                         nullptr };
-    bindings[9]  = { 9,  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             1, kAllRT,                         nullptr };
+    bindings[0]  = { 0,  VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1,            VK_SHADER_STAGE_RAYGEN_BIT_KHR, nullptr };
+    bindings[1]  = { 1,  VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,              1,            VK_SHADER_STAGE_RAYGEN_BIT_KHR, nullptr };
+    bindings[2]  = { 2,  VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,             1,            kAllRT,                         nullptr };
+    bindings[3]  = { 3,  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             1,            kAllRT,                         nullptr };
+    bindings[4]  = { 4,  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             1,            kAllRT,                         nullptr };
+    // Binding 5: bindless scene-texture array — PARTIALLY_BOUND, up to kMaxTextures slots
+    bindings[5]  = { 5,  VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,     kMaxTextures, kAllRT,                         nullptr };
+    bindings[6]  = { 6,  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             1,            kAllRT,                         nullptr };
+    bindings[7]  = { 7,  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             1,            kAllRT,                         nullptr };
+    bindings[8]  = { 8,  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             1,            kAllRT,                         nullptr };
+    bindings[9]  = { 9,  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             1,            kAllRT,                         nullptr };
     // Bindings 10-11: albedo and normal aux images (written by rgen at first hit)
-    bindings[10] = { 10, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,              1, VK_SHADER_STAGE_RAYGEN_BIT_KHR, nullptr };
-    bindings[11] = { 11, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,              1, VK_SHADER_STAGE_RAYGEN_BIT_KHR, nullptr };
+    bindings[10] = { 10, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,              1,            VK_SHADER_STAGE_RAYGEN_BIT_KHR, nullptr };
+    bindings[11] = { 11, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,              1,            VK_SHADER_STAGE_RAYGEN_BIT_KHR, nullptr };
+
+    // Binding 5 needs PARTIALLY_BOUND + UPDATE_AFTER_BIND so unoccupied slots are valid
+    // (cannot use VARIABLE_DESCRIPTOR_COUNT because binding 5 is not the last binding)
+    VkDescriptorBindingFlags bindingFlags[12]{};
+    bindingFlags[5] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT
+                    | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+
+    VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{};
+    flagsInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+    flagsInfo.bindingCount  = 12;
+    flagsInfo.pBindingFlags = bindingFlags;
 
     VkDescriptorSetLayoutCreateInfo setLayoutInfo{};
     setLayoutInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    setLayoutInfo.pNext        = &flagsInfo;
+    setLayoutInfo.flags        = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
     setLayoutInfo.bindingCount = 12;
     setLayoutInfo.pBindings    = bindings;
     vkCreateDescriptorSetLayout(device, &setLayoutInfo, nullptr, &m_descSetLayout);
@@ -606,16 +666,18 @@ bool VKGpuRaytracer::createPipeline()
     }
 
     // ── Descriptor pool ──────────────────────────────────────────────────────
-    VkDescriptorPoolSize poolSizes[4]{};
+    VkDescriptorPoolSize poolSizes[5]{};
     poolSizes[0] = { VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 };
     poolSizes[1] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,              3 }; // main + albedo + normal
     poolSizes[2] = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,             1 };
-    poolSizes[3] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             7 };
+    poolSizes[3] = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,             6 }; // triShading,lights,envMap,envCDF,instanceOffsets,volumes
+    poolSizes[4] = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxTextures };
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.flags         = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
     poolInfo.maxSets       = 1;
-    poolInfo.poolSizeCount = 4;
+    poolInfo.poolSizeCount = 5;
     poolInfo.pPoolSizes    = poolSizes;
     vkCreateDescriptorPool(device, &poolInfo, nullptr, &m_descPool);
 
@@ -702,13 +764,13 @@ void VKGpuRaytracer::buildSBT()
 // ---------------------------------------------------------------------------
 
 void VKGpuRaytracer::uploadSceneData(
-    const std::vector<float>&    triShading,
-    const std::vector<uint32_t>& lightsData,
-    const std::vector<uint32_t>& texData,
-    const std::vector<float>&    envMapData,
-    const std::vector<float>&    envCdfData,
-    const std::vector<uint32_t>& instanceOffsets,
-    const std::vector<float>&    volumesData)
+    const std::vector<float>&                          triShading,
+    const std::vector<uint32_t>&                       lightsData,
+    const std::vector<vex::CPURaytracer::TextureData>& textures,
+    const std::vector<float>&                          envMapData,
+    const std::vector<float>&                          envCdfData,
+    const std::vector<uint32_t>&                       instanceOffsets,
+    const std::vector<float>&                          volumesData)
 {
     // Ensure the previous frame's RT dispatch has finished before destroying
     // the SSBOs it was reading. The BLAS/TLAS rebuild already called
@@ -718,7 +780,6 @@ void VKGpuRaytracer::uploadSceneData(
     // Destroy old SSBOs
     destroyBuffer(m_triShadingBuffer,      m_triShadingAlloc);
     destroyBuffer(m_lightsBuffer,          m_lightsAlloc);
-    destroyBuffer(m_texDataBuffer,         m_texDataAlloc);
     destroyBuffer(m_envMapBuffer,          m_envMapAlloc);
     destroyBuffer(m_envCdfBuffer,          m_envCdfAlloc);
     destroyBuffer(m_instanceOffsetsBuffer, m_instanceOffsetsAlloc);
@@ -740,13 +801,159 @@ void VKGpuRaytracer::uploadSceneData(
 
     upload(triShading.data(),       triShading.size()       * sizeof(float),    m_triShadingBuffer,      m_triShadingAlloc);
     upload(lightsData.data(),       lightsData.size()       * sizeof(uint32_t), m_lightsBuffer,          m_lightsAlloc);
-    upload(texData.data(),          texData.size()          * sizeof(uint32_t), m_texDataBuffer,         m_texDataAlloc);
     upload(envMapData.data(),       envMapData.size()       * sizeof(float),    m_envMapBuffer,          m_envMapAlloc);
     upload(envCdfData.data(),       envCdfData.size()       * sizeof(float),    m_envCdfBuffer,          m_envCdfAlloc);
     upload(instanceOffsets.data(),  instanceOffsets.size()  * sizeof(uint32_t), m_instanceOffsetsBuffer, m_instanceOffsetsAlloc);
     upload(volumesData.data(),      volumesData.size()      * sizeof(float),    m_volumesBuffer,         m_volumesAlloc);
 
-    Log::info("  RT scene data: " + std::to_string(triShading.size() / 52) + " triangles");
+    // ── Upload scene textures as bindless VkImages (binding 5) ──────────────
+    // Destroy old texture images
+    {
+        auto  device    = VKContext::get().getDevice();
+        auto  allocator = VKContext::get().getAllocator();
+        auto& ctx       = VKContext::get();
+        for (size_t i = 0; i < m_texImages.size(); ++i)
+        {
+            if (m_texImageViews[i]) { vkDestroyImageView(device, m_texImageViews[i], nullptr); }
+            if (m_texImages[i])
+            {
+                ctx.getMemoryTracker().untrack(allocator, m_texAllocs[i]);
+                vmaDestroyImage(allocator, m_texImages[i], m_texAllocs[i]);
+            }
+        }
+        m_texImages.clear();
+        m_texImageViews.clear();
+        m_texAllocs.clear();
+        m_texCount = 0;
+    }
+
+    // Create new images and staging buffers, then upload all in a single GPU submission
+    uint32_t count = static_cast<uint32_t>(
+        std::min(textures.size(), static_cast<size_t>(kMaxTextures)));
+
+    if (count > 0)
+    {
+        auto& ctx       = VKContext::get();
+        auto  allocator = ctx.getAllocator();
+        auto  device    = ctx.getDevice();
+
+        m_texImages.resize(count, VK_NULL_HANDLE);
+        m_texImageViews.resize(count, VK_NULL_HANDLE);
+        m_texAllocs.resize(count, VK_NULL_HANDLE);
+
+        // Allocate staging buffers and device images up-front (no GPU work yet)
+        std::vector<VkBuffer>      stagingBufs(count, VK_NULL_HANDLE);
+        std::vector<VmaAllocation> stagingAllocs(count, VK_NULL_HANDLE);
+
+        for (uint32_t ti = 0; ti < count; ++ti)
+        {
+            const auto& td   = textures[ti];
+            uint32_t    tw   = static_cast<uint32_t>(td.width);
+            uint32_t    th   = static_cast<uint32_t>(td.height);
+            VkDeviceSize sz  = static_cast<VkDeviceSize>(tw) * th * 4;
+
+            // Staging buffer (CPU → GPU)
+            {
+                VkBufferCreateInfo bi{};
+                bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+                bi.size  = sz;
+                bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+                VmaAllocationCreateInfo ai{};
+                ai.usage = VMA_MEMORY_USAGE_CPU_ONLY;
+                vmaCreateBuffer(allocator, &bi, &ai, &stagingBufs[ti], &stagingAllocs[ti], nullptr);
+                void* mapped;
+                vmaMapMemory(allocator, stagingAllocs[ti], &mapped);
+                std::memcpy(mapped, td.pixels.data(), static_cast<size_t>(sz));
+                vmaUnmapMemory(allocator, stagingAllocs[ti]);
+            }
+
+            // Device image (R8G8B8A8_UNORM, SAMPLED + TRANSFER_DST, optimal tiling, 1 mip)
+            {
+                VkImageCreateInfo ii{};
+                ii.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+                ii.imageType     = VK_IMAGE_TYPE_2D;
+                ii.format        = VK_FORMAT_R8G8B8A8_UNORM;
+                ii.extent        = { tw, th, 1 };
+                ii.mipLevels     = 1;
+                ii.arrayLayers   = 1;
+                ii.samples       = VK_SAMPLE_COUNT_1_BIT;
+                ii.tiling        = VK_IMAGE_TILING_OPTIMAL;
+                ii.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+                ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                VmaAllocationCreateInfo ai{};
+                ai.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+                vmaCreateImage(allocator, &ii, &ai, &m_texImages[ti], &m_texAllocs[ti], nullptr);
+                ctx.getMemoryTracker().track(allocator, m_texAllocs[ti], GpuMemCategory::Textures);
+            }
+        }
+
+        // Single GPU submission: transition all images, copy all staging data
+        ctx.immediateSubmit([&](VkCommandBuffer cmd)
+        {
+            for (uint32_t ti = 0; ti < count; ++ti)
+            {
+                const auto& td = textures[ti];
+                uint32_t    tw = static_cast<uint32_t>(td.width);
+                uint32_t    th = static_cast<uint32_t>(td.height);
+
+                // UNDEFINED → TRANSFER_DST_OPTIMAL
+                VkImageMemoryBarrier toTransfer{};
+                toTransfer.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                toTransfer.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
+                toTransfer.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                toTransfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toTransfer.image               = m_texImages[ti];
+                toTransfer.subresourceRange    = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+                toTransfer.srcAccessMask       = 0;
+                toTransfer.dstAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
+                vkCmdPipelineBarrier(cmd,
+                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    0, 0, nullptr, 0, nullptr, 1, &toTransfer);
+
+                // Copy staging → image
+                VkBufferImageCopy region{};
+                region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+                region.imageExtent      = { tw, th, 1 };
+                vkCmdCopyBufferToImage(cmd, stagingBufs[ti], m_texImages[ti],
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+                // TRANSFER_DST_OPTIMAL → SHADER_READ_ONLY_OPTIMAL
+                VkImageMemoryBarrier toShader{};
+                toShader.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                toShader.oldLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                toShader.newLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                toShader.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toShader.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toShader.image               = m_texImages[ti];
+                toShader.subresourceRange    = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+                toShader.srcAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
+                toShader.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+                vkCmdPipelineBarrier(cmd,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                    0, 0, nullptr, 0, nullptr, 1, &toShader);
+            }
+        });
+
+        // Free staging buffers and create image views
+        for (uint32_t ti = 0; ti < count; ++ti)
+        {
+            vmaDestroyBuffer(allocator, stagingBufs[ti], stagingAllocs[ti]);
+
+            VkImageViewCreateInfo vi{};
+            vi.sType            = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vi.image            = m_texImages[ti];
+            vi.viewType         = VK_IMAGE_VIEW_TYPE_2D;
+            vi.format           = VK_FORMAT_R8G8B8A8_UNORM;
+            vi.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+            vkCreateImageView(device, &vi, nullptr, &m_texImageViews[ti]);
+        }
+
+        m_texCount = count;
+    }
+
+    Log::info("  RT scene data: " + std::to_string(triShading.size() / 52) + " triangles, "
+             + std::to_string(count) + " textures as VkImages");
 }
 
 void VKGpuRaytracer::uploadVolumes(const std::vector<float>& volumesData)
@@ -813,14 +1020,15 @@ void VKGpuRaytracer::writeDescriptors()
     uboInfo.offset = 0;
     uboInfo.range  = sizeof(RTUniforms);
 
-    // Bindings 3-9: SSBOs
-    VkDescriptorBufferInfo ssboInfos[7]{};
-    VkBuffer ssboBuffers[7] = {
-        m_triShadingBuffer, m_lightsBuffer, m_texDataBuffer,
-        m_envMapBuffer,     m_envCdfBuffer, m_instanceOffsetsBuffer,
-        m_volumesBuffer
+    // Bindings 3,4,6,7,8,9: SSBOs (binding 5 is now the texture array, handled separately)
+    // Layout: triShading(3), lights(4), [textures(5)], envMap(6), envCDF(7), instanceOffsets(8), volumes(9)
+    VkDescriptorBufferInfo ssboInfos[6]{};
+    VkBuffer               ssboBuffers[6] = {
+        m_triShadingBuffer, m_lightsBuffer,
+        m_envMapBuffer, m_envCdfBuffer, m_instanceOffsetsBuffer, m_volumesBuffer
     };
-    for (int i = 0; i < 7; ++i)
+    uint32_t ssboBindings[6] = { 3, 4, 6, 7, 8, 9 };
+    for (int i = 0; i < 6; ++i)
     {
         ssboInfos[i].buffer = ssboBuffers[i];
         ssboInfos[i].offset = 0;
@@ -836,7 +1044,8 @@ void VKGpuRaytracer::writeDescriptors()
     normalImgInfo.imageView   = m_normalImageView;
     normalImgInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkWriteDescriptorSet writes[12]{};
+    // Build writes (11 non-texture writes + 1 texture array write)
+    VkWriteDescriptorSet writes[11]{};
     for (auto& w : writes) w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 
     writes[0].pNext           = &tlasWrite;
@@ -857,46 +1066,67 @@ void VKGpuRaytracer::writeDescriptors()
     writes[2].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     writes[2].pBufferInfo     = &uboInfo;
 
-    for (int i = 0; i < 7; ++i)
+    for (int i = 0; i < 6; ++i)
     {
         writes[3 + i].dstSet          = m_descSet;
-        writes[3 + i].dstBinding      = static_cast<uint32_t>(3 + i);
+        writes[3 + i].dstBinding      = ssboBindings[i];
         writes[3 + i].descriptorCount = 1;
         writes[3 + i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[3 + i].pBufferInfo     = &ssboInfos[i];
     }
 
+    writes[9].dstSet          = m_descSet;
+    writes[9].dstBinding      = 10;
+    writes[9].descriptorCount = 1;
+    writes[9].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[9].pImageInfo      = &albedoImgInfo;
+
     writes[10].dstSet          = m_descSet;
-    writes[10].dstBinding      = 10;
+    writes[10].dstBinding      = 11;
     writes[10].descriptorCount = 1;
     writes[10].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[10].pImageInfo      = &albedoImgInfo;
-
-    writes[11].dstSet          = m_descSet;
-    writes[11].dstBinding      = 11;
-    writes[11].descriptorCount = 1;
-    writes[11].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[11].pImageInfo      = &normalImgInfo;
+    writes[10].pImageInfo      = &normalImgInfo;
 
     // Only write non-null bindings
     uint32_t writeCount = 0;
-    VkWriteDescriptorSet validWrites[12]{};
+    VkWriteDescriptorSet validWrites[11]{};
 
-    if (m_tlas.handle)          validWrites[writeCount++] = writes[0];
-    if (m_outputImageView)      validWrites[writeCount++] = writes[1];
-    if (m_uboBuffer)            validWrites[writeCount++] = writes[2];
-    if (m_triShadingBuffer)     validWrites[writeCount++] = writes[3];
-    if (m_lightsBuffer)         validWrites[writeCount++] = writes[4];
-    if (m_texDataBuffer)        validWrites[writeCount++] = writes[5];
-    if (m_envMapBuffer)         validWrites[writeCount++] = writes[6];
-    if (m_envCdfBuffer)         validWrites[writeCount++] = writes[7];
-    if (m_instanceOffsetsBuffer)validWrites[writeCount++] = writes[8];
-    if (m_volumesBuffer)        validWrites[writeCount++] = writes[9];
-    if (m_albedoImageView)      validWrites[writeCount++] = writes[10];
-    if (m_normalImageView)      validWrites[writeCount++] = writes[11];
+    if (m_tlas.handle)           validWrites[writeCount++] = writes[0];
+    if (m_outputImageView)       validWrites[writeCount++] = writes[1];
+    if (m_uboBuffer)             validWrites[writeCount++] = writes[2];
+    if (m_triShadingBuffer)      validWrites[writeCount++] = writes[3];
+    if (m_lightsBuffer)          validWrites[writeCount++] = writes[4];
+    if (m_envMapBuffer)          validWrites[writeCount++] = writes[5];
+    if (m_envCdfBuffer)          validWrites[writeCount++] = writes[6];
+    if (m_instanceOffsetsBuffer) validWrites[writeCount++] = writes[7];
+    if (m_volumesBuffer)         validWrites[writeCount++] = writes[8];
+    if (m_albedoImageView)       validWrites[writeCount++] = writes[9];
+    if (m_normalImageView)       validWrites[writeCount++] = writes[10];
 
     if (writeCount > 0)
         vkUpdateDescriptorSets(device, writeCount, validWrites, 0, nullptr);
+
+    // Binding 5: texture array — write all uploaded textures as COMBINED_IMAGE_SAMPLER
+    // PARTIALLY_BOUND allows unwritten slots (m_texCount..kMaxTextures-1) to be unused safely.
+    if (m_texCount > 0 && m_textureSampler)
+    {
+        std::vector<VkDescriptorImageInfo> texImgInfos(m_texCount);
+        for (uint32_t i = 0; i < m_texCount; ++i)
+        {
+            texImgInfos[i].sampler     = m_textureSampler;
+            texImgInfos[i].imageView   = m_texImageViews[i];
+            texImgInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+        VkWriteDescriptorSet texWrite{};
+        texWrite.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        texWrite.dstSet          = m_descSet;
+        texWrite.dstBinding      = 5;
+        texWrite.dstArrayElement = 0;
+        texWrite.descriptorCount = m_texCount;
+        texWrite.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        texWrite.pImageInfo      = texImgInfos.data();
+        vkUpdateDescriptorSets(device, 1, &texWrite, 0, nullptr);
+    }
 }
 
 bool VKGpuRaytracer::createOutputImage(uint32_t width, uint32_t height)

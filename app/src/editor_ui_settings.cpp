@@ -125,6 +125,8 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
             ImGui::SameLine();
             if (ImGui::Button("Denoise+##cpu")) renderer.triggerDenoiseAux();
             if (!canDenoise) ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (ImGui::Button("Reset##cpu")) renderer.resetAccumulation();
             if (renderer.getShowDenoisedResult())
             {
                 ImGui::SameLine();
@@ -227,6 +229,8 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
             ImGui::SameLine();
             if (ImGui::Button("Denoise+##gpu")) renderer.triggerDenoiseAux();
             if (!canDenoise) ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (ImGui::Button("Reset##gpu")) renderer.resetAccumulation();
             if (renderer.getShowDenoisedResult())
             {
                 ImGui::SameLine();
@@ -337,6 +341,8 @@ void EditorUI::renderSettings(SceneRenderer& renderer)
             ImGui::SameLine();
             if (ImGui::Button("Denoise+##compute")) renderer.triggerDenoiseAux();
             if (!canDenoise) ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (ImGui::Button("Reset##compute")) renderer.resetAccumulation();
             if (renderer.getShowDenoisedResult())
             {
                 ImGui::SameLine();

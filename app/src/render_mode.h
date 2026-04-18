@@ -209,6 +209,7 @@ public:
                         const FrameChanges& changes)             = 0;
 
     virtual void     onGeometryRebuilt()       {}
+    virtual void     resetAccumulation()       {}
     virtual uint32_t getSampleCount()   const { return 0; }
     virtual float    getSamplesPerSec() const { return 0.f; }
     virtual bool     reloadShader()           { return false; }

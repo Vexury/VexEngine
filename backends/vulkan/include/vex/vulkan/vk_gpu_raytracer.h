@@ -3,6 +3,7 @@
 #include <volk.h>
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
+#include <vex/raytracing/cpu_raytracer.h>
 
 #include <string>
 #include <vector>
@@ -126,22 +127,22 @@ public:
     // Call this when only volume parameters changed — avoids re-uploading all geometry.
     void uploadVolumes(const std::vector<float>& volumesData);
 
-    // Upload all scene SSBOs. Must be called before createOutputImage().
+    // Upload all scene SSBOs and textures. Must be called before createOutputImage().
     // triShading: 13 vec4s (52 floats) per triangle, in per-submesh order
     // lightsData: [lightCount u32][totalLightArea f32][pad pad][indices...][CDF as float-bits...]
-    // texData:    [texCount u32][offset,w,h,pad per tex...][packed RGBA8 pixels as u32...]
+    // textures:   one TextureData (RGBA8 pixels + w/h) per scene texture (up to kMaxTextures)
     // envMapData: flat float RGB triples (3 floats per pixel)
     // envCdfData: [marginalCDF: H floats][condCDF: W*H floats][totalIntegral: 1 float]
     // instanceOffsets: first global tri index per BLAS (size == blas count)
     // volumesData: [count:uint,pad,pad,pad as floats][3 vec4s per volume]
     void uploadSceneData(
-        const std::vector<float>&    triShading,
-        const std::vector<uint32_t>& lightsData,
-        const std::vector<uint32_t>& texData,
-        const std::vector<float>&    envMapData,
-        const std::vector<float>&    envCdfData,
-        const std::vector<uint32_t>& instanceOffsets,
-        const std::vector<float>&    volumesData);
+        const std::vector<float>&                          triShading,
+        const std::vector<uint32_t>&                       lightsData,
+        const std::vector<vex::CPURaytracer::TextureData>& textures,
+        const std::vector<float>&                          envMapData,
+        const std::vector<float>&                          envCdfData,
+        const std::vector<uint32_t>&                       instanceOffsets,
+        const std::vector<float>&                          volumesData);
 
     // ── Rendering ────────────────────────────────────────────────────────────
 
@@ -240,13 +241,11 @@ private:
     VmaAllocation m_uboAlloc  = VK_NULL_HANDLE;
     RTUniforms*   m_uboMapped = nullptr;
 
-    // ── Scene SSBOs (bindings 3–9) ───────────────────────────────────────────
+    // ── Scene SSBOs (bindings 3–4, 6–9) ─────────────────────────────────────
     VkBuffer      m_triShadingBuffer      = VK_NULL_HANDLE;
     VmaAllocation m_triShadingAlloc       = VK_NULL_HANDLE;
     VkBuffer      m_lightsBuffer          = VK_NULL_HANDLE;
     VmaAllocation m_lightsAlloc           = VK_NULL_HANDLE;
-    VkBuffer      m_texDataBuffer         = VK_NULL_HANDLE;
-    VmaAllocation m_texDataAlloc          = VK_NULL_HANDLE;
     VkBuffer      m_envMapBuffer          = VK_NULL_HANDLE;
     VmaAllocation m_envMapAlloc           = VK_NULL_HANDLE;
     VkBuffer      m_envCdfBuffer          = VK_NULL_HANDLE;
@@ -255,6 +254,14 @@ private:
     VmaAllocation m_instanceOffsetsAlloc  = VK_NULL_HANDLE;
     VkBuffer      m_volumesBuffer         = VK_NULL_HANDLE;
     VmaAllocation m_volumesAlloc          = VK_NULL_HANDLE;
+
+    // ── Bindless texture array (binding 5) ───────────────────────────────────
+    static constexpr uint32_t  kMaxTextures  = 1024;
+    VkSampler                  m_textureSampler = VK_NULL_HANDLE;
+    std::vector<VkImage>       m_texImages;
+    std::vector<VkImageView>   m_texImageViews;
+    std::vector<VmaAllocation> m_texAllocs;
+    uint32_t                   m_texCount = 0;
 
     // ── Output storage image (rgba32f, GENERAL layout) ───────────────────────
     VkImage       m_outputImage     = VK_NULL_HANDLE;

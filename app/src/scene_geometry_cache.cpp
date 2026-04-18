@@ -504,42 +504,9 @@ void SceneGeometryCache::rebuild(const Scene& scene, vex::CPURaytracer& cpuRT,
         for (uint32_t idx : vkLightIndices) m_vkLights.push_back(idx);
         for (float c : vkLightCDF) m_vkLights.push_back(fBU(c));
 
-        {
-            if (progress) progress("Packing texture data...", 0.65f);
-            auto t_tex_pack = std::chrono::steady_clock::now();
-            m_vkTexData.clear();
-            uint32_t texCount = static_cast<uint32_t>(m_rtTextures.size());
-            m_vkTexData.push_back(texCount);
-            uint32_t headerSize = 1u + texCount * 4u;
-            m_vkTexData.resize(headerSize, 0u);
-            uint32_t pixelBase = headerSize;
-            size_t totalPixels = 0;
-            for (uint32_t ti = 0; ti < texCount; ++ti)
-            {
-                const auto& td = m_rtTextures[ti];
-                uint32_t hBase = 1u + ti * 4u;
-                m_vkTexData[hBase + 0] = pixelBase;
-                m_vkTexData[hBase + 1] = static_cast<uint32_t>(td.width);
-                m_vkTexData[hBase + 2] = static_cast<uint32_t>(td.height);
-                m_vkTexData[hBase + 3] = 0u;
-                uint32_t pixelCount = static_cast<uint32_t>(td.width * td.height);
-                for (uint32_t pi = 0; pi < pixelCount; ++pi)
-                {
-                    uint8_t r = td.pixels[pi * 4 + 0], g = td.pixels[pi * 4 + 1];
-                    uint8_t b = td.pixels[pi * 4 + 2], a = td.pixels[pi * 4 + 3];
-                    m_vkTexData.push_back(r | (uint32_t(g) << 8) | (uint32_t(b) << 16) | (uint32_t(a) << 24));
-                }
-                pixelBase += pixelCount;
-                totalPixels += pixelCount;
-            }
-            float t_tex_ms = std::chrono::duration<float, std::milli>(
-                std::chrono::steady_clock::now() - t_tex_pack).count();
-            char buf[192];
-            std::snprintf(buf, sizeof(buf),
-                "  VK texData SSBO pack: %.0f ms  (%u textures, %.1f MB)",
-                t_tex_ms, texCount, static_cast<double>(totalPixels * 4) / (1024.0 * 1024.0));
-            vex::Log::info(buf);
-        }
+        // Note: textures are no longer packed into a CPU SSBO here.
+        // They are uploaded as individual VkImages by VKGpuRaytracer::uploadSceneData()
+        // using m_rtTextures directly via the textures() accessor.
 
         vex::Log::info("  VK CPU pack done: " + std::to_string(m_vkInstanceOffsets.size()) + " submeshes, "
                       + std::to_string(m_vkTriShading.size() / FLOATS_PER_TRI) + " tris, "

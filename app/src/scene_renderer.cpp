@@ -454,6 +454,12 @@ uint32_t SceneRenderer::getRaytraceSampleCount() const
     return m_activeMode ? m_activeMode->getSampleCount() : 0;
 }
 
+void SceneRenderer::resetAccumulation()
+{
+    if (m_activeMode) m_activeMode->resetAccumulation();
+    m_showDenoisedResult = false;
+}
+
 void SceneRenderer::setUseLuminanceCDF(bool v)
 {
     if (m_luminanceCDF == v) return;

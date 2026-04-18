@@ -67,7 +67,6 @@ public:
 #ifdef VEX_BACKEND_VULKAN
     const std::vector<float>&    vkTriShading()      const { return m_vkTriShading; }
     const std::vector<uint32_t>& vkLights()          const { return m_vkLights; }
-    const std::vector<uint32_t>& vkTexData()         const { return m_vkTexData; }
     const std::vector<uint32_t>& vkInstanceOffsets() const { return m_vkInstanceOffsets; }
     std::vector<float>&    vkTriShadingMut() { return m_vkTriShading; }
     std::vector<uint32_t>& vkLightsMut()    { return m_vkLights; }
@@ -94,7 +93,6 @@ private:
 #ifdef VEX_BACKEND_VULKAN
     std::vector<float>    m_vkTriShading;
     std::vector<uint32_t> m_vkLights;
-    std::vector<uint32_t> m_vkTexData;
     std::vector<uint32_t> m_vkInstanceOffsets;
 #endif
 };

@@ -24,6 +24,7 @@ public:
 
     uint32_t getSampleCount()   const override { return m_vkComputeSampleCount; }
     float    getSamplesPerSec() const override { return m_vkComputeSamplesPerSec; }
+    void     resetAccumulation()      override;
 
     void onGeometryRebuilt() override;
 

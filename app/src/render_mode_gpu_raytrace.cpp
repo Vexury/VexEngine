@@ -313,6 +313,12 @@ void GPURaytraceMode::activate()
     }
 }
 
+void GPURaytraceMode::resetAccumulation()
+{
+    if (m_raytracer) m_raytracer->reset();
+    m_sampleCount = 0;
+}
+
 void GPURaytraceMode::onGeometryRebuilt()
 {
     activate();
@@ -354,7 +360,7 @@ void GPURaytraceMode::render(Scene& scene, const SharedRenderData& shared, const
 
         m_raytracer->uploadSceneData(
             m_geomCache->vkTriShading(), m_geomCache->vkLights(),
-            m_geomCache->vkTexData(),
+            m_geomCache->textures(),
             changes.vkEnvMapData ? *changes.vkEnvMapData : std::vector<float>{},
             changes.vkEnvCdfData ? *changes.vkEnvCdfData : std::vector<float>{},
             m_geomCache->vkInstanceOffsets(),

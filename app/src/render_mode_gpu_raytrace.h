@@ -27,6 +27,7 @@ public:
 
     uint32_t getSampleCount()   const override;
     float    getSamplesPerSec() const override { return m_samplesPerSec; }
+    void     resetAccumulation()      override;
     bool     reloadShader()           override;
 
     VKRTSettings&       getSettings()       { return m_settings; }
