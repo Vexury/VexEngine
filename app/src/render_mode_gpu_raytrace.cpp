@@ -68,6 +68,11 @@ uint32_t GPURaytraceMode::getSampleCount() const
     return m_raytracer ? m_raytracer->getSampleCount() : 0;
 }
 
+void GPURaytraceMode::resetAccumulation()
+{
+    if (m_raytracer) m_raytracer->reset();
+}
+
 bool GPURaytraceMode::reloadShader()
 {
     return m_raytracer ? m_raytracer->reloadShader() : false;
