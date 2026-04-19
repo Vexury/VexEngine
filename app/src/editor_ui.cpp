@@ -240,6 +240,22 @@ void EditorUI::renderStats(SceneRenderer& renderer, Scene& scene, vex::GraphicsC
         else if (sps > 0.0f)
             ImGui::Text("Samples/sec: %.1f", sps);
 
+#ifdef VEX_BACKEND_VULKAN
+        if (mode == RenderMode::GPURaytrace)
+        {
+            if (const auto* t = renderer.getGpuPassTimings())
+            {
+                ImGui::SeparatorText("GPU Passes");
+                if (t->rtDispatchMs >= 0.f)
+                    ImGui::Text("  RT dispatch: %.2f ms", t->rtDispatchMs);
+                if (t->bloomMs >= 0.f)
+                    ImGui::Text("  Bloom:       %.2f ms", t->bloomMs);
+                if (t->compositeMs >= 0.f)
+                    ImGui::Text("  Composite:   %.2f ms", t->compositeMs);
+            }
+        }
+#endif
+
         size_t lightTris = renderer.getLightTriangleCount();
         if (lightTris > 0)
         {

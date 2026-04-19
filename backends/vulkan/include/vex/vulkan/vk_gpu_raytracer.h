@@ -115,8 +115,10 @@ public:
 
     // Build the TLAS over all BLASes. Call after commitBlasBuild().
     // instanceTransforms: one mat4 per BLAS (same order as addBlas calls).
-    // Pass empty vector for identity transforms on all instances.
-    void buildTlas(const std::vector<glm::mat4>& instanceTransforms = {});
+    // instanceOpaque: true = force opaque (skip any-hit); false = allow any-hit.
+    // Pass empty vectors for defaults (identity transforms, all non-opaque).
+    void buildTlas(const std::vector<glm::mat4>& instanceTransforms = {},
+                   const std::vector<bool>&       instanceOpaque     = {});
 
     // Destroy all acceleration structures (call before rebuilding geometry)
     void clearAccelerationStructures();

@@ -412,7 +412,8 @@ void VKGpuRaytracer::commitBlasBuild()
     m_pendingBlases.clear();
 }
 
-void VKGpuRaytracer::buildTlas(const std::vector<glm::mat4>& instanceTransforms)
+void VKGpuRaytracer::buildTlas(const std::vector<glm::mat4>& instanceTransforms,
+                               const std::vector<bool>&       instanceOpaque)
 {
     // Note: we intentionally allow an empty TLAS (zero instances).
     // With no geometry every ray misses and the miss shader returns the
@@ -446,7 +447,9 @@ void VKGpuRaytracer::buildTlas(const std::vector<glm::mat4>& instanceTransforms)
         inst.instanceCustomIndex                    = i;         // maps to gl_InstanceCustomIndexEXT
         inst.mask                                   = 0xFF;
         inst.instanceShaderBindingTableRecordOffset = 0;
-        inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+        bool opaque = (i < instanceOpaque.size()) ? instanceOpaque[i] : false;
+        inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR
+                   | (opaque ? VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR : 0u);
         inst.accelerationStructureReference         = m_blases[i].deviceAddress;
         instances.push_back(inst);
     }

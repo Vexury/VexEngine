@@ -265,6 +265,7 @@ void GPURaytraceMode::render(Scene& scene, const SharedRenderData& shared, const
 #include <vex/vulkan/vk_framebuffer.h>
 #include <vex/vulkan/vk_texture.h>
 #include <vex/vulkan/vk_gpu_raytracer.h>
+#include <vex/vulkan/vk_gpu_timer.h>
 
 bool GPURaytraceMode::init(const RenderModeInitData& init)
 {
@@ -283,11 +284,21 @@ bool GPURaytraceMode::init(const RenderModeInitData& init)
         vex::Log::error("Failed to initialize Vulkan RT raytracer");
         m_raytracer.reset();
     }
+
+    auto& ctx = vex::VKContext::get();
+    m_gpuTimer = std::make_unique<vex::GpuTimer>();
+    m_gpuTimer->init(ctx.getDevice(), ctx.getPhysicalDevice());
+
     return true;
 }
 
 void GPURaytraceMode::shutdown()
 {
+    if (m_gpuTimer)
+    {
+        m_gpuTimer->destroy();
+        m_gpuTimer.reset();
+    }
     if (m_raytracer)
     {
         m_raytracer->shutdown();
@@ -480,7 +491,10 @@ void GPURaytraceMode::render(Scene& scene, const SharedRenderData& shared, const
     const bool hasTlas = (m_raytracer->getTlas().handle != VK_NULL_HANDLE);
     auto cmd = vex::VKContext::get().getCurrentCommandBuffer();
 
+    if (m_gpuTimer) m_gpuTimer->beginFrame(cmd);
+
     bool showDenoised = shared.showDenoisedResult && *shared.showDenoisedResult;
+    if (m_gpuTimer) m_gpuTimer->begin(cmd, vex::GpuTimerSlot::RtDispatch);
     if (!showDenoised && hasTlas && (shared.maxSamples == 0 || m_sampleCount < shared.maxSamples))
     {
         m_raytracer->trace(cmd);
@@ -500,8 +514,10 @@ void GPURaytraceMode::render(Scene& scene, const SharedRenderData& shared, const
         ++m_sampleCount;
         m_raytracer->postTraceBarrier(cmd);
     }
+    if (m_gpuTimer) m_gpuTimer->end(cmd, vex::GpuTimerSlot::RtDispatch);
 
     // Bloom pass
+    if (m_gpuTimer) m_gpuTimer->begin(cmd, vex::GpuTimerSlot::Bloom);
     VkImageView vkRTBloomView    = VK_NULL_HANDLE;
     VkSampler   vkRTBloomSampler = VK_NULL_HANDLE;
     vex::Texture2D* denoisedTex = shared.cpuAccumTex;
@@ -581,8 +597,10 @@ void GPURaytraceMode::render(Scene& scene, const SharedRenderData& shared, const
         vkRTBloomView    = vkBloom0->getColorImageView();
         vkRTBloomSampler = vkBloom0->getColorSampler();
     }
+    if (m_gpuTimer) m_gpuTimer->end(cmd, vex::GpuTimerSlot::Bloom);
 
     // Display
+    if (m_gpuTimer) m_gpuTimer->begin(cmd, vex::GpuTimerSlot::Composite);
     shared.outputFB->bind();
     shared.outputFB->clear(0.0f, 0.0f, 0.0f, 1.0f);
 
@@ -649,6 +667,7 @@ void GPURaytraceMode::render(Scene& scene, const SharedRenderData& shared, const
     }
 
     shared.outputFB->unbind();
+    if (m_gpuTimer) m_gpuTimer->end(cmd, vex::GpuTimerSlot::Composite);
     if (shared.drawCalls) *shared.drawCalls = 1;
 }
 

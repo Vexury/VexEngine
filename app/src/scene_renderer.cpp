@@ -454,6 +454,14 @@ uint32_t SceneRenderer::getRaytraceSampleCount() const
     return m_activeMode ? m_activeMode->getSampleCount() : 0;
 }
 
+#ifdef VEX_BACKEND_VULKAN
+const vex::GpuPassTimings* SceneRenderer::getGpuPassTimings() const
+{
+    if (m_renderMode != RenderMode::GPURaytrace || !m_gpuMode) return nullptr;
+    return m_gpuMode->getGpuPassTimings();
+}
+#endif
+
 void SceneRenderer::resetAccumulation()
 {
     if (m_activeMode) m_activeMode->resetAccumulation();

@@ -543,7 +543,9 @@ void SceneGeometryCache::buildAccelerationStructures(const Scene& scene,
     vkRaytracer->clearAccelerationStructures();
 
     std::vector<glm::mat4> blasTransforms;
+    std::vector<bool>      blasOpaque;
     blasTransforms.reserve(m_vkInstanceOffsets.size());
+    blasOpaque.reserve(m_vkInstanceOffsets.size());
 
     for (int ni = 0; ni < (int)scene.nodes.size(); ++ni)
     {
@@ -556,6 +558,9 @@ void SceneGeometryCache::buildAccelerationStructures(const Scene& scene,
                 vkMesh->getVertexBuffer(), vkMesh->getVertexCount(), sizeof(vex::Vertex),
                 vkMesh->getIndexBuffer(),  vkMesh->getIndexCount());
             blasTransforms.push_back(combinedMat);
+            // Any-hit only needed for alpha cutouts and thin glass (materialType 3)
+            bool needsAnyHit = sm.meshData.alphaClip || (sm.meshData.materialType == 3);
+            blasOpaque.push_back(!needsAnyHit);
         }
     }
 
@@ -575,7 +580,7 @@ void SceneGeometryCache::buildAccelerationStructures(const Scene& scene,
     if (progress) progress("Building TLAS...", 0.9f);
     {
         auto t_tlas = std::chrono::steady_clock::now();
-        vkRaytracer->buildTlas(blasTransforms);
+        vkRaytracer->buildTlas(blasTransforms, blasOpaque);
         float ms = std::chrono::duration<float, std::milli>(
             std::chrono::steady_clock::now() - t_tlas).count();
         char buf[64];
