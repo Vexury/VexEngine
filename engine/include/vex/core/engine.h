@@ -42,6 +42,7 @@ public:
     const Window& getWindow() const { return *m_window; }
     GraphicsContext& getGraphicsContext() { return *m_context; }
     const GraphicsContext& getGraphicsContext() const { return *m_context; }
+    UILayer& getUILayer() { return *m_uiLayer; }
 
 private:
     std::unique_ptr<Window> m_window;

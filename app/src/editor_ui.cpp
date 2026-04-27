@@ -1,6 +1,7 @@
 #include "editor_ui.h"
 #include "scene.h"
 #include "scene_renderer.h"
+#include "file_dialog.h"
 
 #include <cstdio>
 #include <string>
@@ -11,6 +12,30 @@
 #include <vex/graphics/graphics_context.h>
 
 #include <imgui.h>
+
+void EditorUI::renderMenuBar(SceneRenderer& renderer)
+{
+    if (!ImGui::BeginMainMenuBar())
+        return;
+
+    if (ImGui::BeginMenu("File"))
+    {
+        if (ImGui::MenuItem("Save Image..."))
+        {
+            std::string path = saveImageFileDialog();
+            if (!path.empty())
+            {
+                if (renderer.saveImage(path))
+                    vex::Log::info("Saved: " + path);
+                else
+                    vex::Log::error("Failed to save: " + path);
+            }
+        }
+        ImGui::EndMenu();
+    }
+
+    ImGui::EndMainMenuBar();
+}
 
 bool EditorUI::consumePickRequest(int& outX, int& outY)
 {

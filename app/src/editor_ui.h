@@ -16,6 +16,7 @@ enum class RenderMode;
 class EditorUI
 {
 public:
+    void renderMenuBar(SceneRenderer& renderer);
     void renderViewport(SceneRenderer& renderer, Scene& scene);
     void renderHierarchy(Scene& scene, SceneRenderer& renderer);
     void renderInspector(Scene& scene, SceneRenderer& renderer);

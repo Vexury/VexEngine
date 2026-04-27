@@ -76,7 +76,14 @@ void UILayer::beginFrame()
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    // Fullscreen dockspace
+    // Menu bar must be rendered before the DockSpace so BeginViewportSideBar
+    // updates BuildWorkOffsetMin before we read GetBuildWorkRect() below.
+    if (m_menuBarCallback)
+        m_menuBarCallback();
+
+    // Fullscreen dockspace — positioned in the work rect left over after side bars
+    // (e.g. the menu bar above). GetBuildWorkRect() reflects any BeginViewportSideBar
+    // calls made earlier this frame, so the DockSpace sits flush below the menu bar.
     ImGuiWindowFlags windowFlags =
         ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar |
         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
@@ -84,8 +91,11 @@ void UILayer::beginFrame()
         ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBackground;
 
     ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(viewport->Pos);
-    ImGui::SetNextWindowSize(viewport->Size);
+    const float menuBarHeight = m_menuBarCallback ? ImGui::GetFrameHeight() : 0.0f;
+    const ImVec2 workPos  = { viewport->Pos.x, viewport->Pos.y + menuBarHeight };
+    const ImVec2 workSize = { viewport->Size.x, viewport->Size.y - menuBarHeight };
+    ImGui::SetNextWindowPos(workPos);
+    ImGui::SetNextWindowSize(workSize);
     ImGui::SetNextWindowViewport(viewport->ID);
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
@@ -104,7 +114,7 @@ void UILayer::beginFrame()
 
         ImGui::DockBuilderRemoveNode(dockSpaceId);
         ImGui::DockBuilderAddNode(dockSpaceId, ImGuiDockNodeFlags_DockSpace);
-        ImGui::DockBuilderSetNodeSize(dockSpaceId, viewport->Size);
+        ImGui::DockBuilderSetNodeSize(dockSpaceId, workSize);
 
         ImGuiID dockMain = dockSpaceId;
 

@@ -421,16 +421,6 @@ void EditorUI::renderInspector(Scene& scene, SceneRenderer& renderer)
                         " +1 = forward (haze, glowing halos)\n"
                         " -1 = backward (some dust types)");
 
-                ImGui::Separator();
-                if (ImGui::Button("Remove Volume"))
-                {
-                    // Routed through App DEL handler (same as pressing Delete key)
-                    // so it goes through the undo stack. We simulate a DEL by setting
-                    // the selection and deferring to the Delete key path isn't available
-                    // here — just erase directly as a fallback (no undo for inspector button).
-                    scene.volumes.erase(scene.volumes.begin() + m_selection->index);
-                    m_selection->type = Selection::None;
-                }
             }
             break;
 

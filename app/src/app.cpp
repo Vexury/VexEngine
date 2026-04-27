@@ -3,6 +3,7 @@
 
 #include <vex/core/window.h>
 #include <vex/core/log.h>
+#include <vex/ui/ui_layer.h>
 #include <vex/graphics/graphics_context.h>
 #include <vex/scene/primitives.h>
 #include <vex/raytracing/bvh.h>
@@ -65,6 +66,7 @@ bool App::init(const vex::EngineConfig& config)
         return false;
 
     m_ui.init(m_selection);
+    m_engine.getUILayer().setMenuBarCallback([this]() { m_ui.renderMenuBar(m_renderer); });
 
     m_scene.camera.fov = 45.0f;
 
