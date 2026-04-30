@@ -13,6 +13,11 @@ public:
     explicit VKFramebuffer(const FramebufferSpec& spec);
     ~VKFramebuffer() override;
 
+    VKFramebuffer(const VKFramebuffer&)            = delete;
+    VKFramebuffer& operator=(const VKFramebuffer&) = delete;
+    VKFramebuffer(VKFramebuffer&&)                 = delete;
+    VKFramebuffer& operator=(VKFramebuffer&&)      = delete;
+
     void bind() override;
     void unbind() override;
     void resize(uint32_t width, uint32_t height) override;

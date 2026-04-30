@@ -18,8 +18,10 @@ public:
     VKSkybox() = default;
     ~VKSkybox() override;
 
-    VKSkybox(const VKSkybox&) = delete;
+    VKSkybox(const VKSkybox&)            = delete;
     VKSkybox& operator=(const VKSkybox&) = delete;
+    VKSkybox(VKSkybox&&)                 = delete;
+    VKSkybox& operator=(VKSkybox&&)      = delete;
 
     bool load(const std::string& equirectPath) override;
     void draw(const glm::mat4& inverseVP) const override;

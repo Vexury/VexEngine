@@ -13,6 +13,11 @@ public:
     VKTexture2D(uint32_t width, uint32_t height, uint32_t channels, bool isFloat = false);
     ~VKTexture2D() override;
 
+    VKTexture2D(const VKTexture2D&)            = delete;
+    VKTexture2D& operator=(const VKTexture2D&) = delete;
+    VKTexture2D(VKTexture2D&&)                 = delete;
+    VKTexture2D& operator=(VKTexture2D&&)      = delete;
+
     void bind(uint32_t slot) override;
     void unbind() override;
 

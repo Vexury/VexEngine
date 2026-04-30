@@ -53,6 +53,11 @@ public:
     VKShader() = default;
     ~VKShader() override;
 
+    VKShader(const VKShader&)            = delete;
+    VKShader& operator=(const VKShader&) = delete;
+    VKShader(VKShader&&)                 = delete;
+    VKShader& operator=(VKShader&&)      = delete;
+
     bool loadFromFiles(const std::string& vertexPath, const std::string& fragmentPath) override;
     void bind() override;
     void unbind() override;

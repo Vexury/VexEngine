@@ -228,7 +228,7 @@ void VKGpuRaytracer::freeSceneData()
     if (m_envMapImageView)  { vkDestroyImageView(device, m_envMapImageView, nullptr);  m_envMapImageView  = VK_NULL_HANDLE; }
     if (m_envMapImage)      { ctx.getMemoryTracker().untrack(allocator, m_envMapImageAlloc);
                               vmaDestroyImage(allocator, m_envMapImage, m_envMapImageAlloc);
-                              m_envMapImage = VK_NULL_HANDLE; m_envMapImageAlloc = nullptr; }
+                              m_envMapImage = VK_NULL_HANDLE; m_envMapImageAlloc = VK_NULL_HANDLE; }
 
     // Scene SSBOs
     destroyBuffer(m_volumesBuffer,         m_volumesAlloc);
@@ -276,7 +276,7 @@ void VKGpuRaytracer::shutdown()
     if (m_envMapImageView)  { vkDestroyImageView(device, m_envMapImageView, nullptr);  m_envMapImageView  = VK_NULL_HANDLE; }
     if (m_envMapImage)      { ctx.getMemoryTracker().untrack(allocator, m_envMapImageAlloc);
                               vmaDestroyImage(allocator, m_envMapImage, m_envMapImageAlloc);
-                              m_envMapImage = VK_NULL_HANDLE; m_envMapImageAlloc = nullptr; }
+                              m_envMapImage = VK_NULL_HANDLE; m_envMapImageAlloc = VK_NULL_HANDLE; }
 
     // Scene SSBOs
     destroyBuffer(m_volumesBuffer,         m_volumesAlloc);
@@ -831,7 +831,7 @@ void VKGpuRaytracer::uploadSceneData(
         if (m_envMapImageView)  { vkDestroyImageView(device, m_envMapImageView, nullptr);  m_envMapImageView  = VK_NULL_HANDLE; }
         if (m_envMapImage)      { ctx.getMemoryTracker().untrack(allocator, m_envMapImageAlloc);
                                   vmaDestroyImage(allocator, m_envMapImage, m_envMapImageAlloc);
-                                  m_envMapImage = VK_NULL_HANDLE; m_envMapImageAlloc = nullptr; }
+                                  m_envMapImage = VK_NULL_HANDLE; m_envMapImageAlloc = VK_NULL_HANDLE; }
 
         const bool hasEnv = !envMapData.empty() && envMapWidth > 0 && envMapHeight > 0;
         uint32_t   ew     = hasEnv ? static_cast<uint32_t>(envMapWidth)  : 1u;

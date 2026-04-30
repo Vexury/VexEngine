@@ -101,6 +101,14 @@ struct VKTlas
 class VKGpuRaytracer
 {
 public:
+    VKGpuRaytracer() = default;
+    ~VKGpuRaytracer() { shutdown(); }
+
+    VKGpuRaytracer(const VKGpuRaytracer&)            = delete;
+    VKGpuRaytracer& operator=(const VKGpuRaytracer&) = delete;
+    VKGpuRaytracer(VKGpuRaytracer&&)                 = delete;
+    VKGpuRaytracer& operator=(VKGpuRaytracer&&)      = delete;
+
     bool init();
     void shutdown();
 
@@ -260,7 +268,7 @@ private:
     // ── Env map VkImage (binding 6) ──────────────────────────────────────────
     VkImage       m_envMapImage      = VK_NULL_HANDLE;
     VkImageView   m_envMapImageView  = VK_NULL_HANDLE;
-    VmaAllocation m_envMapImageAlloc = nullptr;
+    VmaAllocation m_envMapImageAlloc = VK_NULL_HANDLE;
 
     // ── Bindless texture array (binding 5) ───────────────────────────────────
     static constexpr uint32_t  kMaxTextures  = 1024;

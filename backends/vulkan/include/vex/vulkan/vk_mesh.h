@@ -15,8 +15,10 @@ public:
     VKMesh() = default;
     ~VKMesh() override;
 
-    VKMesh(const VKMesh&) = delete;
+    VKMesh(const VKMesh&)            = delete;
     VKMesh& operator=(const VKMesh&) = delete;
+    VKMesh(VKMesh&&)                 = delete;
+    VKMesh& operator=(VKMesh&&)      = delete;
 
     void upload(const MeshData& data) override;
     void draw() const override;

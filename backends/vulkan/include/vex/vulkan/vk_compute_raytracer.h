@@ -88,6 +88,14 @@ inline void vkComputeUniformsSetVec3(float (&dst)[3], const glm::vec3& v)
 class VKComputeRaytracer
 {
 public:
+    VKComputeRaytracer() = default;
+    ~VKComputeRaytracer() { shutdown(); }
+
+    VKComputeRaytracer(const VKComputeRaytracer&)            = delete;
+    VKComputeRaytracer& operator=(const VKComputeRaytracer&) = delete;
+    VKComputeRaytracer(VKComputeRaytracer&&)                 = delete;
+    VKComputeRaytracer& operator=(VKComputeRaytracer&&)      = delete;
+
     bool init();
     void shutdown();
 
