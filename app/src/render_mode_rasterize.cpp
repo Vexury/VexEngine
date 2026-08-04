@@ -31,6 +31,7 @@
 #endif
 
 #include <algorithm>
+#include <chrono>
 #include <limits>
 
 // ---------------------------------------------------------------------------
@@ -554,7 +555,7 @@ std::pair<int,int> RasterizeMode::pick(Scene& scene, const SharedRenderData& sha
     if (!m_pickShader || !m_pickFB)
         return {-1, -1};
 
-    VEX_GPU_ZONE("Pick pass");
+    const auto t0 = std::chrono::steady_clock::now();
 
     const auto& mainSpec = shared.outputFB->getSpec();
     const auto& pickSpec = m_pickFB->getSpec();
@@ -595,6 +596,10 @@ std::pair<int,int> RasterizeMode::pick(Scene& scene, const SharedRenderData& sha
 
     int objectID = m_pickFB->readPixel(pixelX, pixelY) - 1;
     m_pickFB->unbind();
+
+    vex::Profiler::get().recordOneShot("Pick pass",
+        std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - t0).count());
 
     if (objectID >= 0 && objectID < static_cast<int>(drawToMesh.size()))
         return drawToMesh[objectID];
