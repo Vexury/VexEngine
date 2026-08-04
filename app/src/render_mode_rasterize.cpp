@@ -7,6 +7,7 @@
 #include <vex/graphics/texture.h>
 #include <vex/raytracing/bvh.h>
 #include <vex/core/log.h>
+#include <vex/core/profiler.h>
 
 #ifdef VEX_BACKEND_OPENGL
 #include <glad/glad.h>
@@ -167,6 +168,7 @@ void RasterizeMode::renderWithSelection(Scene& scene, const SharedRenderData& sh
 
     if (scene.showSkybox && scene.skybox && !useSolidColor)
     {
+        VEX_GPU_ZONE("Raster: skybox");
         scene.skybox->setEnvRotation(scene.envRotation);
         scene.skybox->draw(glm::inverse(proj * view));
         if (shared.drawCalls) ++(*shared.drawCalls);
@@ -252,6 +254,8 @@ void RasterizeMode::renderWithSelection(Scene& scene, const SharedRenderData& sh
     }
 #endif
 
+    {
+    VEX_GPU_ZONE("Raster: meshes");
     for (int ni = 0; ni < static_cast<int>(scene.nodes.size()); ++ni)
     {
         const glm::mat4 nodeWorld = scene.getWorldMatrix(ni);
@@ -323,6 +327,7 @@ void RasterizeMode::renderWithSelection(Scene& scene, const SharedRenderData& sh
 #endif
         }
     }
+    }
 
     if (shared.debugMode == 1) // DebugMode::Wireframe
         meshShader->setWireframe(false);
@@ -346,33 +351,39 @@ void RasterizeMode::renderWithSelection(Scene& scene, const SharedRenderData& sh
 
         glDisable(GL_DEPTH_TEST);
 
-        m_bloomFB[0]->bind();
-        m_bloomThresholdShader->bind();
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(m_rasterHDRFB->getColorAttachmentHandle()));
-        m_bloomThresholdShader->setInt("u_hdrMap", 0);
-        m_bloomThresholdShader->setFloat("u_threshold", shared.bloomThreshold);
-        m_bloomThresholdShader->setFloat("u_sampleCount", 1.0f);
-        m_fullscreenQuad->draw();
-        m_bloomThresholdShader->unbind();
-        m_bloomFB[0]->unbind();
-
-        bool horizontal = true;
-        for (int i = 0; i < shared.bloomBlurPasses * 2; ++i)
         {
-            int src = horizontal ? 0 : 1;
-            int dst = horizontal ? 1 : 0;
-            m_bloomFB[dst]->bind();
-            m_bloomBlurShader->bind();
+            VEX_GPU_ZONE("Bloom: threshold");
+            m_bloomFB[0]->bind();
+            m_bloomThresholdShader->bind();
             glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D,
-                static_cast<GLuint>(m_bloomFB[src]->getColorAttachmentHandle()));
-            m_bloomBlurShader->setInt("u_image", 0);
-            m_bloomBlurShader->setBool("u_horizontal", horizontal);
+            glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(m_rasterHDRFB->getColorAttachmentHandle()));
+            m_bloomThresholdShader->setInt("u_hdrMap", 0);
+            m_bloomThresholdShader->setFloat("u_threshold", shared.bloomThreshold);
+            m_bloomThresholdShader->setFloat("u_sampleCount", 1.0f);
             m_fullscreenQuad->draw();
-            m_bloomBlurShader->unbind();
-            m_bloomFB[dst]->unbind();
-            horizontal = !horizontal;
+            m_bloomThresholdShader->unbind();
+            m_bloomFB[0]->unbind();
+        }
+
+        {
+            VEX_GPU_ZONE("Bloom: blur");
+            bool horizontal = true;
+            for (int i = 0; i < shared.bloomBlurPasses * 2; ++i)
+            {
+                int src = horizontal ? 0 : 1;
+                int dst = horizontal ? 1 : 0;
+                m_bloomFB[dst]->bind();
+                m_bloomBlurShader->bind();
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D,
+                    static_cast<GLuint>(m_bloomFB[src]->getColorAttachmentHandle()));
+                m_bloomBlurShader->setInt("u_image", 0);
+                m_bloomBlurShader->setBool("u_horizontal", horizontal);
+                m_fullscreenQuad->draw();
+                m_bloomBlurShader->unbind();
+                m_bloomFB[dst]->unbind();
+                horizontal = !horizontal;
+            }
         }
         bloomTex = static_cast<GLuint>(m_bloomFB[0]->getColorAttachmentHandle());
     }
@@ -381,6 +392,7 @@ void RasterizeMode::renderWithSelection(Scene& scene, const SharedRenderData& sh
     vex::Shader* rtShader = m_fullscreenRTShader;
     if (rtShader)
     {
+        VEX_GPU_ZONE("Composite");
         shared.outputFB->bind();
         shared.outputFB->clear(0.0f, 0.0f, 0.0f, 1.0f);
 
@@ -438,41 +450,47 @@ void RasterizeMode::renderWithSelection(Scene& scene, const SharedRenderData& sh
             static_cast<vex::VKShader*>(m_bloomBlurShader)->clearExternalTextureCache();
         }
 
-        auto* vkHDRFB2   = static_cast<vex::VKFramebuffer*>(m_rasterHDRFB.get());
-        auto* vkThreshVK = static_cast<vex::VKShader*>(m_bloomThresholdShader);
-
-        m_bloomFB[0]->bind();
-        m_bloomFB[0]->clear(0.0f, 0.0f, 0.0f, 1.0f);
-        m_bloomThresholdShader->setFloat("u_threshold", shared.bloomThreshold);
-        m_bloomThresholdShader->setFloat("u_sampleCount", 1.0f);
-        m_bloomThresholdShader->bind();
-        vkThreshVK->setExternalTextureVK(0,
-            vkHDRFB2->getColorImageView(),
-            vkHDRFB2->getColorSampler(),
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        m_fullscreenQuad->draw();
-        m_bloomThresholdShader->unbind();
-        m_bloomFB[0]->unbind();
-
-        auto* vkBlurVK = static_cast<vex::VKShader*>(m_bloomBlurShader);
-        bool horizontal = true;
-        for (int i = 0; i < shared.bloomBlurPasses * 2; ++i)
         {
-            int src = horizontal ? 0 : 1;
-            int dst = horizontal ? 1 : 0;
-            auto* srcFBVK = static_cast<vex::VKFramebuffer*>(m_bloomFB[src]);
-            m_bloomFB[dst]->bind();
-            m_bloomFB[dst]->clear(0.0f, 0.0f, 0.0f, 1.0f);
-            m_bloomBlurShader->bind();
-            vkBlurVK->setExternalTextureVK(0,
-                srcFBVK->getColorImageView(),
-                srcFBVK->getColorSampler(),
+            VEX_GPU_ZONE("Bloom: threshold");
+            auto* vkHDRFB2   = static_cast<vex::VKFramebuffer*>(m_rasterHDRFB.get());
+            auto* vkThreshVK = static_cast<vex::VKShader*>(m_bloomThresholdShader);
+
+            m_bloomFB[0]->bind();
+            m_bloomFB[0]->clear(0.0f, 0.0f, 0.0f, 1.0f);
+            m_bloomThresholdShader->setFloat("u_threshold", shared.bloomThreshold);
+            m_bloomThresholdShader->setFloat("u_sampleCount", 1.0f);
+            m_bloomThresholdShader->bind();
+            vkThreshVK->setExternalTextureVK(0,
+                vkHDRFB2->getColorImageView(),
+                vkHDRFB2->getColorSampler(),
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            m_bloomBlurShader->setBool("u_horizontal", horizontal);
             m_fullscreenQuad->draw();
-            m_bloomBlurShader->unbind();
-            m_bloomFB[dst]->unbind();
-            horizontal = !horizontal;
+            m_bloomThresholdShader->unbind();
+            m_bloomFB[0]->unbind();
+        }
+
+        {
+            VEX_GPU_ZONE("Bloom: blur");
+            auto* vkBlurVK = static_cast<vex::VKShader*>(m_bloomBlurShader);
+            bool horizontal = true;
+            for (int i = 0; i < shared.bloomBlurPasses * 2; ++i)
+            {
+                int src = horizontal ? 0 : 1;
+                int dst = horizontal ? 1 : 0;
+                auto* srcFBVK = static_cast<vex::VKFramebuffer*>(m_bloomFB[src]);
+                m_bloomFB[dst]->bind();
+                m_bloomFB[dst]->clear(0.0f, 0.0f, 0.0f, 1.0f);
+                m_bloomBlurShader->bind();
+                vkBlurVK->setExternalTextureVK(0,
+                    srcFBVK->getColorImageView(),
+                    srcFBVK->getColorSampler(),
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                m_bloomBlurShader->setBool("u_horizontal", horizontal);
+                m_fullscreenQuad->draw();
+                m_bloomBlurShader->unbind();
+                m_bloomFB[dst]->unbind();
+                horizontal = !horizontal;
+            }
         }
         auto* vkBloom0 = static_cast<vex::VKFramebuffer*>(m_bloomFB[0]);
         vkBloomView   = vkBloom0->getColorImageView();
@@ -481,6 +499,7 @@ void RasterizeMode::renderWithSelection(Scene& scene, const SharedRenderData& sh
 
     if (m_fullscreenRTShader)
     {
+        VEX_GPU_ZONE("Composite");
         auto* vkHDRFB    = static_cast<vex::VKFramebuffer*>(m_rasterHDRFB.get());
         auto* rtShaderVK = static_cast<vex::VKShader*>(m_fullscreenRTShader);
 
@@ -534,6 +553,8 @@ std::pair<int,int> RasterizeMode::pick(Scene& scene, const SharedRenderData& sha
 #ifdef VEX_BACKEND_OPENGL
     if (!m_pickShader || !m_pickFB)
         return {-1, -1};
+
+    VEX_GPU_ZONE("Pick pass");
 
     const auto& mainSpec = shared.outputFB->getSpec();
     const auto& pickSpec = m_pickFB->getSpec();
