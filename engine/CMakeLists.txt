@@ -4,6 +4,7 @@ add_library(vex_core STATIC
     src/core/input.cpp
     src/core/log.cpp
     src/core/camera.cpp
+    src/core/profiler.cpp
     src/core/stb_impl.cpp
     src/core/tiny_obj_impl.cpp
     src/core/tiny_gltf_impl.cpp

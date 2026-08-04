@@ -5,6 +5,7 @@ add_executable(vex_tests
     test_primitives.cpp
     test_camera.cpp
     test_raytracer.cpp
+    test_profiler.cpp
 )
 
 target_include_directories(vex_tests PRIVATE
