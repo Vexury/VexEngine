@@ -7,6 +7,7 @@ add_library(vex_opengl STATIC
     src/gl_mesh.cpp
     src/gl_skybox.cpp
     src/gl_gpu_raytracer.cpp
+    src/gl_profiler_backend.cpp
 )
 
 target_include_directories(vex_opengl

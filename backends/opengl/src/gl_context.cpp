@@ -16,6 +16,12 @@ std::unique_ptr<GraphicsContext> GraphicsContext::create()
     return std::make_unique<GLContext>();
 }
 
+std::string GLContext::deviceName() const
+{
+    const GLubyte* r = glGetString(GL_RENDERER);
+    return r ? reinterpret_cast<const char*>(r) : "Unknown";
+}
+
 std::function<void()> GLContext::getWindowHints() const
 {
     return []()

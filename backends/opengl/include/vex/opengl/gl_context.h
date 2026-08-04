@@ -13,6 +13,7 @@ public:
     void beginFrame() override;
     void endFrame() override;
     std::string_view backendName() const override { return "OpenGL"; }
+    std::string deviceName() const override;
     std::function<void()> getWindowHints() const override;
 
     void imguiInit(GLFWwindow* window) override;
