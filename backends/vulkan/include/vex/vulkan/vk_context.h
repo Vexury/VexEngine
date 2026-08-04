@@ -46,6 +46,7 @@ public:
     void beginFrame() override;
     void endFrame() override;
     std::string_view backendName() const override { return "Vulkan"; }
+    std::string deviceName() const override { return m_deviceName; }
     std::function<void()> getWindowHints() const override;
     MemoryStats getMemoryStats() const override;
     void waitIdle() override;
@@ -113,6 +114,7 @@ private:
     VkDevice        m_device         = VK_NULL_HANDLE;
     VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
     VmaAllocator    m_allocator      = VK_NULL_HANDLE;
+    std::string     m_deviceName;
 
     // Queue
     VkQueue  m_graphicsQueue       = VK_NULL_HANDLE;

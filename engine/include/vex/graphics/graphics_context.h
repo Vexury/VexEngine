@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <memory>
+#include <string>
 #include <string_view>
 
 struct GLFWwindow;
@@ -34,6 +35,7 @@ public:
     virtual void endFrame() = 0;
 
     virtual std::string_view backendName() const = 0;
+    virtual std::string deviceName() const { return "Unknown"; }
     virtual std::function<void()> getWindowHints() const = 0;
     virtual MemoryStats getMemoryStats() const { return {}; }
     virtual void waitIdle() {}

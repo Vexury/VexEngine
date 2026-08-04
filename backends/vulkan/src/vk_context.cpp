@@ -66,15 +66,21 @@ bool VKContext::init(Window& window)
 
     // 2. Create instance via vk-bootstrap
     vkb::InstanceBuilder instanceBuilder;
-    auto instRet = instanceBuilder
+    instanceBuilder
         .set_app_name("VexEngine")
         .set_engine_name("VexEngine")
-        .require_api_version(1, 3, 0)
+        .require_api_version(1, 3, 0);
 #ifdef VEX_DEBUG
-        .request_validation_layers()
-        .use_default_debug_messenger()
+    instanceBuilder.request_validation_layers().use_default_debug_messenger();
 #endif
-        .build();
+
+    // Needed in Release too: without it, RGP and RenderDoc captures show
+    // unnamed dispatches instead of the profiler's pass names.
+    auto sysInfo = vkb::SystemInfo::get_system_info();
+    if (sysInfo && sysInfo->is_extension_available(VK_EXT_DEBUG_UTILS_EXTENSION_NAME))
+        instanceBuilder.enable_extension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+
+    auto instRet = instanceBuilder.build();
 
     if (!instRet)
     {
@@ -283,7 +289,8 @@ bool VKContext::init(Window& window)
     props2.pNext = &m_rtProperties;
     vkGetPhysicalDeviceProperties2(m_physicalDevice, &props2);
 
-    Log::info(std::string("Vulkan Device: ") + props2.properties.deviceName);
+    m_deviceName = props2.properties.deviceName;
+    Log::info(std::string("Vulkan Device: ") + m_deviceName);
 
     return true;
 }

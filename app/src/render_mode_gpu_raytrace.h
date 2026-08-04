@@ -11,7 +11,6 @@ struct Scene;
 #include <vex/opengl/gl_gpu_raytracer.h>
 #else
 #include <vex/vulkan/vk_gpu_raytracer.h>
-#include <vex/vulkan/vk_gpu_timer.h>
 #endif
 
 // GPU ray-tracing render mode.
@@ -35,13 +34,6 @@ public:
     const VKRTSettings& getSettings() const { return m_settings; }
 
     void onGeometryRebuilt() override;
-
-#ifdef VEX_BACKEND_VULKAN
-    const vex::GpuPassTimings* getGpuPassTimings() const
-    {
-        return m_gpuTimer ? &m_gpuTimer->getTimings() : nullptr;
-    }
-#endif
 
 #ifdef VEX_BACKEND_OPENGL
     vex::GLGPURaytracer* getRaytracer() { return m_raytracer.get(); }
@@ -68,7 +60,6 @@ private:
     VKRTSettings m_settings;
 #ifdef VEX_BACKEND_VULKAN
     VKRTSettings m_prevSettings; // snapshot for accumulator-reset on settings change
-    std::unique_ptr<vex::GpuTimer> m_gpuTimer;
 #endif
     bool     m_geomDirty   = false;
     uint32_t m_sampleCount = 0;   // incremented per frame on VK; unused on GL (GL raytracer tracks it)

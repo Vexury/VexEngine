@@ -99,11 +99,6 @@ public:
     bool isDenoiserReady() const { return m_denoiser && m_denoiser->isReady(); }
     bool getShowDenoisedResult() const { return m_showDenoisedResult; }
 
-
-#ifdef VEX_BACKEND_VULKAN
-    const vex::GpuPassTimings* getGpuPassTimings() const;
-#endif
-
     // Struct-based settings access (replaces ~50 individual getters/setters)
     CPURTSettings&  getCPURTSettings()  { return m_cpuRTSettings; }
     VKRTSettings&   getGPURTSettings()  { return m_gpuMode ? m_gpuMode->getSettings() : m_gpuRTFallback; }

@@ -6,6 +6,7 @@
 #include <vex/graphics/mesh.h>
 #include <vex/graphics/texture.h>
 #include <vex/core/log.h>
+#include <vex/core/profiler.h>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -270,7 +271,6 @@ void GPURaytraceMode::render(Scene& scene, const SharedRenderData& shared, const
 #include <vex/vulkan/vk_framebuffer.h>
 #include <vex/vulkan/vk_texture.h>
 #include <vex/vulkan/vk_gpu_raytracer.h>
-#include <vex/vulkan/vk_gpu_timer.h>
 
 bool GPURaytraceMode::init(const RenderModeInitData& init)
 {
@@ -290,20 +290,11 @@ bool GPURaytraceMode::init(const RenderModeInitData& init)
         m_raytracer.reset();
     }
 
-    auto& ctx = vex::VKContext::get();
-    m_gpuTimer = std::make_unique<vex::GpuTimer>();
-    m_gpuTimer->init(ctx.getDevice(), ctx.getPhysicalDevice());
-
     return true;
 }
 
 void GPURaytraceMode::shutdown()
 {
-    if (m_gpuTimer)
-    {
-        m_gpuTimer->destroy();
-        m_gpuTimer.reset();
-    }
     if (m_raytracer)
     {
         m_raytracer->shutdown();
@@ -496,183 +487,184 @@ void GPURaytraceMode::render(Scene& scene, const SharedRenderData& shared, const
     const bool hasTlas = (m_raytracer->getTlas().handle != VK_NULL_HANDLE);
     auto cmd = vex::VKContext::get().getCurrentCommandBuffer();
 
-    if (m_gpuTimer) m_gpuTimer->beginFrame(cmd);
-
     bool showDenoised = shared.showDenoisedResult && *shared.showDenoisedResult;
-    if (m_gpuTimer) m_gpuTimer->begin(cmd, vex::GpuTimerSlot::RtDispatch);
-    if (!showDenoised && hasTlas && (shared.maxSamples == 0 || m_sampleCount < shared.maxSamples))
     {
-        m_raytracer->trace(cmd);
+        VEX_GPU_ZONE("RT dispatch");
+        if (!showDenoised && hasTlas && (shared.maxSamples == 0 || m_sampleCount < shared.maxSamples))
+        {
+            m_raytracer->trace(cmd);
 
-        auto now = std::chrono::steady_clock::now();
-        if (m_sampleCount == 0) {
-            m_samplesPerSec = 0.0f;
-        } else {
-            float dt = std::chrono::duration<float>(now - m_lastSampleTime).count();
-            if (dt > 1e-6f) {
-                float instant = 1.0f / dt;
-                m_samplesPerSec = m_samplesPerSec < 1e-6f
-                    ? instant : m_samplesPerSec * 0.9f + instant * 0.1f;
+            auto now = std::chrono::steady_clock::now();
+            if (m_sampleCount == 0) {
+                m_samplesPerSec = 0.0f;
+            } else {
+                float dt = std::chrono::duration<float>(now - m_lastSampleTime).count();
+                if (dt > 1e-6f) {
+                    float instant = 1.0f / dt;
+                    m_samplesPerSec = m_samplesPerSec < 1e-6f
+                        ? instant : m_samplesPerSec * 0.9f + instant * 0.1f;
+                }
             }
+            m_lastSampleTime = now;
+            ++m_sampleCount;
+            m_raytracer->postTraceBarrier(cmd);
         }
-        m_lastSampleTime = now;
-        ++m_sampleCount;
-        m_raytracer->postTraceBarrier(cmd);
     }
-    if (m_gpuTimer) m_gpuTimer->end(cmd, vex::GpuTimerSlot::RtDispatch);
 
     // Bloom pass
-    if (m_gpuTimer) m_gpuTimer->begin(cmd, vex::GpuTimerSlot::Bloom);
     VkImageView vkRTBloomView    = VK_NULL_HANDLE;
     VkSampler   vkRTBloomSampler = VK_NULL_HANDLE;
     vex::Texture2D* denoisedTex = shared.cpuAccumTex;
     bool vkRTBloomActive = shared.bloomEnabled && hasTlas
                            && m_bloomThresholdShader && m_bloomBlurShader
                            && m_bloomFB[0] && m_bloomFB[1];
-    if (vkRTBloomActive)
     {
-        const auto& outSpec = shared.outputFB->getSpec();
-        uint32_t bw = std::max(1u, outSpec.width / 2);
-        uint32_t bh = std::max(1u, outSpec.height / 2);
-        bool needResize = (m_bloomFB[0]->getSpec().width != bw
-                        || m_bloomFB[0]->getSpec().height != bh);
-        if (needResize)
+        VEX_GPU_ZONE("Bloom");
+        if (vkRTBloomActive)
         {
-            m_bloomFB[0]->resize(bw, bh);
-            m_bloomFB[1]->resize(bw, bh);
-            m_bloomThresholdShader->preparePipeline(*m_bloomFB[0]);
-            m_bloomBlurShader->preparePipeline(*m_bloomFB[0]);
-            static_cast<vex::VKShader*>(m_bloomThresholdShader)->clearExternalTextureCache();
-            static_cast<vex::VKShader*>(m_bloomBlurShader)->clearExternalTextureCache();
-        }
+            const auto& outSpec = shared.outputFB->getSpec();
+            uint32_t bw = std::max(1u, outSpec.width / 2);
+            uint32_t bh = std::max(1u, outSpec.height / 2);
+            bool needResize = (m_bloomFB[0]->getSpec().width != bw
+                            || m_bloomFB[0]->getSpec().height != bh);
+            if (needResize)
+            {
+                m_bloomFB[0]->resize(bw, bh);
+                m_bloomFB[1]->resize(bw, bh);
+                m_bloomThresholdShader->preparePipeline(*m_bloomFB[0]);
+                m_bloomBlurShader->preparePipeline(*m_bloomFB[0]);
+                static_cast<vex::VKShader*>(m_bloomThresholdShader)->clearExternalTextureCache();
+                static_cast<vex::VKShader*>(m_bloomBlurShader)->clearExternalTextureCache();
+            }
 
-        // When denoised, compute bloom from the denoised HDR texture (pre-normalized)
-        VkImageView   bloomSrcView;
-        VkSampler     bloomSrcSampler;
-        VkImageLayout bloomSrcLayout;
-        float         bloomSampleCount;
-        if (showDenoised && denoisedTex)
-        {
-            auto* vkTex = static_cast<vex::VKTexture2D*>(denoisedTex);
-            bloomSrcView    = vkTex->getImageView();
-            bloomSrcSampler = vkTex->getSampler();
-            bloomSrcLayout  = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            bloomSampleCount = 1.0f;
-        }
-        else
-        {
-            bloomSrcView    = m_raytracer->getOutputImageView();
-            bloomSrcSampler = m_raytracer->getDisplaySampler();
-            bloomSrcLayout  = VK_IMAGE_LAYOUT_GENERAL;
-            bloomSampleCount = static_cast<float>(m_sampleCount);
-        }
+            // When denoised, compute bloom from the denoised HDR texture (pre-normalized)
+            VkImageView   bloomSrcView;
+            VkSampler     bloomSrcSampler;
+            VkImageLayout bloomSrcLayout;
+            float         bloomSampleCount;
+            if (showDenoised && denoisedTex)
+            {
+                auto* vkTex = static_cast<vex::VKTexture2D*>(denoisedTex);
+                bloomSrcView    = vkTex->getImageView();
+                bloomSrcSampler = vkTex->getSampler();
+                bloomSrcLayout  = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                bloomSampleCount = 1.0f;
+            }
+            else
+            {
+                bloomSrcView    = m_raytracer->getOutputImageView();
+                bloomSrcSampler = m_raytracer->getDisplaySampler();
+                bloomSrcLayout  = VK_IMAGE_LAYOUT_GENERAL;
+                bloomSampleCount = static_cast<float>(m_sampleCount);
+            }
 
-        auto* vkThreshVK = static_cast<vex::VKShader*>(m_bloomThresholdShader);
-        m_bloomFB[0]->bind();
-        m_bloomFB[0]->clear(0.0f, 0.0f, 0.0f, 1.0f);
-        m_bloomThresholdShader->setFloat("u_threshold",   shared.bloomThreshold);
-        m_bloomThresholdShader->setFloat("u_sampleCount", bloomSampleCount);
-        m_bloomThresholdShader->bind();
-        vkThreshVK->setExternalTextureVK(0, bloomSrcView, bloomSrcSampler, bloomSrcLayout);
-        m_fullscreenQuad->draw();
-        m_bloomThresholdShader->unbind();
-        m_bloomFB[0]->unbind();
-
-        auto* vkBlurVK = static_cast<vex::VKShader*>(m_bloomBlurShader);
-        bool horizontal = true;
-        for (int i = 0; i < shared.bloomBlurPasses * 2; ++i)
-        {
-            int src = horizontal ? 0 : 1;
-            int dst = horizontal ? 1 : 0;
-            auto* srcFBVK = static_cast<vex::VKFramebuffer*>(m_bloomFB[src]);
-            m_bloomFB[dst]->bind();
-            m_bloomFB[dst]->clear(0.0f, 0.0f, 0.0f, 1.0f);
-            m_bloomBlurShader->bind();
-            vkBlurVK->setExternalTextureVK(0,
-                srcFBVK->getColorImageView(),
-                srcFBVK->getColorSampler(),
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            m_bloomBlurShader->setBool("u_horizontal", horizontal);
+            auto* vkThreshVK = static_cast<vex::VKShader*>(m_bloomThresholdShader);
+            m_bloomFB[0]->bind();
+            m_bloomFB[0]->clear(0.0f, 0.0f, 0.0f, 1.0f);
+            m_bloomThresholdShader->setFloat("u_threshold",   shared.bloomThreshold);
+            m_bloomThresholdShader->setFloat("u_sampleCount", bloomSampleCount);
+            m_bloomThresholdShader->bind();
+            vkThreshVK->setExternalTextureVK(0, bloomSrcView, bloomSrcSampler, bloomSrcLayout);
             m_fullscreenQuad->draw();
-            m_bloomBlurShader->unbind();
-            m_bloomFB[dst]->unbind();
-            horizontal = !horizontal;
+            m_bloomThresholdShader->unbind();
+            m_bloomFB[0]->unbind();
+
+            auto* vkBlurVK = static_cast<vex::VKShader*>(m_bloomBlurShader);
+            bool horizontal = true;
+            for (int i = 0; i < shared.bloomBlurPasses * 2; ++i)
+            {
+                int src = horizontal ? 0 : 1;
+                int dst = horizontal ? 1 : 0;
+                auto* srcFBVK = static_cast<vex::VKFramebuffer*>(m_bloomFB[src]);
+                m_bloomFB[dst]->bind();
+                m_bloomFB[dst]->clear(0.0f, 0.0f, 0.0f, 1.0f);
+                m_bloomBlurShader->bind();
+                vkBlurVK->setExternalTextureVK(0,
+                    srcFBVK->getColorImageView(),
+                    srcFBVK->getColorSampler(),
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                m_bloomBlurShader->setBool("u_horizontal", horizontal);
+                m_fullscreenQuad->draw();
+                m_bloomBlurShader->unbind();
+                m_bloomFB[dst]->unbind();
+                horizontal = !horizontal;
+            }
+            auto* vkBloom0 = static_cast<vex::VKFramebuffer*>(m_bloomFB[0]);
+            vkRTBloomView    = vkBloom0->getColorImageView();
+            vkRTBloomSampler = vkBloom0->getColorSampler();
         }
-        auto* vkBloom0 = static_cast<vex::VKFramebuffer*>(m_bloomFB[0]);
-        vkRTBloomView    = vkBloom0->getColorImageView();
-        vkRTBloomSampler = vkBloom0->getColorSampler();
     }
-    if (m_gpuTimer) m_gpuTimer->end(cmd, vex::GpuTimerSlot::Bloom);
 
     // Display
-    if (m_gpuTimer) m_gpuTimer->begin(cmd, vex::GpuTimerSlot::Composite);
-    shared.outputFB->bind();
-    shared.outputFB->clear(0.0f, 0.0f, 0.0f, 1.0f);
-
-    if (showDenoised && m_fullscreenRTShader && denoisedTex)
     {
-        auto* rtShaderVK = static_cast<vex::VKShader*>(m_fullscreenRTShader);
-        auto* vkTex      = static_cast<vex::VKTexture2D*>(denoisedTex);
-        auto* vkMaskFB   = static_cast<vex::VKFramebuffer*>(shared.outlineMaskFB);
+        VEX_GPU_ZONE("Composite");
+        shared.outputFB->bind();
+        shared.outputFB->clear(0.0f, 0.0f, 0.0f, 1.0f);
 
-        m_fullscreenRTShader->setFloat("u_sampleCount",    1.0f);
-        m_fullscreenRTShader->setFloat("u_exposure",       m_settings.exposure);
-        m_fullscreenRTShader->setFloat("u_gamma",          m_settings.gamma);
-        m_fullscreenRTShader->setFloat("u_bloomIntensity", shared.bloomIntensity);
-        m_fullscreenRTShader->bind();
-        m_fullscreenRTShader->setBool("u_enableACES",    m_settings.enableACES);
-        m_fullscreenRTShader->setBool("u_flipV",         true);
-        m_fullscreenRTShader->setBool("u_enableOutline", shared.outlineActive);
-        m_fullscreenRTShader->setBool("u_enableBloom",   vkRTBloomActive);
+        if (showDenoised && m_fullscreenRTShader && denoisedTex)
+        {
+            auto* rtShaderVK = static_cast<vex::VKShader*>(m_fullscreenRTShader);
+            auto* vkTex      = static_cast<vex::VKTexture2D*>(denoisedTex);
+            auto* vkMaskFB   = static_cast<vex::VKFramebuffer*>(shared.outlineMaskFB);
 
-        rtShaderVK->setExternalTextureVK(0,
-            vkTex->getImageView(), vkTex->getSampler(),
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        rtShaderVK->setExternalTextureVK(1,
-            vkMaskFB->getColorImageView(), vkMaskFB->getColorSampler(),
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        rtShaderVK->setExternalTextureVK(2,
-            vkRTBloomActive ? vkRTBloomView    : vkMaskFB->getColorImageView(),
-            vkRTBloomActive ? vkRTBloomSampler : vkMaskFB->getColorSampler(),
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            m_fullscreenRTShader->setFloat("u_sampleCount",    1.0f);
+            m_fullscreenRTShader->setFloat("u_exposure",       m_settings.exposure);
+            m_fullscreenRTShader->setFloat("u_gamma",          m_settings.gamma);
+            m_fullscreenRTShader->setFloat("u_bloomIntensity", shared.bloomIntensity);
+            m_fullscreenRTShader->bind();
+            m_fullscreenRTShader->setBool("u_enableACES",    m_settings.enableACES);
+            m_fullscreenRTShader->setBool("u_flipV",         true);
+            m_fullscreenRTShader->setBool("u_enableOutline", shared.outlineActive);
+            m_fullscreenRTShader->setBool("u_enableBloom",   vkRTBloomActive);
 
-        m_fullscreenQuad->draw();
-        m_fullscreenRTShader->unbind();
+            rtShaderVK->setExternalTextureVK(0,
+                vkTex->getImageView(), vkTex->getSampler(),
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            rtShaderVK->setExternalTextureVK(1,
+                vkMaskFB->getColorImageView(), vkMaskFB->getColorSampler(),
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            rtShaderVK->setExternalTextureVK(2,
+                vkRTBloomActive ? vkRTBloomView    : vkMaskFB->getColorImageView(),
+                vkRTBloomActive ? vkRTBloomSampler : vkMaskFB->getColorSampler(),
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+            m_fullscreenQuad->draw();
+            m_fullscreenRTShader->unbind();
+        }
+        else if (m_fullscreenRTShader && hasTlas)
+        {
+            auto* rtShaderVK = static_cast<vex::VKShader*>(m_fullscreenRTShader);
+
+            m_fullscreenRTShader->setFloat("u_sampleCount",    static_cast<float>(m_sampleCount));
+            m_fullscreenRTShader->setFloat("u_exposure",       m_settings.exposure);
+            m_fullscreenRTShader->setFloat("u_gamma",          m_settings.gamma);
+            m_fullscreenRTShader->setFloat("u_bloomIntensity", shared.bloomIntensity);
+            m_fullscreenRTShader->bind();
+            m_fullscreenRTShader->setBool("u_enableACES",    m_settings.enableACES);
+            m_fullscreenRTShader->setBool("u_flipV",         true);
+            m_fullscreenRTShader->setBool("u_enableOutline", shared.outlineActive);
+            m_fullscreenRTShader->setBool("u_enableBloom",   vkRTBloomActive);
+
+            rtShaderVK->setExternalTextureVK(0,
+                m_raytracer->getOutputImageView(),
+                m_raytracer->getDisplaySampler(),
+                VK_IMAGE_LAYOUT_GENERAL);
+
+            auto* vkMaskFB = static_cast<vex::VKFramebuffer*>(shared.outlineMaskFB);
+            rtShaderVK->setExternalTextureVK(1,
+                vkMaskFB->getColorImageView(), vkMaskFB->getColorSampler(),
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            rtShaderVK->setExternalTextureVK(2,
+                vkRTBloomActive ? vkRTBloomView    : vkMaskFB->getColorImageView(),
+                vkRTBloomActive ? vkRTBloomSampler : vkMaskFB->getColorSampler(),
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+            m_fullscreenQuad->draw();
+            m_fullscreenRTShader->unbind();
+        }
+
+        shared.outputFB->unbind();
     }
-    else if (m_fullscreenRTShader && hasTlas)
-    {
-        auto* rtShaderVK = static_cast<vex::VKShader*>(m_fullscreenRTShader);
-
-        m_fullscreenRTShader->setFloat("u_sampleCount",    static_cast<float>(m_sampleCount));
-        m_fullscreenRTShader->setFloat("u_exposure",       m_settings.exposure);
-        m_fullscreenRTShader->setFloat("u_gamma",          m_settings.gamma);
-        m_fullscreenRTShader->setFloat("u_bloomIntensity", shared.bloomIntensity);
-        m_fullscreenRTShader->bind();
-        m_fullscreenRTShader->setBool("u_enableACES",    m_settings.enableACES);
-        m_fullscreenRTShader->setBool("u_flipV",         true);
-        m_fullscreenRTShader->setBool("u_enableOutline", shared.outlineActive);
-        m_fullscreenRTShader->setBool("u_enableBloom",   vkRTBloomActive);
-
-        rtShaderVK->setExternalTextureVK(0,
-            m_raytracer->getOutputImageView(),
-            m_raytracer->getDisplaySampler(),
-            VK_IMAGE_LAYOUT_GENERAL);
-
-        auto* vkMaskFB = static_cast<vex::VKFramebuffer*>(shared.outlineMaskFB);
-        rtShaderVK->setExternalTextureVK(1,
-            vkMaskFB->getColorImageView(), vkMaskFB->getColorSampler(),
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        rtShaderVK->setExternalTextureVK(2,
-            vkRTBloomActive ? vkRTBloomView    : vkMaskFB->getColorImageView(),
-            vkRTBloomActive ? vkRTBloomSampler : vkMaskFB->getColorSampler(),
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-        m_fullscreenQuad->draw();
-        m_fullscreenRTShader->unbind();
-    }
-
-    shared.outputFB->unbind();
-    if (m_gpuTimer) m_gpuTimer->end(cmd, vex::GpuTimerSlot::Composite);
     if (shared.drawCalls) *shared.drawCalls = 1;
 }
 
