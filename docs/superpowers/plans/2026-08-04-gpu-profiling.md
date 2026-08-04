@@ -36,7 +36,7 @@ cmake --build build-gl --config Release
 # Unit tests (backend-independent; OpenGL chosen because it has no SDK requirement)
 cmake -S . -B build_tests -DVEX_BUILD_TESTS=ON -DVEX_BUILD_APP=OFF -DVEX_BACKEND=OpenGL
 cmake --build build_tests --config Release --target vex_tests
-.\build_tests\Release\vex_tests.exe
+.\build_tests\bin\Release\vex_tests.exe
 ```
 
 The app must be run from the repository root so `VexAssetsCC0/` and `shaders/` resolve.
@@ -746,7 +746,7 @@ Add to `engine/CMakeLists.txt` after line 6 (`src/core/camera.cpp`):
 Run:
 ```powershell
 cmake --build build_tests --config Release --target vex_tests
-.\build_tests\Release\vex_tests.exe
+.\build_tests\bin\Release\vex_tests.exe
 ```
 Expected: PASS, all 9 profiler test cases green, existing tests still green.
 
@@ -2081,7 +2081,7 @@ Add `src/benchmark_config.cpp` to `app/CMakeLists.txt` after line 19 (`src/comma
 Run:
 ```powershell
 cmake --build build_tests --config Release --target vex_tests
-.\build_tests\Release\vex_tests.exe
+.\build_tests\bin\Release\vex_tests.exe
 ```
 Expected: PASS, all 7 benchmark-config cases green plus the 9 profiler cases plus the pre-existing suites.
 
