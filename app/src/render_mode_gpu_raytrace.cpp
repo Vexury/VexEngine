@@ -151,26 +151,29 @@ void GPURaytraceMode::render(Scene& scene, const SharedRenderData& shared, const
         m_raytracer->setDoF(scene.camera.aperture, scene.camera.focusDistance, right, up);
     }
 
-    if (shared.showDenoisedResult && *shared.showDenoisedResult) {
-        // Denoised display handled in SceneRenderer::triggerDenoise
-        // Nothing to trace
-    } else {
-        // Skip if sample limit reached
-        if (shared.maxSamples == 0 || m_raytracer->getSampleCount() < shared.maxSamples)
-        {
-            auto now = std::chrono::steady_clock::now();
-            if (m_raytracer->getSampleCount() == 0) {
-                m_samplesPerSec = 0.0f;
-            } else {
-                float dt = std::chrono::duration<float>(now - m_lastSampleTime).count();
-                if (dt > 1e-6f) {
-                    float instant = 1.0f / dt;
-                    m_samplesPerSec = m_samplesPerSec < 1e-6f
-                        ? instant : m_samplesPerSec * 0.9f + instant * 0.1f;
+    {
+        VEX_GPU_ZONE("RT dispatch");
+        if (shared.showDenoisedResult && *shared.showDenoisedResult) {
+            // Denoised display handled in SceneRenderer::triggerDenoise
+            // Nothing to trace
+        } else {
+            // Skip if sample limit reached
+            if (shared.maxSamples == 0 || m_raytracer->getSampleCount() < shared.maxSamples)
+            {
+                auto now = std::chrono::steady_clock::now();
+                if (m_raytracer->getSampleCount() == 0) {
+                    m_samplesPerSec = 0.0f;
+                } else {
+                    float dt = std::chrono::duration<float>(now - m_lastSampleTime).count();
+                    if (dt > 1e-6f) {
+                        float instant = 1.0f / dt;
+                        m_samplesPerSec = m_samplesPerSec < 1e-6f
+                            ? instant : m_samplesPerSec * 0.9f + instant * 0.1f;
+                    }
                 }
+                m_lastSampleTime = now;
+                m_raytracer->traceSample();
             }
-            m_lastSampleTime = now;
-            m_raytracer->traceSample();
         }
     }
 
