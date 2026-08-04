@@ -3,6 +3,7 @@
 
 #include <vex/core/window.h>
 #include <vex/core/log.h>
+#include <vex/core/profiler.h>
 #include <vex/ui/ui_layer.h>
 #include <vex/graphics/graphics_context.h>
 #include <vex/scene/primitives.h>
@@ -56,6 +57,8 @@ bool App::init(const vex::EngineConfig& config)
 
     if (config.headless)
         return true;
+
+    vex::Profiler::get().init(vex::IProfilerBackend::create());
 
     if (!SceneImporter::importOBJ(m_scene, "VexAssetsCC0/Scenes/ChessSet/ChessSet.obj", "Chess Set"))
         return false;
@@ -551,6 +554,7 @@ void App::shutdown()
     m_renderer.shutdown();
     m_scene.nodes.clear();
     m_scene.skybox.reset();
+    vex::Profiler::get().shutdown();
     m_engine.shutdown();
     NFD_Quit();
 }

@@ -5,6 +5,7 @@
 #include <vex/graphics/skybox.h>
 #include <vex/scene/mesh_data.h>
 #include <vex/core/log.h>
+#include <vex/core/profiler.h>
 
 #include <stb_image.h>
 #include <stb_image_write.h>
@@ -617,6 +618,8 @@ void SceneRenderer::rebuildMaterials(Scene& scene)
 
 void SceneRenderer::renderShadowPrePass(Scene& scene)
 {
+    VEX_GPU_ZONE("Shadow prepass");
+
     if (!scene.showSun || !m_shadowFB || !m_shadowShader)
         return;
 
@@ -736,88 +739,104 @@ void SceneRenderer::renderShadowPrePass(Scene& scene)
 
 void SceneRenderer::renderScene(Scene& scene, int selectedNodeIdx, int selectedSubmesh)
 {
-    // If we just switched to a path tracing mode, force a geometry rebuild so that
-    // any gizmo model matrix changes from rasterization mode are applied.
-    if (m_pendingGeomRebuild)
+    vex::Profiler::get().beginFrame();
     {
-        scene.geometryDirty   = true;
-        m_pendingGeomRebuild  = false;
-    }
+        VEX_GPU_ZONE("Frame");
 
-    // Full geometry rebuild (new mesh loaded, transform changed in RT mode, etc.)
-    // In rasterizer mode, defer the expensive rebuild: just mark m_pendingGeomRebuild
-    // so it fires the moment the user switches to a RT mode.
-    if (scene.geometryDirty && m_renderMode == RenderMode::Rasterize)
-    {
-        m_pendingGeomRebuild = true;
-        scene.geometryDirty  = false;
-        m_shadowMapDirty     = true;
-        // material-only changes still need to propagate for the rasterizer
-        if (scene.materialDirty)
+        // If we just switched to a path tracing mode, force a geometry rebuild so that
+        // any gizmo model matrix changes from rasterization mode are applied.
+        if (m_pendingGeomRebuild)
         {
+            scene.geometryDirty   = true;
+            m_pendingGeomRebuild  = false;
+        }
+
+        // Full geometry rebuild (new mesh loaded, transform changed in RT mode, etc.)
+        // In rasterizer mode, defer the expensive rebuild: just mark m_pendingGeomRebuild
+        // so it fires the moment the user switches to a RT mode.
+        if (scene.geometryDirty && m_renderMode == RenderMode::Rasterize)
+        {
+            m_pendingGeomRebuild = true;
+            scene.geometryDirty  = false;
+            m_shadowMapDirty     = true;
+            // material-only changes still need to propagate for the rasterizer
+            if (scene.materialDirty)
+            {
+                rebuildMaterials(scene);
+                scene.materialDirty = false;
+            }
+        }
+
+        if (scene.geometryDirty)
+        {
+            vex::Log::info("Building scene geometry (geometry changed)");
+            const auto t0 = std::chrono::steady_clock::now();
+            rebuildRaytraceGeometry(scene, nullptr);
+            vex::Profiler::get().recordOneShot("Geometry rebuild",
+                std::chrono::duration<float, std::milli>(
+                    std::chrono::steady_clock::now() - t0).count());
+            scene.geometryDirty = false;
+            scene.materialDirty = false; // geometry rebuild includes material bake
+            m_shadowMapDirty    = true;
+        }
+        else if (scene.materialDirty)
+        {
+            VEX_CPU_ZONE("Material rebuild");
             rebuildMaterials(scene);
             scene.materialDirty = false;
         }
-    }
 
-    if (scene.geometryDirty)
-    {
-        vex::Log::info("Building scene geometry (geometry changed)");
-        rebuildRaytraceGeometry(scene, nullptr);
-        scene.geometryDirty = false;
-        scene.materialDirty = false; // geometry rebuild includes material bake
-        m_shadowMapDirty    = true;
-    }
-    else if (scene.materialDirty)
-    {
-        rebuildMaterials(scene);
-        scene.materialDirty = false;
-    }
+        // Outline mask pass — runs unconditionally for all render modes so path tracers
+        // can sample it in their display pass. Must happen before the mode dispatch.
+        {
+            VEX_GPU_ZONE("Outline mask");
+            m_outlineActive = (selectedNodeIdx >= 0
+                            && selectedNodeIdx < static_cast<int>(scene.nodes.size()));
+            const auto& spec = m_framebuffer->getSpec();
+            float aspect = static_cast<float>(spec.width) / static_cast<float>(spec.height);
+            glm::mat4 maskView = scene.camera.getViewMatrix();
+            glm::mat4 maskProj = scene.camera.getProjectionMatrix(aspect);
+            renderOutlineMask(scene, selectedNodeIdx, maskView, maskProj);
+        }
 
-    // Outline mask pass — runs unconditionally for all render modes so path tracers
-    // can sample it in their display pass. Must happen before the mode dispatch.
-    {
-        m_outlineActive = (selectedNodeIdx >= 0
-                        && selectedNodeIdx < static_cast<int>(scene.nodes.size()));
-        const auto& spec = m_framebuffer->getSpec();
-        float aspect = static_cast<float>(spec.width) / static_cast<float>(spec.height);
-        glm::mat4 maskView = scene.camera.getViewMatrix();
-        glm::mat4 maskProj = scene.camera.getProjectionMatrix(aspect);
-        renderOutlineMask(scene, selectedNodeIdx, maskView, maskProj);
-    }
-
-    // Apply settings structs to underlying render mode objects (each setter has internal no-ops)
-    applyCPURTSettings();
-    applyRasterSettings();
+        // Apply settings structs to underlying render mode objects (each setter has internal no-ops)
+        applyCPURTSettings();
+        applyRasterSettings();
 #ifdef VEX_BACKEND_OPENGL
-    applyGPURTSettingsGL();
+        applyGPURTSettingsGL();
 #endif
 
-    // computeFrameChanges() must run before buildSharedRenderData() because it
-    // calls loadEnvData() on env changes, which destroys and recreates
-    // m_vkRasterEnvTex. Building shared data first would capture the old
-    // (about-to-be-freed) pointer, causing an access violation in setTexture().
-    FrameChanges changes = computeFrameChanges(scene);
+        // computeFrameChanges() must run before buildSharedRenderData() because it
+        // calls loadEnvData() on env changes, which destroys and recreates
+        // m_vkRasterEnvTex. Building shared data first would capture the old
+        // (about-to-be-freed) pointer, causing an access violation in setTexture().
+        FrameChanges changes;
+        {
+            VEX_CPU_ZONE("Frame changes");
+            changes = computeFrameChanges(scene);
+        }
 
-    // Build shared data after env/light updates so it picks up fresh pointers.
-    SharedRenderData shared = buildSharedRenderData();
-    shared.selectedNodeIdx = selectedNodeIdx;
-    shared.selectedSubmesh = selectedSubmesh;
+        // Build shared data after env/light updates so it picks up fresh pointers.
+        SharedRenderData shared = buildSharedRenderData();
+        shared.selectedNodeIdx = selectedNodeIdx;
+        shared.selectedSubmesh = selectedSubmesh;
 
-    if (changes.sunChanged)
-        m_shadowMapDirty = true;
+        if (changes.sunChanged)
+            m_shadowMapDirty = true;
 
-    // Shadow pre-pass — runs in all render modes, only when stale
-    if (m_shadowMapDirty)
-        renderShadowPrePass(scene);
+        // Shadow pre-pass — runs in all render modes, only when stale
+        if (m_shadowMapDirty)
+            renderShadowPrePass(scene);
 
-    shared.shadowFB           = m_shadowFB.get();
-    shared.shadowLightVP      = m_shadowLightVP;
-    shared.shadowNormalBias   = m_rasterSettings.shadowBiasTexels * m_shadowOrthoScale;
-    shared.shadowEverRendered = m_shadowMapEverRendered;
+        shared.shadowFB           = m_shadowFB.get();
+        shared.shadowLightVP      = m_shadowLightVP;
+        shared.shadowNormalBias   = m_rasterSettings.shadowBiasTexels * m_shadowOrthoScale;
+        shared.shadowEverRendered = m_shadowMapEverRendered;
 
-    if (m_activeMode)
-        m_activeMode->render(scene, shared, changes);
+        if (m_activeMode)
+            m_activeMode->render(scene, shared, changes);
+    }
+    vex::Profiler::get().endFrame();
 }
 
 // ---------------------------------------------------------------------------
