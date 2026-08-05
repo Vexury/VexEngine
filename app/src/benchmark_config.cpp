@@ -1,0 +1,139 @@
+#include "benchmark_config.h"
+
+#include <json.hpp>
+
+#include <algorithm>
+#include <cmath>
+
+namespace
+{
+
+float percentile(const std::vector<float>& sorted, float p)
+{
+    if (sorted.empty()) return 0.0f;
+    const auto n    = static_cast<float>(sorted.size());
+    const auto rank = static_cast<size_t>(std::ceil(p * n));
+    const size_t idx = (rank == 0) ? 0 : rank - 1;
+    return sorted[std::min(idx, sorted.size() - 1)];
+}
+
+BenchCamKey readKey(const nlohmann::json& j)
+{
+    BenchCamKey k;
+    if (j.contains("target") && j["target"].is_array() && j["target"].size() == 3)
+        k.target = glm::vec3(j["target"][0].get<float>(),
+                             j["target"][1].get<float>(),
+                             j["target"][2].get<float>());
+    if (j.contains("distance")) k.distance = j["distance"].get<float>();
+    if (j.contains("yaw"))      k.yaw      = j["yaw"].get<float>();
+    if (j.contains("pitch"))    k.pitch    = j["pitch"].get<float>();
+    return k;
+}
+
+} // namespace
+
+std::optional<BenchmarkConfig> parseBenchmarkConfig(const std::string& jsonText,
+                                                    std::string& outError)
+{
+    nlohmann::json j;
+    try
+    {
+        j = nlohmann::json::parse(jsonText);
+    }
+    catch (const std::exception& e)
+    {
+        outError = std::string("JSON parse error: ") + e.what();
+        return std::nullopt;
+    }
+
+    if (!j.contains("scene") || !j["scene"].is_string() ||
+        j["scene"].get<std::string>().empty())
+    {
+        outError = "benchmark config is missing a non-empty \"scene\" field";
+        return std::nullopt;
+    }
+
+    BenchmarkConfig c;
+    c.scenePath = j["scene"].get<std::string>();
+
+    if (j.contains("name"))          c.name          = j["name"].get<std::string>();
+    if (j.contains("sceneFormat"))   c.sceneFormat   = j["sceneFormat"].get<std::string>();
+    if (j.contains("mode"))          c.mode          = j["mode"].get<std::string>();
+    if (j.contains("width"))         c.width         = j["width"].get<uint32_t>();
+    if (j.contains("height"))        c.height        = j["height"].get<uint32_t>();
+    if (j.contains("warmupFrames"))  c.warmupFrames  = j["warmupFrames"].get<uint32_t>();
+    if (j.contains("measureFrames")) c.measureFrames = j["measureFrames"].get<uint32_t>();
+    if (j.contains("maxSamples"))    c.maxSamples    = j["maxSamples"].get<uint32_t>();
+    if (j.contains("vsync"))         c.vsync         = j["vsync"].get<bool>();
+    if (j.contains("orbitDegrees"))  c.orbitDegrees  = j["orbitDegrees"].get<float>();
+
+    if (j.contains("camera") && j["camera"].is_array())
+        for (const auto& k : j["camera"])
+            c.camera.push_back(readKey(k));
+
+    return c;
+}
+
+BenchCamKey interpolateCamera(const std::vector<BenchCamKey>& keys, float t)
+{
+    if (keys.empty())  return BenchCamKey{};
+    if (keys.size() == 1) return keys[0];
+
+    t = std::clamp(t, 0.0f, 1.0f);
+    const float scaled = t * static_cast<float>(keys.size() - 1);
+    const size_t i     = std::min(static_cast<size_t>(scaled), keys.size() - 2);
+    const float  f     = scaled - static_cast<float>(i);
+
+    const BenchCamKey& a = keys[i];
+    const BenchCamKey& b = keys[i + 1];
+
+    BenchCamKey out;
+    out.target   = a.target   + (b.target   - a.target)   * f;
+    out.distance = a.distance + (b.distance - a.distance) * f;
+    out.yaw      = a.yaw      + (b.yaw      - a.yaw)      * f;
+    out.pitch    = a.pitch    + (b.pitch    - a.pitch)    * f;
+    return out;
+}
+
+ProfileStats computeStats(std::vector<float> samples)
+{
+    ProfileStats s;
+    if (samples.empty()) return s;
+
+    std::sort(samples.begin(), samples.end());
+
+    double sum = 0.0;
+    for (float v : samples) sum += v;
+    s.mean = static_cast<float>(sum / static_cast<double>(samples.size()));
+
+    s.min = samples.front();
+    s.max = samples.back();
+    s.p50 = percentile(samples, 0.50f);
+    s.p95 = percentile(samples, 0.95f);
+    s.p99 = percentile(samples, 0.99f);
+
+    double var = 0.0;
+    for (float v : samples)
+    {
+        const double d = static_cast<double>(v) - s.mean;
+        var += d * d;
+    }
+    s.stddev = static_cast<float>(std::sqrt(var / static_cast<double>(samples.size())));
+
+    return s;
+}
+
+std::string csvEscape(const std::string& field)
+{
+    const bool needsQuotes = field.find_first_of(",\"\n\r") != std::string::npos;
+    if (!needsQuotes) return field;
+
+    std::string out = "\"";
+    for (char ch : field)
+    {
+        if (ch == '"') out += "\"\"";
+        else           out += ch;
+    }
+    out += "\"";
+    return out;
+}

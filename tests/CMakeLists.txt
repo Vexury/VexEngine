@@ -6,10 +6,13 @@ add_executable(vex_tests
     test_camera.cpp
     test_raytracer.cpp
     test_profiler.cpp
+    test_benchmark_config.cpp
+    ${CMAKE_SOURCE_DIR}/app/src/benchmark_config.cpp
 )
 
 target_include_directories(vex_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/external/doctest
+    ${CMAKE_SOURCE_DIR}/app/src
 )
 
 target_link_libraries(vex_tests PRIVATE vex_core)

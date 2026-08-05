@@ -18,6 +18,7 @@ add_executable(vex_app
     src/file_dialog.cpp
     src/denoiser.cpp
     src/command.cpp
+    src/benchmark_config.cpp
 )
 
 if(VEX_BACKEND STREQUAL "OpenGL")
