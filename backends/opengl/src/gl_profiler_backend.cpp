@@ -62,13 +62,23 @@ public:
 
         const uint32_t base = slot * k_queriesPerSlot;
 
-        // Query objects complete in submission order, so the last one being
-        // available implies every earlier one in this slot is too.
-        GLint available = 0;
-        glGetQueryObjectiv(m_queries[base + queryCount - 1],
-                           GL_QUERY_RESULT_AVAILABLE, &available);
-        if (!available) return false;
-
+        // GL_QUERY_RESULT blocks until the timestamp has landed, which is
+        // deliberate. OpenGL has no frames-in-flight fence, so nothing bounds
+        // how far the CPU may run ahead of the GPU. The profiler resolves the
+        // slot from k_ringSlots frames back, and on a GPU-bound frame the
+        // driver keeps roughly that many frames queued, so that slot is
+        // typically the one still executing. Polling GL_QUERY_RESULT_AVAILABLE
+        // and giving up therefore never succeeds in a GPU-bound mode: the whole
+        // result set freezes at the last frame that happened to resolve.
+        // Waiting caps the lag at the ring depth instead, which is exactly the
+        // invariant the ring already assumes. The wait runs inside beginFrame,
+        // outside every zone, so it is never attributed to a measured time, and
+        // it costs nothing when the CPU is the bottleneck because the results
+        // are already there.
+        //
+        // Every query is read rather than probing one and inferring the rest.
+        // Zones nest, so the queries do not complete in index order: the
+        // outermost zone's end timestamp is submitted last but lives at index 1.
         out.resize(queryCount);
         for (uint32_t i = 0; i < queryCount; ++i)
         {
