@@ -5,6 +5,7 @@
 #include <glm/glm.hpp>
 #include <imgui.h>
 #include <string>
+#include <unordered_map>
 
 namespace vex { class GraphicsContext; }
 
@@ -23,6 +24,7 @@ public:
     void renderSettings(SceneRenderer& renderer);
     void renderConsole();
     void renderStats(SceneRenderer& renderer, Scene& scene, vex::GraphicsContext& ctx);
+    void renderProfiler(vex::GraphicsContext& ctx);
 
     void init(SelectionState& sel) { m_selection = &sel; }
 
@@ -167,4 +169,13 @@ private:
         int      cachedNodeCount   = -1;  // sentinel: -1 = never computed
     };
     CachedSceneStats m_sceneStats;
+
+    // Profiler window state
+    struct ZoneAccum { float ema = -1.0f; float peak = 0.0f; };
+    std::unordered_map<std::string, ZoneAccum> m_profAccum;
+    float m_profHistory[256] = {};
+    int   m_profHistoryPos   = 0;
+    bool  m_profPaused       = false;
+    bool  m_profShowCPU      = false;
+    bool  m_profShowOneShot  = false;
 };

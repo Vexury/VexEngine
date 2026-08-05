@@ -14,6 +14,7 @@ add_executable(vex_app
     src/editor_ui_hierarchy.cpp
     src/editor_ui_inspector.cpp
     src/editor_ui_settings.cpp
+    src/editor_ui_profiler.cpp
     src/file_dialog.cpp
     src/denoiser.cpp
     src/command.cpp

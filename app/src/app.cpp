@@ -544,6 +544,7 @@ void App::run()
         m_ui.renderSettings(m_renderer);
         m_ui.renderConsole();
         m_ui.renderStats(m_renderer, m_scene, m_engine.getGraphicsContext());
+        m_ui.renderProfiler(m_engine.getGraphicsContext());
         m_engine.endFrame();
     }
 }
