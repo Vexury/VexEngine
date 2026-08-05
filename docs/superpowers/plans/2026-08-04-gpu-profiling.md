@@ -1374,7 +1374,7 @@ Add `#include <vex/core/profiler.h>` to `app/src/render_mode_rasterize.cpp`. In 
 - the ping-pong blur loop with `VEX_GPU_ZONE("Bloom: blur");`
 - the fullscreen tone-map blit with `VEX_GPU_ZONE("Composite");`
 
-In the pick pass (around line 563), add `VEX_GPU_ZONE("Pick pass");` as the first statement of the enclosing block.
+In the pick pass (around line 563), do NOT use a zone. `RasterizeMode::pick()` runs from `App::processPicking()` (`app.cpp:541`), which executes after `renderScene()` has already called `Profiler::endFrame()`, so any zone there is inert. Measure it with `std::chrono` and report via `vex::Profiler::get().recordOneShot("Pick pass", ms)` instead, bracketing the whole operation including the `readPixel` readback. That readback is a synchronous GPU stall, so CPU wall time is the meaningful number.
 
 Each zone needs its own `{ }` scope where one does not already exist, so the RAII object ends where the pass ends rather than at the end of the function.
 

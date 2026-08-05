@@ -209,7 +209,7 @@ last. All other zones nest inside.
 | `CPU PT: trace` | CPU | `CPURaytraceMode`, `traceSample()` |
 | `CPU PT: readback` | CPU | `getLinearHDR()` |
 | `CPU PT: upload` | GPU + CPU | `raytraceTex->setData()` |
-| `Pick pass` | GPU | `render_mode_rasterize.cpp:563`, only on click |
+| `Pick pass` | one-shot | `render_mode_rasterize.cpp:563`, only on click. Not a zone: picking runs outside the profiled frame, so it is measured with `std::chrono` and reported via `recordOneShot`. |
 | `Denoise (OIDN)` | one-shot | `triggerDenoise` / `triggerDenoiseAux` |
 
 One-shot CPU zones inside `SceneGeometryCache`: `Triangle flatten`, `BVH build`,
