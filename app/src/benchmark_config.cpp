@@ -143,3 +143,21 @@ std::string csvEscape(const std::string& field)
     out += "\"";
     return out;
 }
+
+bool benchFrameIsDuplicate(const std::vector<float>& series, float frameCpuMs, float frameGpuMs,
+                           const std::vector<float>& prevSeries, float prevCpuMs,
+                           float prevGpuMs)
+{
+    return series == prevSeries && frameCpuMs == prevCpuMs && frameGpuMs == prevGpuMs;
+}
+
+bool benchRunIsStale(size_t measuredFrames, size_t duplicateFrames)
+{
+    // A run that recorded no samples at all is not a measurement either. Its
+    // statistics would be computed over an empty set and print as a confident
+    // row of zeros, which is the same failure this guard exists to catch.
+    if (measuredFrames == 0) return true;
+    if (measuredFrames < 2) return false;
+    const double comparisons = static_cast<double>(measuredFrames - 1);
+    return static_cast<double>(duplicateFrames) >= k_maxDuplicateFraction * comparisons;
+}

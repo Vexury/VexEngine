@@ -45,7 +45,8 @@ public:
 
     // True when too many measured frames repeated the previous frame's profiler
     // results verbatim, which means the statistics describe copies of one
-    // sample rather than a measurement. Valid after the run.
+    // sample rather than a measurement. Valid after the run. Callers use it to
+    // fail the process, so a rejected run is detectable without reading a file.
     bool stale() const;
 
     // Logs that the main loop ended before the run finished, so an empty output
@@ -54,15 +55,6 @@ public:
 
 private:
     enum class Phase { Warmup, Measure, Done };
-
-    // Fraction of frame-to-frame comparisons that may repeat before the run is
-    // rejected. Every healthy run recorded so far (eight runs, 1892 frames,
-    // both backends, all four modes) produced zero repeats, because an exact
-    // match of a whole multi-zone row of floats does not happen by chance. A
-    // genuinely stalled query slot can legitimately repeat the previous result
-    // for an isolated frame, so the bar is set well above any plausible
-    // transient and far below the total freeze this guard exists to catch.
-    static constexpr double k_maxDuplicateFraction = 0.25;
 
     BenchmarkConfig m_cfg;
     std::string     m_outDir;

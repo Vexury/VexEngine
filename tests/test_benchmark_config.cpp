@@ -144,3 +144,69 @@ TEST_CASE("csv escaping quotes fields containing separators")
     CHECK(csvEscape("has\nnewline") == "\"has\nnewline\"");
     CHECK(csvEscape("\r") == "\"\r\"");
 }
+
+// The staleness guard is the safety net against publishing statistics computed
+// over repeated copies of one profiler sample, which has happened on this
+// project. BenchmarkRunner itself depends on the app and engine layers and
+// cannot live in this target, so the two decision points are pure functions
+// here and are tested directly.
+
+TEST_CASE("duplicate frame detection compares the whole recorded frame")
+{
+    const std::vector<float> a{1.0f, 2.0f, -1.0f};
+    const std::vector<float> b{1.0f, 2.0f, -1.0f};
+    const std::vector<float> c{1.0f, 2.5f, -1.0f};
+
+    CHECK(benchFrameIsDuplicate(a, 0.5f, 3.0f, b, 0.5f, 3.0f));
+
+    // Any single differing component makes it a fresh sample.
+    CHECK_FALSE(benchFrameIsDuplicate(a, 0.5f, 3.0f, c, 0.5f, 3.0f));
+    CHECK_FALSE(benchFrameIsDuplicate(a, 0.5f, 3.0f, b, 0.6f, 3.0f));
+    CHECK_FALSE(benchFrameIsDuplicate(a, 0.5f, 3.0f, b, 0.5f, 3.1f));
+
+    // A differing zone count is a different frame, not a repeat.
+    CHECK_FALSE(benchFrameIsDuplicate(a, 0.5f, 3.0f, {1.0f, 2.0f}, 0.5f, 3.0f));
+
+    // Unmeasured sentinels compare like any other value.
+    CHECK(benchFrameIsDuplicate({-1.0f}, -1.0f, -1.0f, {-1.0f}, -1.0f, -1.0f));
+}
+
+TEST_CASE("a run with no duplicate frames is accepted")
+{
+    CHECK_FALSE(benchRunIsStale(300, 0));
+    CHECK_FALSE(benchRunIsStale(2, 0));
+}
+
+TEST_CASE("a run whose frames all repeat is rejected")
+{
+    // The shipped failure: 300 recorded frames, 299 comparisons, all repeats.
+    CHECK(benchRunIsStale(300, 299));
+    CHECK(benchRunIsStale(100, 99));
+}
+
+TEST_CASE("rejection threshold is exact on either side")
+{
+    // 101 frames yield 100 comparisons, so the 25 percent bar is exactly 25.
+    CHECK_FALSE(benchRunIsStale(101, 24));
+    CHECK(benchRunIsStale(101, 25));
+    CHECK(benchRunIsStale(101, 26));
+
+    // 401 frames yield 400 comparisons, bar exactly 100.
+    CHECK_FALSE(benchRunIsStale(401, 99));
+    CHECK(benchRunIsStale(401, 100));
+
+    // A fractional bar rounds in favour of accepting: 11 frames yield 10
+    // comparisons and a bar of 2.5, so 2 passes and 3 fails.
+    CHECK_FALSE(benchRunIsStale(11, 2));
+    CHECK(benchRunIsStale(11, 3));
+}
+
+TEST_CASE("runs too short to judge are not rejected, but an empty run is")
+{
+    // One frame yields no comparisons, so there is nothing to detect.
+    CHECK_FALSE(benchRunIsStale(1, 0));
+
+    // No frames at all means nothing was measured, which is not a measurement
+    // either: the statistics would print as a confident row of zeros.
+    CHECK(benchRunIsStale(0, 0));
+}

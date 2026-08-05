@@ -31,7 +31,11 @@ static AppConfig parseArgs(int argc, char* argv[])
                       << "  --width <W>         Window width (default 1280)\n"
                       << "  --height <H>        Window height (default 720)\n"
                       << "  --bench <file>      Run a benchmark from a JSON config and exit\n"
-                      << "  --bench-out <dir>   Override the benchmark output directory\n";
+                      << "  --bench-out <dir>   Override the benchmark output directory\n"
+                      << "\n"
+                      << "Benchmark exit codes: 0 accepted, 1 failed to run,\n"
+                      << "2 completed but rejected (see run.json health, and the\n"
+                      << "status column in frames.csv and summary.csv).\n";
             std::exit(0);
         }
     }

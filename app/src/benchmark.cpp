@@ -53,12 +53,13 @@ nlohmann::json statsToJson(const ProfileStats& s)
     };
 }
 
-void writeStatsRow(std::ofstream& out, const std::string& zone, const ProfileStats& s)
+void writeStatsRow(std::ofstream& out, const std::string& zone, const ProfileStats& s,
+                   const char* status)
 {
     out << csvEscape(zone) << ','
         << fmt(s.mean)   << ',' << fmt(s.min) << ',' << fmt(s.max) << ','
         << fmt(s.p50)    << ',' << fmt(s.p95) << ',' << fmt(s.p99) << ','
-        << fmt(s.stddev) << '\n';
+        << fmt(s.stddev) << ',' << status << '\n';
 }
 
 void logLine(const std::string& line)
@@ -204,6 +205,23 @@ void BenchmarkRunner::sample()
 
     const auto& results = prof.results();
 
+    // A frame the profiler has no results for yet carries no measurement at all.
+    // Recording it would push an all-empty row, and consecutive empty rows
+    // compare equal, so with warmupFrames 0 the first frames of a run would
+    // count themselves as duplicates and a short run could reject itself. Such a
+    // frame is simply not a sample, so it is not recorded.
+    //
+    // The frame counter still advances. The profiler needs k_ringSlots frames
+    // before its first resolve lands, and a backend whose resolve never succeeds
+    // would otherwise keep this loop running forever. A run that ends with no
+    // samples at all is rejected by benchRunIsStale instead.
+    if (results.empty())
+    {
+        if (++m_frame >= m_cfg.measureFrames)
+            m_phase = Phase::Done;
+        return;
+    }
+
     // Freeze the column set on the first measured frame that has any results.
     // The profiler resolves through a three-slot query ring, so the very first
     // frames after a mode change can still be empty. A zone appearing later is
@@ -236,10 +254,10 @@ void BenchmarkRunner::sample()
     // A frame whose entire result set matches the previous frame's bit for bit
     // carries no new measurement: the profiler handed back the same resolved
     // vector twice, which happens when a query slot never becomes ready and the
-    // previous results are kept. Exact comparison is the point here, since two
-    // independent samples of a multi-zone frame never land on identical floats.
-    if (!m_rows.empty() && row == m_rows.back() &&
-        frameCpu == m_cpuMs.back() && frameGpu == m_gpuMs.back())
+    // previous results are kept.
+    if (!m_rows.empty() &&
+        benchFrameIsDuplicate(row, frameCpu, frameGpu,
+                              m_rows.back(), m_cpuMs.back(), m_gpuMs.back()))
         ++m_duplicateFrames;
 
     m_rows.push_back(std::move(row));
@@ -256,9 +274,7 @@ void BenchmarkRunner::sample()
 
 bool BenchmarkRunner::stale() const
 {
-    if (m_rows.size() < 2) return false;
-    const double comparisons = static_cast<double>(m_rows.size() - 1);
-    return static_cast<double>(m_duplicateFrames) >= k_maxDuplicateFraction * comparisons;
+    return benchRunIsStale(m_rows.size(), m_duplicateFrames);
 }
 
 void BenchmarkRunner::finish(SceneRenderer& renderer, vex::GraphicsContext& ctx)
@@ -272,6 +288,15 @@ void BenchmarkRunner::finish(SceneRenderer& renderer, vex::GraphicsContext& ctx)
         return;
     }
 
+    // Every row of every CSV carries the run's verdict in a trailing "status"
+    // column. A rejected run's numbers are therefore marked on the same line a
+    // reader would quote them from, and the marker survives copying a single row
+    // out of the file, which a rejected output directory name would not. "ok" is
+    // written on healthy runs too, so the column's presence proves the guard ran
+    // rather than leaving its absence ambiguous.
+    const bool  isStale = stale();
+    const char* status  = isStale ? "REJECTED" : "ok";
+
     // frames.csv
     {
         std::ofstream out(m_outDir + "/frames.csv", std::ios::binary);
@@ -284,7 +309,7 @@ void BenchmarkRunner::finish(SceneRenderer& renderer, vex::GraphicsContext& ctx)
             out << "frame,cpuMs,gpuMs";
             for (const auto& c : m_columns)
                 out << ',' << csvEscape(c + " gpu") << ',' << csvEscape(c + " cpu");
-            out << '\n';
+            out << ",status\n";
 
             const size_t seriesCount = m_columns.size() * 2;
             for (size_t i = 0; i < m_rows.size(); ++i)
@@ -301,7 +326,7 @@ void BenchmarkRunner::finish(SceneRenderer& renderer, vex::GraphicsContext& ctx)
                     if (s < row.size() && row[s] >= 0.0f)
                         out << fmt(row[s]);
                 }
-                out << '\n';
+                out << ',' << status << '\n';
             }
         }
     }
@@ -338,9 +363,9 @@ void BenchmarkRunner::finish(SceneRenderer& renderer, vex::GraphicsContext& ctx)
         }
         else
         {
-            out << "zone,mean,min,max,p50,p95,p99,stddev\n";
-            writeStatsRow(out, "frame_cpu", cpuStats);
-            writeStatsRow(out, "frame_gpu", gpuStats);
+            out << "zone,mean,min,max,p50,p95,p99,stddev,status\n";
+            writeStatsRow(out, "frame_cpu", cpuStats, status);
+            writeStatsRow(out, "frame_gpu", gpuStats, status);
             // A series with no samples at all is skipped, so a CPU-only zone does
             // not emit an all-empty gpu row.
             for (size_t c = 0; c < m_columns.size(); ++c)
@@ -349,7 +374,7 @@ void BenchmarkRunner::finish(SceneRenderer& renderer, vex::GraphicsContext& ctx)
                     const std::vector<float> v = gather(c * 2 + half);
                     if (v.empty()) continue;
                     writeStatsRow(out, m_columns[c] + (half == 0 ? " gpu" : " cpu"),
-                                  computeStats(v));
+                                  computeStats(v), status);
                 }
         }
     }
@@ -383,7 +408,8 @@ void BenchmarkRunner::finish(SceneRenderer& renderer, vex::GraphicsContext& ctx)
             {"duplicateFrames",   m_duplicateFrames},
             {"duplicateFraction", comparisons ? static_cast<double>(m_duplicateFrames) /
                                                 static_cast<double>(comparisons) : 0.0},
-            {"stale",             stale()},
+            {"stale",             isStale},
+            {"status",            std::string(status)},
         };
 
         std::ofstream out(m_outDir + "/run.json", std::ios::binary);
@@ -399,17 +425,24 @@ void BenchmarkRunner::finish(SceneRenderer& renderer, vex::GraphicsContext& ctx)
             " frames at " + std::to_string(m_cfg.width) + "x" + std::to_string(m_cfg.height) +
             " on " + ctx.deviceName());
 
-    const bool isStale = stale();
     if (isStale)
     {
-        const size_t comparisons = m_rows.size() - 1;
         errLine("========================================================================");
         errLine("BENCHMARK RESULT REJECTED: not a measurement");
-        errLine(std::to_string(m_duplicateFrames) + " of " + std::to_string(comparisons) +
-                " measured frames repeated the previous frame's profiler results exactly.");
-        errLine("The profiler was not producing fresh data, so the statistics below are");
-        errLine("computed over repeated copies of the same sample. Do not publish them.");
-        errLine("run.json records \"health\": {\"stale\": true} for this run.");
+        if (m_rows.empty())
+        {
+            errLine("No frame produced any profiler results, so nothing was measured.");
+        }
+        else
+        {
+            errLine(std::to_string(m_duplicateFrames) + " of " +
+                    std::to_string(m_rows.size() - 1) +
+                    " measured frames repeated the previous frame's profiler results exactly.");
+            errLine("The profiler was not producing fresh data, so the statistics below are");
+            errLine("computed over repeated copies of the same sample. Do not publish them.");
+        }
+        errLine("Every row of frames.csv and summary.csv is marked status=REJECTED,");
+        errLine("run.json records \"health\": {\"stale\": true}, and the process exits 2.");
         errLine("========================================================================");
     }
     std::snprintf(buf, sizeof(buf), "%-28s %10s %10s %10s", "zone", "mean ms", "p95 ms", "p99 ms");

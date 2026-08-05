@@ -504,6 +504,14 @@ void App::run()
             if (!m_bench.tick(m_scene))
             {
                 m_bench.finish(m_renderer, m_engine.getGraphicsContext());
+
+                // A rejected run must be detectable without reading an artifact,
+                // so CI can fail on it. 2 rather than 1, to separate "the run
+                // produced numbers that are not a measurement" from "the app
+                // failed to start".
+                if (m_bench.stale())
+                    m_exitCode = 2;
+
                 m_engine.requestExit();
                 break;
             }
