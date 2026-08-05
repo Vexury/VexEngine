@@ -69,14 +69,17 @@ void EditorUI::renderProfiler(vex::GraphicsContext& ctx)
         ImGui::TableSetupColumn("CPU");
         ImGui::TableSetupColumn("avg");
         ImGui::TableSetupColumn("max");
-        ImGui::TableSetupColumn("%");
+        ImGui::TableSetupColumn("% GPU");
         ImGui::TableHeadersRow();
 
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Child zones may sum to more than their parent: "
                               "begin timestamps use TOP_OF_PIPE and end "
                               "timestamps use BOTTOM_OF_PIPE, so a zone can "
-                              "absorb time from work still draining ahead of it.");
+                              "absorb time from work still draining ahead of it. "
+                              "This column is a share of GPU frame time only, "
+                              "so a row with real CPU cost and no GPU cost "
+                              "correctly reads 0, see the CPU column for that cost.");
 
         for (const auto& r : results)
         {
@@ -102,7 +105,8 @@ void EditorUI::renderProfiler(vex::GraphicsContext& ctx)
             if (r.gpuMs >= 0.0f) ImGui::Text("%6.2f", r.gpuMs); else ImGui::TextDisabled("%6s", "-");
             ImGui::TableNextColumn();
             if (r.cpuMs >= 0.0f) ImGui::Text("%6.2f", r.cpuMs); else ImGui::TextDisabled("%6s", "-");
-            ImGui::TableNextColumn(); ImGui::Text("%6.2f", acc.ema);
+            ImGui::TableNextColumn();
+            if (acc.ema < 0.0f) ImGui::TextDisabled("%6s", "-"); else ImGui::Text("%6.2f", acc.ema);
             ImGui::TableNextColumn(); ImGui::Text("%6.2f", acc.peak);
             ImGui::TableNextColumn();
             if (haveFrameGpu && r.gpuMs >= 0.0f)
@@ -127,11 +131,12 @@ void EditorUI::renderProfiler(vex::GraphicsContext& ctx)
 
     if (ImGui::Button("Copy as Markdown"))
     {
-        std::string md = "| Pass | GPU (ms) | CPU (ms) | avg (ms) | max (ms) | % |\n";
+        std::string md = "| Pass | GPU (ms) | CPU (ms) | avg (ms) | max (ms) | % GPU |\n";
         md += "|---|---|---|---|---|---|\n";
         char line[256];
         char gpuCell[16];
         char cpuCell[16];
+        char avgCell[16];
         char pctCell[16];
         for (const auto& r : results)
         {
@@ -145,14 +150,17 @@ void EditorUI::renderProfiler(vex::GraphicsContext& ctx)
             if (r.cpuMs >= 0.0f) std::snprintf(cpuCell, sizeof(cpuCell), "%.2f", r.cpuMs);
             else                 std::snprintf(cpuCell, sizeof(cpuCell), "-");
 
+            if (acc.ema < 0.0f) std::snprintf(avgCell, sizeof(avgCell), "-");
+            else                std::snprintf(avgCell, sizeof(avgCell), "%.2f", acc.ema);
+
             if (haveFrameGpu && r.gpuMs >= 0.0f)
                 std::snprintf(pctCell, sizeof(pctCell), "%.0f", 100.0f * r.gpuMs / gpuMs);
             else
                 std::snprintf(pctCell, sizeof(pctCell), "-");
 
-            std::snprintf(line, sizeof(line), "| %*s%s | %s | %s | %.2f | %.2f | %s |\n",
+            std::snprintf(line, sizeof(line), "| %*s%s | %s | %s | %s | %.2f | %s |\n",
                           r.depth * 2, "", r.name ? r.name : "?",
-                          gpuCell, cpuCell, acc.ema, acc.peak, pctCell);
+                          gpuCell, cpuCell, avgCell, acc.peak, pctCell);
             md += line;
         }
         ImGui::SetClipboardText(md.c_str());
