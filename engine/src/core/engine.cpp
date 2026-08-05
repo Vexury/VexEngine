@@ -86,6 +86,9 @@ void Engine::endFrame()
 
 bool Engine::isRunning() const
 {
+    if (m_exitRequested)
+        return false;
+
     if (m_headless)
         return m_running;
 

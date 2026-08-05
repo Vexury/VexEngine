@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
 
 #include <nfd.h>
 
@@ -48,17 +49,53 @@ static const char* primitiveTypeName(EditorUI::PrimitiveType type)
     }
 }
 
-bool App::init(const vex::EngineConfig& config)
+bool App::init(const AppConfig& config)
 {
     NFD_Init();
 
-    if (!m_engine.init(config, [] { return vex::GraphicsContext::create(); }))
-        return false;
+    vex::EngineConfig engineCfg = config.engine;
+    RenderMode        benchMode = RenderMode::Rasterize;
 
-    if (config.headless)
+    if (!config.benchConfigPath.empty())
+    {
+        if (engineCfg.headless)
+        {
+            vex::Log::error("--bench needs a graphics context; drop --headless");
+            m_exitCode = 1;
+            return false;
+        }
+
+        if (!m_bench.loadFromFile(config.benchConfigPath, config.benchOutDir) ||
+            !parseBenchRenderMode(m_bench.config().mode, benchMode))
+        {
+            m_exitCode = 1;
+            return false;
+        }
+
+        m_benchActive          = true;
+        engineCfg.windowWidth  = m_bench.config().width;
+        engineCfg.windowHeight = m_bench.config().height;
+        engineCfg.vsync        = m_bench.config().vsync;
+    }
+
+    if (!m_engine.init(engineCfg, [] { return vex::GraphicsContext::create(); }))
+    {
+        m_exitCode = 1;
+        return false;
+    }
+
+    if (engineCfg.headless)
         return true;
 
     vex::Profiler::get().init(vex::IProfilerBackend::create());
+
+    // The window hint alone does not settle the VK present mode, so apply it
+    // once the context exists. Leaving vsync on would clamp every measurement
+    // to the refresh rate.
+    m_engine.getGraphicsContext().setVSync(engineCfg.vsync);
+
+    if (m_benchActive)
+        return initBenchmark(benchMode);
 
     if (!SceneImporter::importOBJ(m_scene, "VexAssetsCC0/Scenes/ChessSet/ChessSet.obj", "Chess Set"))
         return false;
@@ -98,6 +135,60 @@ bool App::init(const vex::EngineConfig& config)
         if (m_ui.isViewportHovered())
             m_scene.camera.zoom(static_cast<float>(yoffset));
     });
+
+    return true;
+}
+
+bool App::initBenchmark(RenderMode mode)
+{
+    const BenchmarkConfig& cfg = m_bench.config();
+
+    bool isGltf = (cfg.sceneFormat == "gltf" || cfg.sceneFormat == "glb");
+    if (cfg.sceneFormat.empty())
+    {
+        const std::string ext = std::filesystem::path(cfg.scenePath).extension().string();
+        isGltf = (ext == ".gltf" || ext == ".glb" || ext == ".GLTF" || ext == ".GLB");
+    }
+
+    const int rootIdx = static_cast<int>(m_scene.nodes.size());
+    const bool loaded = isGltf
+        ? SceneImporter::importGLTF(m_scene, cfg.scenePath, cfg.name)
+        : SceneImporter::importOBJ (m_scene, cfg.scenePath, cfg.name);
+
+    if (!loaded)
+    {
+        vex::Log::error("Benchmark: failed to load scene " + cfg.scenePath);
+        m_exitCode = 1;
+        return false;
+    }
+
+    m_scene.skybox = vex::Skybox::create();
+
+    if (!m_renderer.init(m_scene))
+    {
+        vex::Log::error("Benchmark: renderer initialization failed");
+        m_exitCode = 1;
+        return false;
+    }
+
+    // The editor normally sizes the offscreen framebuffer from the viewport panel.
+    // The benchmark draws no UI, so the config resolution is applied here instead,
+    // and every mode-owned target derives its size from this one.
+    if (auto* fb = m_renderer.getFramebuffer())
+        fb->resize(cfg.width, cfg.height);
+
+    m_renderer.setMaxSamples(cfg.maxSamples);
+    m_renderer.setRenderMode(mode);
+    m_renderer.flushPendingGeomRebuild(m_scene, nullptr);
+
+    m_scene.camera.fov = 45.0f;
+    m_bench.begin(m_scene, rootIdx);
+    m_scene.camera.farPlane = m_bench.farPlane();
+
+    vex::Log::info("Benchmark '" + cfg.name + "': " + cfg.mode + " " +
+                   std::to_string(cfg.width) + "x" + std::to_string(cfg.height) + ", " +
+                   std::to_string(cfg.warmupFrames) + " warmup + " +
+                   std::to_string(cfg.measureFrames) + " measured frames");
 
     return true;
 }
@@ -400,6 +491,24 @@ void App::run()
 {
     while (m_engine.isRunning())
     {
+        // Benchmark mode drives its own minimal loop: no editor UI is drawn, so
+        // ImGui work never lands in the same frame as the measured render.
+        if (m_benchActive)
+        {
+            if (!m_bench.tick(m_scene))
+            {
+                m_bench.finish(m_renderer, m_engine.getGraphicsContext());
+                m_engine.requestExit();
+                break;
+            }
+
+            m_engine.beginFrame();
+            m_renderer.renderScene(m_scene, -1, -1);
+            m_bench.sample();
+            m_engine.endFrame();
+            continue;
+        }
+
         // Handle deferred primitive creation
         {
             EditorUI::PrimitiveType primType;

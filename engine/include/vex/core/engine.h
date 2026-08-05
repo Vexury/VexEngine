@@ -38,6 +38,10 @@ public:
     void endFrame();
     bool isRunning() const;
 
+    // Asks the main loop to stop. Kept separate from m_running so that a later
+    // shutdown() still tears the window and context down.
+    void requestExit() { m_exitRequested = true; }
+
     Window& getWindow() { return *m_window; }
     const Window& getWindow() const { return *m_window; }
     GraphicsContext& getGraphicsContext() { return *m_context; }
@@ -50,6 +54,7 @@ private:
     std::unique_ptr<UILayer> m_uiLayer;
     bool m_running = false;
     bool m_headless = false;
+    bool m_exitRequested = false;
 };
 
 } // namespace vex

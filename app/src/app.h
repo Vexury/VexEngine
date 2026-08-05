@@ -5,16 +5,29 @@
 #include "editor_ui.h"
 #include "command.h"
 #include "selection.h"
+#include "benchmark.h"
 
 #include <vex/core/engine.h>
 
+#include <string>
+
+struct AppConfig
+{
+    vex::EngineConfig engine;
+    std::string       benchConfigPath;
+    std::string       benchOutDir;
+};
+
 struct App
 {
-    bool init(const vex::EngineConfig& config);
+    bool init(const AppConfig& config);
     void run();
     void shutdown();
 
+    int exitCode() const { return m_exitCode; }
+
 private:
+    bool initBenchmark(RenderMode mode);
     void handleInput();
     void processPicking();
     void runImport(const std::string& path, const std::string& name, bool isGltf = false);
@@ -29,6 +42,10 @@ private:
     SelectionState m_selection;
     EditorUI       m_ui;
     CommandStack   m_cmdStack;
+
+    BenchmarkRunner m_bench;
+    bool            m_benchActive = false;
+    int             m_exitCode    = 0;
 
     double m_lastMouseX = 0.0;
     double m_lastMouseY = 0.0;
