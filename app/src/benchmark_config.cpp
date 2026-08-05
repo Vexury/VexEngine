@@ -8,10 +8,14 @@
 namespace
 {
 
-float percentile(const std::vector<float>& sorted, float p)
+// p is taken as double, and callers pass double literals: a float32 literal like
+// 0.99f already carries representation error, and promoting that to double just
+// exposes it at full precision right at the rank boundary (e.g. p99 of 100
+// samples). Starting from a double literal keeps that error negligible.
+float percentile(const std::vector<float>& sorted, double p)
 {
     if (sorted.empty()) return 0.0f;
-    const auto n    = static_cast<float>(sorted.size());
+    const auto n    = static_cast<double>(sorted.size());
     const auto rank = static_cast<size_t>(std::ceil(p * n));
     const size_t idx = (rank == 0) ? 0 : rank - 1;
     return sorted[std::min(idx, sorted.size() - 1)];
@@ -35,43 +39,45 @@ BenchCamKey readKey(const nlohmann::json& j)
 std::optional<BenchmarkConfig> parseBenchmarkConfig(const std::string& jsonText,
                                                     std::string& outError)
 {
-    nlohmann::json j;
+    // Everything from parsing through field extraction can throw (malformed JSON
+    // syntax, or a well-formed document with a wrong-typed field/element access),
+    // so the whole body is guarded. This function must never throw out.
     try
     {
-        j = nlohmann::json::parse(jsonText);
+        const nlohmann::json j = nlohmann::json::parse(jsonText);
+
+        if (!j.contains("scene") || !j["scene"].is_string() ||
+            j["scene"].get<std::string>().empty())
+        {
+            outError = "benchmark config is missing a non-empty \"scene\" field";
+            return std::nullopt;
+        }
+
+        BenchmarkConfig c;
+        c.scenePath = j["scene"].get<std::string>();
+
+        if (j.contains("name"))          c.name          = j["name"].get<std::string>();
+        if (j.contains("sceneFormat"))   c.sceneFormat   = j["sceneFormat"].get<std::string>();
+        if (j.contains("mode"))          c.mode          = j["mode"].get<std::string>();
+        if (j.contains("width"))         c.width         = j["width"].get<uint32_t>();
+        if (j.contains("height"))        c.height        = j["height"].get<uint32_t>();
+        if (j.contains("warmupFrames"))  c.warmupFrames  = j["warmupFrames"].get<uint32_t>();
+        if (j.contains("measureFrames")) c.measureFrames = j["measureFrames"].get<uint32_t>();
+        if (j.contains("maxSamples"))    c.maxSamples    = j["maxSamples"].get<uint32_t>();
+        if (j.contains("vsync"))         c.vsync         = j["vsync"].get<bool>();
+        if (j.contains("orbitDegrees"))  c.orbitDegrees  = j["orbitDegrees"].get<float>();
+
+        if (j.contains("camera") && j["camera"].is_array())
+            for (const auto& k : j["camera"])
+                c.camera.push_back(readKey(k));
+
+        return c;
     }
     catch (const std::exception& e)
     {
-        outError = std::string("JSON parse error: ") + e.what();
+        outError = std::string("benchmark config parse error: ") + e.what();
         return std::nullopt;
     }
-
-    if (!j.contains("scene") || !j["scene"].is_string() ||
-        j["scene"].get<std::string>().empty())
-    {
-        outError = "benchmark config is missing a non-empty \"scene\" field";
-        return std::nullopt;
-    }
-
-    BenchmarkConfig c;
-    c.scenePath = j["scene"].get<std::string>();
-
-    if (j.contains("name"))          c.name          = j["name"].get<std::string>();
-    if (j.contains("sceneFormat"))   c.sceneFormat   = j["sceneFormat"].get<std::string>();
-    if (j.contains("mode"))          c.mode          = j["mode"].get<std::string>();
-    if (j.contains("width"))         c.width         = j["width"].get<uint32_t>();
-    if (j.contains("height"))        c.height        = j["height"].get<uint32_t>();
-    if (j.contains("warmupFrames"))  c.warmupFrames  = j["warmupFrames"].get<uint32_t>();
-    if (j.contains("measureFrames")) c.measureFrames = j["measureFrames"].get<uint32_t>();
-    if (j.contains("maxSamples"))    c.maxSamples    = j["maxSamples"].get<uint32_t>();
-    if (j.contains("vsync"))         c.vsync         = j["vsync"].get<bool>();
-    if (j.contains("orbitDegrees"))  c.orbitDegrees  = j["orbitDegrees"].get<float>();
-
-    if (j.contains("camera") && j["camera"].is_array())
-        for (const auto& k : j["camera"])
-            c.camera.push_back(readKey(k));
-
-    return c;
 }
 
 BenchCamKey interpolateCamera(const std::vector<BenchCamKey>& keys, float t)
@@ -108,9 +114,9 @@ ProfileStats computeStats(std::vector<float> samples)
 
     s.min = samples.front();
     s.max = samples.back();
-    s.p50 = percentile(samples, 0.50f);
-    s.p95 = percentile(samples, 0.95f);
-    s.p99 = percentile(samples, 0.99f);
+    s.p50 = percentile(samples, 0.50);
+    s.p95 = percentile(samples, 0.95);
+    s.p99 = percentile(samples, 0.99);
 
     double var = 0.0;
     for (float v : samples)

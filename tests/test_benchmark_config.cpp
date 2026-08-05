@@ -36,6 +36,9 @@ TEST_CASE("parse full config reads every field")
     CHECK(cfg->sceneFormat == "gltf");
     CHECK(cfg->mode == "gpu_raytrace");
     CHECK(cfg->width == 2560);
+    CHECK(cfg->height == 1440);
+    CHECK(cfg->warmupFrames == 5);
+    CHECK(cfg->measureFrames == 50);
     CHECK(cfg->maxSamples == 64);
     CHECK(cfg->vsync == true);
     CHECK(cfg->orbitDegrees == doctest::Approx(90.0f));
@@ -55,6 +58,25 @@ TEST_CASE("parse rejects missing scene and malformed json")
     CHECK_FALSE(err.empty());
 }
 
+TEST_CASE("parse rejects wrong-typed fields without throwing")
+{
+    std::string err;
+    auto badScalar = parseBenchmarkConfig(R"({"scene":"a.obj","width":"wide"})", err);
+    CHECK_FALSE(badScalar.has_value());
+    CHECK_FALSE(err.empty());
+
+    err.clear();
+    auto badString = parseBenchmarkConfig(R"({"scene":"a.obj","mode":123})", err);
+    CHECK_FALSE(badString.has_value());
+    CHECK_FALSE(err.empty());
+
+    err.clear();
+    auto badCameraField = parseBenchmarkConfig(
+        R"({"scene":"a.obj","camera":[{"distance":"far"}]})", err);
+    CHECK_FALSE(badCameraField.has_value());
+    CHECK_FALSE(err.empty());
+}
+
 TEST_CASE("camera interpolation handles 0, 1, 2 and 3 keyframes")
 {
     CHECK(interpolateCamera({}, 0.5f).distance == doctest::Approx(10.0f));
@@ -70,6 +92,8 @@ TEST_CASE("camera interpolation handles 0, 1, 2 and 3 keyframes")
     CHECK(interpolateCamera({a, b}, 1.0f).distance == doctest::Approx(10.0f));
     CHECK(interpolateCamera({a, b}, 0.5f).distance == doctest::Approx(5.0f));
     CHECK(interpolateCamera({a, b}, 0.25f).yaw == doctest::Approx(0.5f));
+    CHECK(interpolateCamera({a, b}, -0.5f).distance == doctest::Approx(0.0f));
+    CHECK(interpolateCamera({a, b}, 1.5f).distance == doctest::Approx(10.0f));
 
     BenchCamKey c; c.distance = 20.0f;
     CHECK(interpolateCamera({a, b, c}, 0.5f).distance == doctest::Approx(10.0f));
@@ -118,4 +142,5 @@ TEST_CASE("csv escaping quotes fields containing separators")
     CHECK(csvEscape("has,comma") == "\"has,comma\"");
     CHECK(csvEscape("has\"quote") == "\"has\"\"quote\"");
     CHECK(csvEscape("has\nnewline") == "\"has\nnewline\"");
+    CHECK(csvEscape("\r") == "\"\r\"");
 }
