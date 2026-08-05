@@ -11,6 +11,20 @@ namespace vex
 namespace
 {
 
+// The profiler resolves the query slot from k_ringSlots frames back, and the
+// only thing that guarantees that slot is finished on Vulkan is the
+// frames-in-flight fence: the CPU can never be more than MAX_FRAMES_IN_FLIGHT
+// frames ahead of the GPU. If that count ever reached the ring depth, the slot
+// being resolved would be one the GPU is still executing, resolve() would
+// return false forever, and Profiler would keep handing back the previous
+// frame's results. The Profiler window would then freeze at one sample while
+// still presenting it as a live measurement, with nothing in the editor UI to
+// notice. This is exactly the failure the OpenGL backend shipped with.
+static_assert(MAX_FRAMES_IN_FLIGHT < Profiler::k_ringSlots,
+              "MAX_FRAMES_IN_FLIGHT must stay below Profiler::k_ringSlots, or the "
+              "timestamp slot being resolved is still in flight and the profiler "
+              "silently freezes on stale results. Raise Profiler::k_ringSlots too.");
+
 class VKProfilerBackend final : public IProfilerBackend
 {
 public:

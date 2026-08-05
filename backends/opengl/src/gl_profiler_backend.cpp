@@ -30,6 +30,21 @@ public:
         m_queries.resize(k_queriesPerSlot * Profiler::k_ringSlots);
         glGenQueries(static_cast<GLsizei>(m_queries.size()), m_queries.data());
 
+        // glGenQueries has no return value, so the only way to notice it did
+        // nothing is to check the names it wrote. A zero name would otherwise
+        // make every later glQueryCounter a silent no-op and every resolved
+        // timestamp zero, which reads as a real measurement of no cost.
+        for (GLuint q : m_queries)
+        {
+            if (q == 0)
+            {
+                Log::warn("Profiler: glGenQueries returned a null query name, "
+                          "GPU timings disabled");
+                m_supported = false;
+                return true;
+            }
+        }
+
         m_labels = glPushDebugGroup != nullptr && glPopDebugGroup != nullptr;
         return true;
     }
@@ -84,6 +99,19 @@ public:
         {
             GLuint64 value = 0;
             glGetQueryObjectui64v(m_queries[base + i], GL_QUERY_RESULT, &value);
+
+            // A GL_TIMESTAMP result is a monotonic counter that is never zero on
+            // a working driver, so a zero means the query was never written or
+            // the read failed. Reporting success here would turn that into a
+            // confident "0.00 ms" per zone and a "frame_gpu 0.0000" column in the
+            // benchmark CSV, i.e. a broken read published as a real measurement
+            // of no cost. Returning false makes it read as missing instead.
+            if (value == 0)
+            {
+                out.clear();
+                return false;
+            }
+
             out[i] = static_cast<uint64_t>(value);
         }
         return true;
