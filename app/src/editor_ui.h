@@ -171,7 +171,19 @@ private:
     CachedSceneStats m_sceneStats;
 
     // Profiler window state
-    struct ZoneAccum { float ema = -1.0f; float peak = 0.0f; };
+    // GPU and CPU milliseconds are accumulated in separate fields and never
+    // merged. A single accumulator fed by "gpuMs if positive else cpuMs" changes
+    // which physical quantity it holds whenever a zone crosses zero GPU time, so
+    // one displayed number would silently mean two different things. -1 is the
+    // never-measured sentinel on all four, so an absent series prints a dash
+    // rather than a fabricated 0.00.
+    struct ZoneAccum
+    {
+        float gpuEma  = -1.0f;
+        float gpuPeak = -1.0f;
+        float cpuEma  = -1.0f;
+        float cpuPeak = -1.0f;
+    };
     std::unordered_map<std::string, ZoneAccum> m_profAccum;
     float m_profHistory[256] = {};
     int   m_profHistoryPos   = 0;
