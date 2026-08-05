@@ -230,9 +230,21 @@ void BenchmarkRunner::sample()
             }
     }
 
+    const float frameCpu = prof.frameCpuMs();
+    const float frameGpu = prof.frameGpuMs();
+
+    // A frame whose entire result set matches the previous frame's bit for bit
+    // carries no new measurement: the profiler handed back the same resolved
+    // vector twice, which happens when a query slot never becomes ready and the
+    // previous results are kept. Exact comparison is the point here, since two
+    // independent samples of a multi-zone frame never land on identical floats.
+    if (!m_rows.empty() && row == m_rows.back() &&
+        frameCpu == m_cpuMs.back() && frameGpu == m_gpuMs.back())
+        ++m_duplicateFrames;
+
     m_rows.push_back(std::move(row));
-    m_cpuMs.push_back(prof.frameCpuMs());
-    m_gpuMs.push_back(prof.frameGpuMs());
+    m_cpuMs.push_back(frameCpu);
+    m_gpuMs.push_back(frameGpu);
 
     if (++m_frame >= m_cfg.measureFrames)
         m_phase = Phase::Done;
@@ -240,6 +252,13 @@ void BenchmarkRunner::sample()
     if (m_frame % 100 == 0 && m_phase == Phase::Measure)
         vex::Log::info("Benchmark: " + std::to_string(m_frame) + " / " +
                        std::to_string(m_cfg.measureFrames) + " frames");
+}
+
+bool BenchmarkRunner::stale() const
+{
+    if (m_rows.size() < 2) return false;
+    const double comparisons = static_cast<double>(m_rows.size() - 1);
+    return static_cast<double>(m_duplicateFrames) >= k_maxDuplicateFraction * comparisons;
 }
 
 void BenchmarkRunner::finish(SceneRenderer& renderer, vex::GraphicsContext& ctx)
@@ -356,6 +375,17 @@ void BenchmarkRunner::finish(SceneRenderer& renderer, vex::GraphicsContext& ctx)
         j["frame_gpu"]     = statsToJson(gpuStats);
         j["frame_cpu"]     = statsToJson(cpuStats);
 
+        // Health signal, so the artifact says for itself whether its statistics
+        // were computed over distinct samples.
+        const size_t comparisons = m_rows.size() > 1 ? m_rows.size() - 1 : 0;
+        j["health"] = nlohmann::json{
+            {"measuredFrames",    m_rows.size()},
+            {"duplicateFrames",   m_duplicateFrames},
+            {"duplicateFraction", comparisons ? static_cast<double>(m_duplicateFrames) /
+                                                static_cast<double>(comparisons) : 0.0},
+            {"stale",             stale()},
+        };
+
         std::ofstream out(m_outDir + "/run.json", std::ios::binary);
         if (!out)
             vex::Log::error("Benchmark: cannot write " + m_outDir + "/run.json");
@@ -368,6 +398,20 @@ void BenchmarkRunner::finish(SceneRenderer& renderer, vex::GraphicsContext& ctx)
     logLine("Benchmark '" + m_cfg.name + "' finished: " + std::to_string(m_rows.size()) +
             " frames at " + std::to_string(m_cfg.width) + "x" + std::to_string(m_cfg.height) +
             " on " + ctx.deviceName());
+
+    const bool isStale = stale();
+    if (isStale)
+    {
+        const size_t comparisons = m_rows.size() - 1;
+        errLine("========================================================================");
+        errLine("BENCHMARK RESULT REJECTED: not a measurement");
+        errLine(std::to_string(m_duplicateFrames) + " of " + std::to_string(comparisons) +
+                " measured frames repeated the previous frame's profiler results exactly.");
+        errLine("The profiler was not producing fresh data, so the statistics below are");
+        errLine("computed over repeated copies of the same sample. Do not publish them.");
+        errLine("run.json records \"health\": {\"stale\": true} for this run.");
+        errLine("========================================================================");
+    }
     std::snprintf(buf, sizeof(buf), "%-28s %10s %10s %10s", "zone", "mean ms", "p95 ms", "p99 ms");
     logLine(buf);
     std::snprintf(buf, sizeof(buf), "%-28s %10.3f %10.3f %10.3f",
@@ -387,6 +431,9 @@ void BenchmarkRunner::finish(SceneRenderer& renderer, vex::GraphicsContext& ctx)
                           n.c_str(), s.mean, s.p95, s.p99);
             logLine(buf);
         }
+    if (isStale)
+        errLine("Statistics above are REJECTED, see the duplicate-frame warning.");
+
     logLine("Benchmark output: " + m_outDir);
 }
 

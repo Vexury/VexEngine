@@ -2,6 +2,7 @@
 
 #include "benchmark_config.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -42,12 +43,26 @@ public:
     // True once every requested frame has been measured, i.e. finish() ran.
     bool completed() const { return m_phase == Phase::Done; }
 
+    // True when too many measured frames repeated the previous frame's profiler
+    // results verbatim, which means the statistics describe copies of one
+    // sample rather than a measurement. Valid after the run.
+    bool stale() const;
+
     // Logs that the main loop ended before the run finished, so an empty output
     // directory cannot be mistaken for a completed run.
     void reportAborted() const;
 
 private:
     enum class Phase { Warmup, Measure, Done };
+
+    // Fraction of frame-to-frame comparisons that may repeat before the run is
+    // rejected. Every healthy run recorded so far (eight runs, 1892 frames,
+    // both backends, all four modes) produced zero repeats, because an exact
+    // match of a whole multi-zone row of floats does not happen by chance. A
+    // genuinely stalled query slot can legitimately repeat the previous result
+    // for an isolated frame, so the bar is set well above any plausible
+    // transient and far below the total freeze this guard exists to catch.
+    static constexpr double k_maxDuplicateFraction = 0.25;
 
     BenchmarkConfig m_cfg;
     std::string     m_outDir;
@@ -61,4 +76,5 @@ private:
     std::vector<std::vector<float>>              m_rows;      // one inner vector per frame
     std::vector<float>                           m_cpuMs;
     std::vector<float>                           m_gpuMs;
+    size_t                                       m_duplicateFrames = 0;
 };
