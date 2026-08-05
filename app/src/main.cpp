@@ -43,8 +43,13 @@ int main(int argc, char* argv[])
 {
     App app;
 
+    // init can fail after the window and device already exist, so it still has
+    // to be torn down before returning.
     if (!app.init(parseArgs(argc, argv)))
-        return EXIT_FAILURE;
+    {
+        app.shutdown();
+        return app.exitCode() != 0 ? app.exitCode() : EXIT_FAILURE;
+    }
 
     app.run();
     app.shutdown();

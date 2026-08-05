@@ -98,12 +98,18 @@ bool App::init(const AppConfig& config)
         return initBenchmark(benchMode);
 
     if (!SceneImporter::importOBJ(m_scene, "VexAssetsCC0/Scenes/ChessSet/ChessSet.obj", "Chess Set"))
+    {
+        m_exitCode = 1;
         return false;
+    }
 
     m_scene.skybox = vex::Skybox::create();
 
     if (!m_renderer.init(m_scene))
+    {
+        m_exitCode = 1;
         return false;
+    }
 
     m_ui.init(m_selection);
     m_engine.getUILayer().setMenuBarCallback([this]() { m_ui.renderMenuBar(m_renderer); });
@@ -656,11 +662,19 @@ void App::run()
         m_ui.renderProfiler(m_engine.getGraphicsContext());
         m_engine.endFrame();
     }
+
+    // Closing the window mid-run leaves through isRunning(), so finish() never
+    // ran and the output directory is empty. Say so rather than exiting quietly.
+    if (m_benchActive && !m_bench.completed())
+        m_bench.reportAborted();
 }
 
 void App::shutdown()
 {
-    m_engine.getGraphicsContext().waitIdle();
+    // Also reached from a failed init, where the context may never have been
+    // created, so nothing here may assume a fully initialized engine.
+    if (m_engine.hasGraphicsContext())
+        m_engine.getGraphicsContext().waitIdle();
     m_renderer.shutdown();
     m_scene.nodes.clear();
     m_scene.skybox.reset();

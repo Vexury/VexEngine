@@ -67,6 +67,12 @@ void logLine(const std::string& line)
     std::cout << line << '\n';
 }
 
+void errLine(const std::string& line)
+{
+    vex::Log::error(line);
+    std::cout << line << '\n';
+}
+
 } // namespace
 
 bool parseBenchRenderMode(const std::string& name, RenderMode& out)
@@ -206,18 +212,20 @@ void BenchmarkRunner::sample()
         for (const auto& r : results)
             m_columns.push_back(r.name ? r.name : "?");
 
-    // gpuMs >= 0 means the zone was GPU-timed, so it wins even when the delta
-    // resolved to exactly 0. Falling back to cpuMs on a zero GPU time would let
-    // a single column mix GPU and CPU numbers across frames, which then averages
-    // into a value that means nothing.
-    std::vector<float> row(m_columns.size(), -1.0f);
+    // Two series per zone, gpu then cpu, each carrying only its own value. A
+    // single column picking whichever of the two happens to be available hides
+    // the CPU cost of a GPU zone whose GPU time is legitimately near zero (an
+    // upload wrapped in VEX_GPU_ZONE), and lets a column change unit mid-run
+    // whenever a query resolve is not ready.
+    std::vector<float> row(m_columns.size() * 2, -1.0f);
     for (const auto& r : results)
     {
         const std::string name = r.name ? r.name : "?";
         for (size_t c = 0; c < m_columns.size(); ++c)
             if (m_columns[c] == name)
             {
-                row[c] = (r.gpuMs >= 0.0f) ? r.gpuMs : r.cpuMs;
+                row[c * 2]     = r.gpuMs;
+                row[c * 2 + 1] = r.cpuMs;
                 break;
             }
     }
@@ -256,9 +264,10 @@ void BenchmarkRunner::finish(SceneRenderer& renderer, vex::GraphicsContext& ctx)
         {
             out << "frame,cpuMs,gpuMs";
             for (const auto& c : m_columns)
-                out << ',' << csvEscape(c);
+                out << ',' << csvEscape(c + " gpu") << ',' << csvEscape(c + " cpu");
             out << '\n';
 
+            const size_t seriesCount = m_columns.size() * 2;
             for (size_t i = 0; i < m_rows.size(); ++i)
             {
                 out << i << ',';
@@ -267,24 +276,25 @@ void BenchmarkRunner::finish(SceneRenderer& renderer, vex::GraphicsContext& ctx)
                 if (m_gpuMs[i] >= 0.0f) out << fmt(m_gpuMs[i]);
 
                 const auto& row = m_rows[i];
-                for (size_t c = 0; c < m_columns.size(); ++c)
+                for (size_t s = 0; s < seriesCount; ++s)
                 {
                     out << ',';
-                    if (c < row.size() && row[c] >= 0.0f)
-                        out << fmt(row[c]);
+                    if (s < row.size() && row[s] >= 0.0f)
+                        out << fmt(row[s]);
                 }
                 out << '\n';
             }
         }
     }
 
-    auto gather = [this](size_t col)
+    // Series index: zone c contributes c*2 (gpu) and c*2+1 (cpu).
+    auto gather = [this](size_t series)
     {
         std::vector<float> v;
         v.reserve(m_rows.size());
         for (const auto& row : m_rows)
-            if (col < row.size() && row[col] >= 0.0f)
-                v.push_back(row[col]);
+            if (series < row.size() && row[series] >= 0.0f)
+                v.push_back(row[series]);
         return v;
     };
 
@@ -312,8 +322,16 @@ void BenchmarkRunner::finish(SceneRenderer& renderer, vex::GraphicsContext& ctx)
             out << "zone,mean,min,max,p50,p95,p99,stddev\n";
             writeStatsRow(out, "frame_cpu", cpuStats);
             writeStatsRow(out, "frame_gpu", gpuStats);
+            // A series with no samples at all is skipped, so a CPU-only zone does
+            // not emit an all-empty gpu row.
             for (size_t c = 0; c < m_columns.size(); ++c)
-                writeStatsRow(out, m_columns[c], computeStats(gather(c)));
+                for (int half = 0; half < 2; ++half)
+                {
+                    const std::vector<float> v = gather(c * 2 + half);
+                    if (v.empty()) continue;
+                    writeStatsRow(out, m_columns[c] + (half == 0 ? " gpu" : " cpu"),
+                                  computeStats(v));
+                }
         }
     }
 
@@ -359,11 +377,22 @@ void BenchmarkRunner::finish(SceneRenderer& renderer, vex::GraphicsContext& ctx)
                   "frame_cpu", cpuStats.mean, cpuStats.p95, cpuStats.p99);
     logLine(buf);
     for (size_t c = 0; c < m_columns.size(); ++c)
-    {
-        const ProfileStats s = computeStats(gather(c));
-        std::snprintf(buf, sizeof(buf), "%-28s %10.3f %10.3f %10.3f",
-                      m_columns[c].c_str(), s.mean, s.p95, s.p99);
-        logLine(buf);
-    }
+        for (int half = 0; half < 2; ++half)
+        {
+            const std::vector<float> v = gather(c * 2 + half);
+            if (v.empty()) continue;
+            const ProfileStats s = computeStats(v);
+            const std::string  n = m_columns[c] + (half == 0 ? " gpu" : " cpu");
+            std::snprintf(buf, sizeof(buf), "%-28s %10.3f %10.3f %10.3f",
+                          n.c_str(), s.mean, s.p95, s.p99);
+            logLine(buf);
+        }
     logLine("Benchmark output: " + m_outDir);
+}
+
+void BenchmarkRunner::reportAborted() const
+{
+    errLine("Benchmark '" + m_cfg.name + "' aborted before completion, no results written (" +
+            std::to_string(m_rows.size()) + " of " + std::to_string(m_cfg.measureFrames) +
+            " frames measured)");
 }

@@ -39,6 +39,13 @@ public:
     // Called once after the final tick. Writes CSV, PNG, and run.json.
     void finish(SceneRenderer& renderer, vex::GraphicsContext& ctx);
 
+    // True once every requested frame has been measured, i.e. finish() ran.
+    bool completed() const { return m_phase == Phase::Done; }
+
+    // Logs that the main loop ended before the run finished, so an empty output
+    // directory cannot be mistaken for a completed run.
+    void reportAborted() const;
+
 private:
     enum class Phase { Warmup, Measure, Done };
 

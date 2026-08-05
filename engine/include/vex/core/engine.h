@@ -44,6 +44,7 @@ public:
 
     Window& getWindow() { return *m_window; }
     const Window& getWindow() const { return *m_window; }
+    bool hasGraphicsContext() const { return m_context != nullptr; }
     GraphicsContext& getGraphicsContext() { return *m_context; }
     const GraphicsContext& getGraphicsContext() const { return *m_context; }
     UILayer& getUILayer() { return *m_uiLayer; }
