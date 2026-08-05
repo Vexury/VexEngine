@@ -1,0 +1,11 @@
+{
+  "name": "chessset-gpurt-1080p",
+  "scene": "VexAssetsCC0/Scenes/ChessSet/ChessSet.obj",
+  "mode": "gpu_raytrace",
+  "width": 1920,
+  "height": 1080,
+  "warmupFrames": 30,
+  "measureFrames": 300,
+  "vsync": false,
+  "orbitDegrees": 90.0
+}

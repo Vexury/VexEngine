@@ -1,0 +1,11 @@
+{
+  "name": "chessset-gpurt-converge",
+  "scene": "VexAssetsCC0/Scenes/ChessSet/ChessSet.obj",
+  "mode": "gpu_raytrace",
+  "width": 1920,
+  "height": 1080,
+  "warmupFrames": 10,
+  "measureFrames": 512,
+  "maxSamples": 512,
+  "vsync": false
+}

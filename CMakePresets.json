@@ -4,7 +4,6 @@
         {
             "name": "opengl-debug",
             "displayName": "OpenGL (Debug)",
-            "generator": "Visual Studio 17 2022",
             "binaryDir": "${sourceDir}/build-gl",
             "cacheVariables": {
                 "VEX_BACKEND": "OpenGL",
@@ -14,7 +13,6 @@
         {
             "name": "opengl-release",
             "displayName": "OpenGL (Release)",
-            "generator": "Visual Studio 17 2022",
             "binaryDir": "${sourceDir}/build-gl",
             "cacheVariables": {
                 "VEX_BACKEND": "OpenGL",
@@ -24,7 +22,6 @@
         {
             "name": "vulkan-debug",
             "displayName": "Vulkan (Debug)",
-            "generator": "Visual Studio 17 2022",
             "binaryDir": "${sourceDir}/build-vk",
             "cacheVariables": {
                 "VEX_BACKEND": "Vulkan",
@@ -34,7 +31,6 @@
         {
             "name": "vulkan-release",
             "displayName": "Vulkan (Release)",
-            "generator": "Visual Studio 17 2022",
             "binaryDir": "${sourceDir}/build-vk",
             "cacheVariables": {
                 "VEX_BACKEND": "Vulkan",
