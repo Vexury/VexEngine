@@ -35,10 +35,10 @@ A C++ rendering engine with an interactive editor, supporting both real-time ras
 - OIDN denoising (Intel Open Image Denoise, path tracer only)
 
 Implemented four ways:
-- **CPU** — multithreaded, SAH BVH acceleration
-- **GPU (OpenGL, Compute)** — compute shader, same BVH uploaded to GPU
-- **GPU (Vulkan, Compute)** — compute shader path tracer, software BVH on GPU
-- **GPU (Vulkan, HW RT)** — hardware ray tracing (`VK_KHR_ray_tracing_pipeline`), BLAS/TLAS acceleration structures, alpha-clipped geometry via any-hit shader
+- **CPU**: multithreaded, SAH BVH acceleration
+- **GPU (OpenGL, Compute)**: compute shader, same BVH uploaded to GPU
+- **GPU (Vulkan, Compute)**: compute shader path tracer, software BVH on GPU
+- **GPU (Vulkan, HW RT)**: hardware ray tracing (`VK_KHR_ray_tracing_pipeline`), BLAS/TLAS acceleration structures, alpha-clipped geometry via any-hit shader
 
 **Editor**
 - ImGui-based UI: scene hierarchy, material editor, light controls, environment maps, volume manager
@@ -53,7 +53,11 @@ Measured with the built-in benchmark mode (`--bench <config.json>`). Every
 number below is reproducible with the exact command shown for that row.
 Configs live in `bench/`. Each run writes `frames.csv`, `summary.csv`,
 `final.png`, and a `run.json` (GPU name, driver-reported device string, git
-commit) to `results/<name>/`.
+commit) to `results/<name>/`. `run.json` also carries a `health` block: the
+runner counts measured frames whose profiler results repeat the previous
+frame's verbatim and flags the run `stale` when too many do, so a run that
+stopped producing fresh timing data reports itself instead of being read as
+a measurement.
 
 Scene: ChessSet (76,920 triangles, 33 submeshes), 1920x1080, VSync off.
 GPU: NVIDIA GeForce RTX 4070 Ti. `mean`/`p95`/`p99` are computed over the
@@ -75,7 +79,7 @@ reproduced inline below since nothing under `bench/` runs it.
 | Rasterize | OpenGL | frame_gpu | 0.161 | 0.164 | 0.165 | `vex_app --bench bench/chessset-raster-1080p.json` |
 | Path trace (HW RT) | Vulkan | frame_gpu | 0.252 | 0.262 | 0.280 | `vex_app --bench bench/chessset-gpurt-1080p.json` |
 | Path trace (compute) | Vulkan | frame_gpu | 0.912 | 1.037 | 1.072 | copy of `chessset-gpurt-1080p.json` with `"mode": "compute_raytrace"` |
-| Path trace (compute) | OpenGL | frame_gpu | 22.865 | 22.865 | 22.865 | `vex_app --bench bench/chessset-gpurt-1080p.json` |
+| Path trace (compute) | OpenGL | frame_gpu | 5.247 | 5.734 | 5.946 | `vex_app --bench bench/chessset-gpurt-1080p.json` |
 | Path trace (CPU) | Vulkan | frame_cpu | 115.011 | 128.160 | 134.576 | `vex_app --bench bench/chessset-cpurt-1080p.json` |
 | Path trace (CPU) | OpenGL | frame_cpu | 105.275 | 115.314 | 121.900 | `vex_app --bench bench/chessset-cpurt-1080p.json` |
 
@@ -86,20 +90,10 @@ for those two rows instead; their `frame_gpu` mostly reflects the cost of
 uploading the traced image and compositing it (2.3 ms on Vulkan, 14.9 ms on
 OpenGL, driven by `CPU PT: upload`), not ray tracing itself.
 
-The OpenGL "Path trace (compute)" row is real, measured data, but every one
-of its 300 measured frames returned the *same* value for both `frame_gpu`
-and `frame_cpu` (`summary.csv` shows `stddev = 0.0000`), reproducible
-across separate runs (a second run measured 22.090 ms flat instead of
-22.865 ms). This is a real property of this configuration, not a copy-paste
-error: the shipped config's camera orbits continuously, so
-`GPURaytraceMode` resets the progressive accumulator on every single frame
-(`changes.cameraChanged`), which means the compute shader always performs
-exactly one full, fixed-cost dispatch per frame with no content-dependent
-early-out. Combined with the profiler's query-ring behaviour (a slot whose
-query is not yet available reuses the previous resolved result rather than
-blocking), the reported timing is unusually stable for this specific
-mode/backend/camera-path combination. Treat this row's `p95`/`p99` as
-equal to its mean by construction, not as evidence of zero jitter.
+The two path tracers are not comparable line by line: the OpenGL row is the
+`gpu_raytrace` compute path and the Vulkan row is the separate
+`compute_raytrace` path, and they differ in shader, BVH layout, and
+per-frame dispatch, so the gap between them is not a backend comparison.
 
 `chessset-gpurt-converge.json` measures convergence (static camera,
 `maxSamples: 512`) rather than throughput and is not part of the table
