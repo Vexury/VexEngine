@@ -51,13 +51,29 @@ Implemented four ways:
 
 Measured with the built-in benchmark mode (`--bench <config.json>`). Every
 number below is reproducible with the exact command shown for that row.
-Configs live in `bench/`. Each run writes `frames.csv`, `summary.csv`,
-`final.png`, and a `run.json` (GPU name, driver-reported device string, git
-commit) to `results/<name>/`. `run.json` also carries a `health` block: the
-runner counts measured frames whose profiler results repeat the previous
-frame's verbatim and flags the run `stale` when too many do, so a run that
-stopped producing fresh timing data reports itself instead of being read as
-a measurement.
+Configs live in `bench/`. Each run writes `frames.csv` (one row per measured
+frame), `summary.csv` (mean/min/max/p50/p95/p99/stddev per zone), `final.png`,
+and a `run.json` to `results/<name>/`, or to the directory given by
+`--bench-out`.
+
+`run.json` records the run's provenance and health: `device` (the
+driver-reported device string, which is also the GPU name), `backend`,
+`width`, `height`, `mode`, `scene`, `warmupFrames`, `measureFrames`,
+`maxSamples`, `cameraKeys`, the `frame_gpu` and `frame_cpu` statistics, and a
+`health` block. It does not record a git commit. The `health` block counts
+measured frames whose profiler results repeat the previous frame's verbatim
+and marks the run `stale` when too many do, so a run that stopped producing
+fresh timing data reports itself instead of being read as a measurement. A
+rejected run is unmissable from any entry point: every row of `frames.csv` and
+`summary.csv` carries `status=REJECTED`, `run.json` carries
+`"health": {"stale": true}`, the console prints a rejection banner, and the
+process exits with code 2 so CI can fail on it. An accepted run marks the same
+column `ok`.
+
+The configs in `bench/` are backend-agnostic, so running the same config on
+both backends would write both results to the same `results/<name>/` and the
+second run would overwrite the first. The commands below pass `--bench-out`
+to keep each backend's output separate.
 
 Scene: ChessSet (76,920 triangles, 33 submeshes), 1920x1080, VSync off.
 GPU: NVIDIA GeForce RTX 4070 Ti. `mean`/`p95`/`p99` are computed over the
@@ -75,13 +91,18 @@ reproduced inline below since nothing under `bench/` runs it.
 
 | Mode | Backend | Metric | mean (ms) | p95 (ms) | p99 (ms) | Command |
 |---|---|---|---|---|---|---|
-| Rasterize | Vulkan | frame_gpu | 0.141 | 0.166 | 0.167 | `vex_app --bench bench/chessset-raster-1080p.json` |
-| Rasterize | OpenGL | frame_gpu | 0.161 | 0.164 | 0.165 | `vex_app --bench bench/chessset-raster-1080p.json` |
-| Path trace (HW RT) | Vulkan | frame_gpu | 0.252 | 0.262 | 0.280 | `vex_app --bench bench/chessset-gpurt-1080p.json` |
-| Path trace (compute) | Vulkan | frame_gpu | 0.912 | 1.037 | 1.072 | copy of `chessset-gpurt-1080p.json` with `"mode": "compute_raytrace"` |
-| Path trace (compute) | OpenGL | frame_gpu | 5.247 | 5.734 | 5.946 | `vex_app --bench bench/chessset-gpurt-1080p.json` |
-| Path trace (CPU) | Vulkan | frame_cpu | 115.011 | 128.160 | 134.576 | `vex_app --bench bench/chessset-cpurt-1080p.json` |
-| Path trace (CPU) | OpenGL | frame_cpu | 105.275 | 115.314 | 121.900 | `vex_app --bench bench/chessset-cpurt-1080p.json` |
+| Rasterize | Vulkan | frame_gpu | 0.141 | 0.166 | 0.167 | `vex_app --bench bench/chessset-raster-1080p.json --bench-out results/vk-raster` |
+| Rasterize | OpenGL | frame_gpu | 0.161 | 0.164 | 0.165 | `vex_app --bench bench/chessset-raster-1080p.json --bench-out results/gl-raster` |
+| Path trace (HW RT) | Vulkan | frame_gpu | 0.252 | 0.262 | 0.280 | `vex_app --bench bench/chessset-gpurt-1080p.json --bench-out results/vk-gpurt` |
+| Path trace (compute) | Vulkan | frame_gpu | 0.912 | 1.037 | 1.072 | copy of `chessset-gpurt-1080p.json` with `"mode": "compute_raytrace"`, `--bench-out results/vk-computert` |
+| Path trace (compute) | OpenGL | frame_gpu | 5.247 | 5.734 | 5.946 | `vex_app --bench bench/chessset-gpurt-1080p.json --bench-out results/gl-gpurt` |
+| Path trace (CPU) | Vulkan | frame_cpu | 115.011 | 128.160 | 134.576 | `vex_app --bench bench/chessset-cpurt-1080p.json --bench-out results/vk-cpurt` |
+| Path trace (CPU) | OpenGL | frame_cpu | 105.275 | 115.314 | 121.900 | `vex_app --bench bench/chessset-cpurt-1080p.json --bench-out results/gl-cpurt` |
+
+Every row passes `--bench-out` because the four `bench/*.json` configs are each
+shared by a Vulkan and an OpenGL row. Without it both rows of a pair write to
+the same default `results/<name>/` and the second run silently overwrites the
+first, which is how one backend's figure can end up read as the other's.
 
 Notes on the metric column: `frame_gpu` (GPU-side wall time for the whole
 frame) is the meaningful cost for GPU-bound modes. The CPU path tracer is
@@ -109,8 +130,11 @@ on Vulkan), derived from that run's `summary.csv`. This is the same data
 the Profiler window's "Copy as Markdown" button would export, reformatted
 by hand: the button requires clicking inside the live interactive editor,
 which cannot be automated headlessly in the environment these numbers were
-generated in, so `mean`/`max` are the run's statistics rather than the
-window's live EMA/running-peak.
+generated in, so the mean and max columns are the run's statistics rather
+than the window's live EMA and running peak. GPU and CPU are kept in
+separate columns here for the same reason the Profiler window keeps them
+separate: a single column that falls back from one to the other changes
+what it measures without saying so.
 
 | Pass | GPU mean (ms) | GPU max (ms) | CPU mean (ms) | CPU max (ms) | % of frame GPU |
 |---|---|---|---|---|---|
