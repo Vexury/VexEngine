@@ -1204,6 +1204,7 @@ void SceneRenderer::triggerDenoise()
     m_denoiser->denoise(m_denoiseLinearHDR.data(), w, h);
     float ms = std::chrono::duration<float, std::milli>(
                    std::chrono::steady_clock::now() - t0).count();
+    vex::Profiler::get().recordOneShot("Denoise (OIDN)", ms);
 
     // Pack RGB HDR → RGBA32F; tone mapping applied in fullscreen shader
     uint32_t pixelCount = w * h;
@@ -1278,6 +1279,7 @@ void SceneRenderer::triggerDenoiseAux()
     m_denoiser->denoiseAux(m_denoiseLinearHDR.data(), m_denoiseAlbedo.data(), m_denoiseNormal.data(), w, h);
     float ms = std::chrono::duration<float, std::milli>(
                    std::chrono::steady_clock::now() - t0).count();
+    vex::Profiler::get().recordOneShot("Denoise (OIDN)", ms);
 
     // Pack RGB HDR → RGBA32F; tone mapping applied in fullscreen shader
     uint32_t pixelCount = w * h;
@@ -1397,6 +1399,8 @@ std::pair<int,int> SceneRenderer::pick(Scene& scene, int pixelX, int pixelY)
 
     constexpr float EPS = 1e-7f;
 
+    const auto t0 = std::chrono::steady_clock::now();
+
     for (int ni = 0; ni < static_cast<int>(scene.nodes.size()); ++ni)
     {
         const glm::mat4 nodeWorld = scene.getWorldMatrix(ni);
@@ -1439,6 +1443,11 @@ std::pair<int,int> SceneRenderer::pick(Scene& scene, int pixelX, int pixelY)
             }
         }
     }
+
+    vex::Profiler::get().recordOneShot("Pick pass",
+        std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - t0).count());
+
     return { bestGroup, bestSubmesh };
 #else
     if (!m_rasterMode)

@@ -5,6 +5,7 @@
 #include <vex/graphics/mesh.h>
 #include <vex/scene/mesh_data.h>
 #include <vex/core/log.h>
+#include <vex/core/profiler.h>
 
 #include <stb_image.h>
 #include <tinyexr.h>
@@ -28,6 +29,25 @@
 
 static constexpr float GEOMETRY_EPSILON = 1e-8f;
 static constexpr int   RT_TEX_MAX       = 1024;
+
+namespace
+{
+// RAII one-shot timer for stages that happen once (import, BVH/BLAS/TLAS builds)
+// rather than every frame, so they don't pollute the per-frame zone plot.
+struct OneShotTimer
+{
+    explicit OneShotTimer(const char* name)
+        : m_name(name), m_start(std::chrono::steady_clock::now()) {}
+    ~OneShotTimer()
+    {
+        vex::Profiler::get().recordOneShot(m_name,
+            std::chrono::duration<float, std::milli>(
+                std::chrono::steady_clock::now() - m_start).count());
+    }
+    const char* m_name;
+    std::chrono::steady_clock::time_point m_start;
+};
+} // namespace
 
 static std::vector<uint8_t> downsampleNearest(
     const uint8_t* src, int sw, int sh, int dw, int dh)
@@ -183,38 +203,43 @@ void SceneGeometryCache::rebuild(const Scene& scene, vex::CPURaytracer& cpuRT,
     m_vkInstanceOffsets.clear();
 #endif
 
-    for (int ni = 0; ni < (int)scene.nodes.size(); ++ni)
     {
-        const glm::mat4 nodeWorld = scene.getWorldMatrix(ni);
-        for (int si = 0; si < (int)scene.nodes[ni].submeshes.size(); ++si)
+        // Covers the sequential resolveTexture() calls below (disk reads / cache hits),
+        // interleaved here with task-list building since resolution happens per-submesh.
+        OneShotTimer timer("Texture load");
+        for (int ni = 0; ni < (int)scene.nodes.size(); ++ni)
         {
-            const auto& sm = scene.nodes[ni].submeshes[si];
-            const glm::mat4 combined = nodeWorld * sm.modelMatrix;
-            const glm::mat3 normalM  = glm::mat3(glm::transpose(glm::inverse(combined)));
-            int tc = (int)(sm.meshData.indices.size() / 3);
+            const glm::mat4 nodeWorld = scene.getWorldMatrix(ni);
+            for (int si = 0; si < (int)scene.nodes[ni].submeshes.size(); ++si)
+            {
+                const auto& sm = scene.nodes[ni].submeshes[si];
+                const glm::mat4 combined = nodeWorld * sm.modelMatrix;
+                const glm::mat3 normalM  = glm::mat3(glm::transpose(glm::inverse(combined)));
+                int tc = (int)(sm.meshData.indices.size() / 3);
 
-            SubmeshTask task;
-            task.nodeIdx      = ni;
-            task.smIdx        = si;
-            task.triOffset    = globalTriOffset;
-            task.triCount     = tc;
-            task.worldMat     = combined;
-            task.normalMat    = normalM;
-            task.texIdx          = resolveTexture(sm.meshData.diffuseTexturePath);
-            task.emissiveTexIdx  = resolveTexture(sm.meshData.emissiveTexturePath);
-            task.normalTexIdx    = resolveTexture(sm.meshData.normalTexturePath);
-            task.roughnessTexIdx = resolveTexture(sm.meshData.roughnessTexturePath);
-            task.metallicTexIdx  = resolveTexture(sm.meshData.metallicTexturePath);
-            task.alphaTexIdx     = resolveTexture(sm.meshData.alphaTexturePath);
-            tasks.push_back(task);
+                SubmeshTask task;
+                task.nodeIdx      = ni;
+                task.smIdx        = si;
+                task.triOffset    = globalTriOffset;
+                task.triCount     = tc;
+                task.worldMat     = combined;
+                task.normalMat    = normalM;
+                task.texIdx          = resolveTexture(sm.meshData.diffuseTexturePath);
+                task.emissiveTexIdx  = resolveTexture(sm.meshData.emissiveTexturePath);
+                task.normalTexIdx    = resolveTexture(sm.meshData.normalTexturePath);
+                task.roughnessTexIdx = resolveTexture(sm.meshData.roughnessTexturePath);
+                task.metallicTexIdx  = resolveTexture(sm.meshData.metallicTexturePath);
+                task.alphaTexIdx     = resolveTexture(sm.meshData.alphaTexturePath);
+                tasks.push_back(task);
 
 #ifdef VEX_BACKEND_VULKAN
-            m_vkInstanceOffsets.push_back(static_cast<uint32_t>(globalTriOffset));
+                m_vkInstanceOffsets.push_back(static_cast<uint32_t>(globalTriOffset));
 #endif
-            globalTriOffset += tc;
+                globalTriOffset += tc;
 
-        }  // end for(si)
-    }  // end for(ni)
+            }  // end for(si)
+        }  // end for(ni)
+    }
 
     // -----------------------------------------------------------------------
     // Parallel triangle flatten (Improvements 1 + 2)
@@ -238,6 +263,7 @@ void SceneGeometryCache::rebuild(const Scene& scene, vex::CPURaytracer& cpuRT,
     // so no locks are needed. taskLights is also indexed by taskIdx — NOT by
     // thread id — so the post-join merge preserves submesh order.
     {
+        OneShotTimer timer("Triangle flatten");
         std::atomic<int> nextTask{0};
         const int numThreads = std::max(1, (int)std::thread::hardware_concurrency());
         std::vector<std::thread> workers;
@@ -407,6 +433,7 @@ void SceneGeometryCache::rebuild(const Scene& scene, vex::CPURaytracer& cpuRT,
             std::snprintf(buf, sizeof(buf),
                 "  CPURaytracer::setGeometry (BVH build + reorder): %.0f ms", ms);
             vex::Log::info(buf);
+            vex::Profiler::get().recordOneShot("BVH build", ms);
         }
 
         auto t_rt_bvh = std::chrono::steady_clock::now();
@@ -465,6 +492,7 @@ void SceneGeometryCache::rebuild(const Scene& scene, vex::CPURaytracer& cpuRT,
 
 #ifdef VEX_BACKEND_VULKAN
     {
+        OneShotTimer timer("VK SSBO pack");
         if (progress) progress("Packing shading data...", 0.58f);
 
         // Shading data was packed in parallel; just move it into the member vector.
@@ -575,6 +603,7 @@ void SceneGeometryCache::buildAccelerationStructures(const Scene& scene,
             "  VK BLAS build (GPU): %.0f ms  (%zu BLASes)",
             ms, blasTransforms.size());
         vex::Log::info(buf);
+        vex::Profiler::get().recordOneShot("BLAS build", ms);
     }
 
     if (progress) progress("Building TLAS...", 0.9f);
@@ -586,6 +615,7 @@ void SceneGeometryCache::buildAccelerationStructures(const Scene& scene,
         char buf[64];
         std::snprintf(buf, sizeof(buf), "  VK TLAS build (GPU): %.0f ms", ms);
         vex::Log::info(buf);
+        vex::Profiler::get().recordOneShot("TLAS build", ms);
     }
 
     vex::Log::info("  VK GPU: " + std::to_string(blasTransforms.size()) + " BLASes + TLAS built");
