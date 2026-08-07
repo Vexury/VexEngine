@@ -38,7 +38,13 @@ void EditorUI::renderProfiler(vex::GraphicsContext& ctx)
     else
         ImGui::TextDisabled("GPU timing unavailable on this device");
     ImGui::SameLine();
-    ImGui::Text("  CPU %.2f ms", cpuMs < 0.0f ? 0.0f : cpuMs);
+    // Same dash-or-value rule the table cells use. Clamping the sentinel to 0.0f
+    // here printed "CPU 0.00 ms" on every frame before the first root zone resolved,
+    // which reads as a measured zero cost rather than as no measurement yet.
+    if (cpuMs >= 0.0f)
+        ImGui::Text("  CPU %.2f ms", cpuMs);
+    else
+        ImGui::TextDisabled("  CPU -");
     ImGui::SameLine();
     ImGui::Text("  %.0f FPS", ImGui::GetIO().Framerate);
 
